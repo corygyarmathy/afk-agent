@@ -1,0 +1,5 @@
+/afk
+/dist/
+*.db
+*.db-wal
+*.db-shm
