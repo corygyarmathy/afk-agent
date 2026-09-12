@@ -12,6 +12,8 @@ A job is a persisted state machine attached to one tracker subject. A transition
 afk run review --pr 12
 ```
 
+The pool that runs transitions unattended is `afk work`. It has two independent limits: how many transitions may execute at once, and how many may hold a given resource token - a named permit for a host constraint, so that eight network-bound reviews can overlap while two builds cannot. Parameters have no defaults in the code; the NixOS module that packages this agent supplies them, and `afk help` lists them.
+
 GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency. Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
 
 Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
@@ -27,7 +29,7 @@ go build ./...
 go test ./...
 ```
 
-The binary is `cmd/afk`. No transition is implemented yet; `afk help` shows the surface they will be invoked through.
+The binary is `cmd/afk`. The runner, the worker pool and the command surface are there; no transition is registered in it yet, so `afk run` will tell you it knows none. `afk help` shows the surface they will be invoked through.
 
 ## Status
 
