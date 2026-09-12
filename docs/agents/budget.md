@@ -40,6 +40,9 @@ Undocumented, and added by
 | everything below the threshold | work starts | untouched |
 | the endpoint cannot be read | the last good observation stands; with none, work starts | untouched |
 
+A deferral names the window its timestamp came from, which is the window that
+reopens last and not necessarily the one nearest its limit.
+
 `afk run` is unaffected by all of it. A hand-invocation is an operator asking
 for this job now.
 
@@ -56,6 +59,10 @@ is kept anywhere.
 
 - Without `--budget-key` there is no admission control at all.
 - `afk work` refuses to start with a key and no age.
+- `--budget-age` is a floor on how often the endpoint is asked, and it applies to
+  an attempt that failed as well as to one that answered. An endpoint that cannot
+  be read is retried once an age rather than once per job, and it is logged at
+  the same rate.
 - Without `--budget-at`, only a window that is actually `rate-limited` stops
   work.
 - The key is a path, not the key: an argument is visible in `ps` and an

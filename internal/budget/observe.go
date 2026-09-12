@@ -2,11 +2,11 @@ package budget
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"net/http"
 	"sync"
 	"time"
+
+	"github.com/corygyarmathy/afk-agent/internal/fetch"
 )
 
 // Observer is the fetch seam and the last good answer: the one thing in this
@@ -36,7 +36,8 @@ type Observer struct {
 	// It is a floor on how often the endpoint is asked, not a ceiling on how
 	// fresh the answer is: a worker pool polls its queue far faster than a
 	// usage endpoint should be asked, and without this every pass of every
-	// worker would be a request.
+	// worker would be a request. The floor covers an attempt that failed as
+	// well as one that answered - see due.
 	MaxAge time.Duration
 
 	// Threshold is the percentage of a window that counts as approaching its
@@ -49,8 +50,14 @@ type Observer struct {
 	// mu covers the cached observation and is held across the fetch, so that
 	// several workers arriving at once make one request between them rather
 	// than one each.
-	mu   sync.Mutex
-	last State
+	mu sync.Mutex
+
+	// last is the last observation that succeeded, and lastFail is when the
+	// most recent attempt did not. They are separate because a failed fetch
+	// leaves last standing on purpose (see Admit) - which means last's age says
+	// nothing about how recently the endpoint was asked, and something has to.
+	last     State
+	lastFail time.Time
 }
 
 // Admit observes the budget and decides whether new work may start.
@@ -83,8 +90,10 @@ func (o *Observer) Observe(ctx context.Context) (State, error) {
 
 	state, err := o.fetch(ctx, now)
 	if err != nil {
+		o.lastFail = now
 		return o.last, err
 	}
+	o.lastFail = time.Time{}
 	o.last = state
 	return state, nil
 }
@@ -92,10 +101,23 @@ func (o *Observer) Observe(ctx context.Context) (State, error) {
 // due reports whether the cached observation must be replaced before it is
 // used again.
 func (o *Observer) due(now time.Time) bool {
+	if o.MaxAge <= 0 {
+		return true
+	}
+	if !o.lastFail.IsZero() && now.Before(o.lastFail.Add(o.MaxAge)) {
+		// A failed attempt is throttled the same as a successful one, because a
+		// failure leaves last unchanged and every case below would then be true
+		// forever. Without this an endpoint that cannot be read - a rotated key
+		// answering 401 is the ordinary way - is asked again for every job the
+		// pool claims, which is the request rate MaxAge exists to hold down.
+		//
+		// It is the only thing here that outranks the reopened check: an
+		// observation that cannot be refreshed is not made refreshable by
+		// asking upstream more often.
+		return false
+	}
 	switch {
 	case !o.last.Known():
-		return true
-	case o.MaxAge <= 0:
 		return true
 	case !now.Before(o.last.ObservedAt.Add(o.MaxAge)):
 		return true
@@ -122,23 +144,9 @@ func (o *Observer) fetch(ctx context.Context, now time.Time) (State, error) {
 	return Decode(rc, now)
 }
 
+// httpFetch is the default Fetch: the usage endpoint, with the bearer token.
 func (o *Observer) httpFetch(ctx context.Context) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	if o.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("%s: %s", Endpoint, resp.Status)
-	}
-	return resp.Body, nil
+	return fetch.Get(ctx, Endpoint, o.Token)
 }
 
 func (o *Observer) now() time.Time {

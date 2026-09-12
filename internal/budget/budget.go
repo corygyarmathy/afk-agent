@@ -118,21 +118,41 @@ func (s State) Limited() bool {
 // It can be zero while Limited is true, if the provider reported a limit with
 // no timestamp. That is a real case and the caller must handle it: deferring to
 // a zero time parks a job, which needs an operator to undo. See Admit.
-func (s State) ResetsAt() time.Time {
-	var latest time.Time
+func (s State) ResetsAt() time.Time { return s.LastToReset().ResetsAt }
+
+// LastToReset is the limited window that reopens last, which is the one that
+// decides when the account stops being limited. The zero Window if nothing is
+// limited.
+//
+// It is the window to name alongside that timestamp: an operator reading
+// "deferred until T" is owed the window whose T it is, and the window nearest
+// its limit (Peak) need not be that one. Its ResetsAt can still be zero, if
+// every limited window was reported without one.
+func (s State) LastToReset() Window {
+	var last Window
 	for _, w := range s.Windows {
-		if w.Limited() && w.ResetsAt.After(latest) {
-			latest = w.ResetsAt
+		if !w.Limited() {
+			continue
+		}
+		if last.Name == "" || w.ResetsAt.After(last.ResetsAt) {
+			last = w
 		}
 	}
-	return latest
+	return last
 }
 
 // Peak is the window nearest its limit, which is the one worth naming in a log
 // line or a notification. The zero Window if nothing was observed.
 func (s State) Peak() Window {
-	var peak Window
-	for _, w := range s.Windows {
+	if len(s.Windows) == 0 {
+		return Window{}
+	}
+	// Seeded from the first window rather than from the zero one, so that the
+	// answer is always a window the endpoint actually reported. Starting at zero
+	// means an account at 0% across the board peaks at a nameless window, and
+	// the log line it is in reads " 0% ()".
+	peak := s.Windows[0]
+	for _, w := range s.Windows[1:] {
 		// A limited window outranks an unlimited one whatever the percents
 		// say: percent is a number about a window, and being limited is the
 		// answer about the account.
