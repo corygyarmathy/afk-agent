@@ -16,6 +16,8 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
   document owns which fact.
 - [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md) - what the
   tracker's labels mean.
+- [`docs/agents/model-enrolment.md`](docs/agents/model-enrolment.md) - the files
+  model choice reads, and what has to be in them.
 - [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what
   protects `master`, and what that means for you.
 
