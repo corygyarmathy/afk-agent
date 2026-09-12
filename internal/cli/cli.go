@@ -55,6 +55,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		err = runCmd(args[1:], stdout)
 	case "work":
 		err = workCmd(args[1:], stderr)
+	case "budget":
+		err = budgetCmd(args[1:], stdout)
 	case "version":
 		_, err = fmt.Fprintln(stdout, Version)
 	case "help", "-h", "--help":
@@ -263,6 +265,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindLease(fs)
 	p.bindBackoff(fs)
 	p.bindPool(fs)
+	p.bindBudget(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return errUsage{err}
@@ -279,6 +282,16 @@ func workCmd(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A pool reuses an observation across jobs, so it needs to be told for how
+	// long: without an age every job dispatched is a request to the usage
+	// endpoint, which is one per poll interval per worker.
+	if err := p.requireBudgetAge(); err != nil {
+		return err
+	}
+	observer, err := p.budget()
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -292,6 +305,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	d := &dispatch.Dispatcher{
 		Runner:    runner,
 		Pool:      pool,
+		Budget:    observer,
 		Workers:   workers,
 		Poll:      poll,
 		TokenWait: tokenWait,
@@ -306,6 +320,49 @@ func workCmd(args []string, stderr io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+// budgetCmd implements `afk budget`: read the usage endpoint once and print
+// what it says and what the pool would do about it.
+//
+// The tests in this repository run offline (AGENTS.md), so this is the only
+// thing that reaches the real endpoint at all. That is what it is for: the
+// response shape is undocumented, and an operator who wants to know whether the
+// agent is standing down - and why - should not have to read a log line from a
+// worker that happened to look.
+func budgetCmd(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("afk budget", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var p params
+	p.bindBudget(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return errUsage{err}
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		return usagef("unexpected argument %q", rest[0])
+	}
+
+	observer, err := p.budget()
+	if err != nil {
+		return err
+	}
+	if observer == nil {
+		return usagef("budget needs --budget-key (or set AFK_BUDGET_KEY)")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	state, err := observer.Observe(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(stdout, state); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, state.Admit(observer.Threshold, time.Now()))
+	return err
 }
 
 // holder names this process in a lease. Host and pid, because the store's
@@ -333,6 +390,7 @@ const usage = `afk - an unattended agent that takes work from a tracker and leav
 Usage:
   afk run <transition> (--job <id> | --issue <n> | --pr <n>)
   afk work
+  afk budget
   afk version
   afk help
 

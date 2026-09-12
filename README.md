@@ -14,6 +14,8 @@ afk run review --pr 12
 
 The pool that runs transitions unattended is `afk work`. It has two independent limits (ADR 0001 §8): how many transitions may execute at once, and how many may hold a given resource token - a named permit for a host constraint, so that eight network-bound reviews can overlap while two builds cannot. Parameters have no defaults in the code; the NixOS module that packages this agent supplies them, and `afk help` lists them.
 
+The budget is observed, never estimated (ADR 0001 §11). Usage is read from the provider's own endpoint, which sees interactive use of the account as well as the agent's; being rate limited defers work to the timestamp the provider gave, and approaching a limit stops new jobs starting without interrupting jobs in flight. `afk budget` reads it by hand.
+
 GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency (ADR 0001 §5). Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
 
 Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.

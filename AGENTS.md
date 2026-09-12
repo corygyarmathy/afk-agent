@@ -18,6 +18,8 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
   tracker's labels mean.
 - [`docs/agents/model-enrolment.md`](docs/agents/model-enrolment.md) - the files
   model choice reads, and what has to be in them.
+- [`docs/agents/budget.md`](docs/agents/budget.md) - what the agent reads to
+  decide whether new work may start, and what it does about the answer.
 - [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what
   protects `master`, and what that means for you.
 

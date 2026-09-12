@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -41,8 +42,18 @@ afk work also takes:
   --token-wait <dur>    AFK_TOKEN_WAIT    wait for a resource token     (required)
   --token <name>=<n>    AFK_TOKENS        resource token capacity, repeatable
 
+Budget observation, for afk work and afk budget:
+
+  --budget-key <path>   AFK_BUDGET_KEY    file holding the usage API key
+  --budget-age <dur>    AFK_BUDGET_AGE    how long an observation is reused
+                                          (required by afk work)
+  --budget-at <pct>     AFK_BUDGET_AT     percentage that stops new jobs
+
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
-scheduled for nothing, and waits for an operator.`
+scheduled for nothing, and waits for an operator.
+
+Without --budget-key there is no admission control: work runs into the
+provider's limits and they arrive as transient failures.`
 
 // params collects the configuration flags, before they are resolved against the
 // environment.
@@ -56,6 +67,10 @@ type params struct {
 	poll      string
 	tokenWait string
 	tokens    tokenCapacity
+
+	budgetKey string
+	budgetAge string
+	budgetAt  string
 }
 
 func (p *params) bindStore(fs *flag.FlagSet) {
@@ -69,6 +84,20 @@ func (p *params) bindLease(fs *flag.FlagSet) {
 func (p *params) bindBackoff(fs *flag.FlagSet) {
 	fs.StringVar(&p.retry, "retry", "", "when a failed job re-enters (AFK_RETRY)")
 	fs.StringVar(&p.maxAttempts, "max-attempts", "", "attempts before a job parks (AFK_MAX_ATTEMPTS)")
+}
+
+// bindBudget binds budget observation.
+//
+// The key is a path to a file rather than the key itself. Every other parameter
+// here is a flag or an environment variable and this one is neither: an
+// argument is visible in `ps` to every process on the host, and an environment
+// variable is visible in /proc to anything that can read the process. A path is
+// safe in both, and it is also the shape the secret already arrives in - sops
+// writes a file, and systemd's LoadCredential hands over a path.
+func (p *params) bindBudget(fs *flag.FlagSet) {
+	fs.StringVar(&p.budgetKey, "budget-key", "", "file holding the usage API key (AFK_BUDGET_KEY)")
+	fs.StringVar(&p.budgetAge, "budget-age", "", "how long an observation is reused (AFK_BUDGET_AGE)")
+	fs.StringVar(&p.budgetAt, "budget-at", "", "percentage of a window that stops new jobs (AFK_BUDGET_AT)")
 }
 
 func (p *params) bindPool(fs *flag.FlagSet) {
@@ -236,4 +265,99 @@ func parseToken(v string) (string, int, error) {
 		return "", 0, fmt.Errorf("resource token %q: %q is not a positive whole number", name, capacity)
 	}
 	return name, n, nil
+}
+
+// percent resolves a percentage parameter. Bounded at both ends: a threshold
+// above 100 never fires, and one at or below zero is "no threshold" spelled as
+// a number, which is a way to configure the gate off by accident. Absence is
+// how it is turned off.
+func percent(value, flagName string) (float64, error) {
+	v, err := strconv.ParseFloat(value, 64)
+	if err != nil || v <= 0 || v > 100 {
+		return 0, usagef("--%s: %q is not a percentage between 0 and 100", flagName, value)
+	}
+	return v, nil
+}
+
+// budget builds the budget observer, or returns nil for "there is no admission
+// control".
+//
+// The key is what decides whether there is one at all. A zero age means every
+// call fetches, which is right for a one-shot `afk budget` and wrong for a
+// worker pool - so the pool demands one of its own rather than this function
+// demanding it of every caller.
+//
+// The threshold is genuinely optional. Without it the only thing that stops new
+// work is a window that is actually limited, which is a coherent configuration
+// rather than a half-made one.
+func (p *params) budget() (*budget.Observer, error) {
+	key := optional(p.budgetKey, "AFK_BUDGET_KEY")
+	age := optional(p.budgetAge, "AFK_BUDGET_AGE")
+	at := optional(p.budgetAt, "AFK_BUDGET_AT")
+
+	if key == "" {
+		if age != "" || at != "" {
+			return nil, usagef("--budget-age and --budget-at need --budget-key: there is nothing to observe")
+		}
+		return nil, nil
+	}
+
+	var (
+		maxAge time.Duration
+		err    error
+	)
+	if age != "" {
+		if maxAge, err = duration(age, "budget-age"); err != nil {
+			return nil, err
+		}
+	}
+
+	var threshold float64
+	if at != "" {
+		if threshold, err = percent(at, "budget-at"); err != nil {
+			return nil, err
+		}
+	}
+
+	token, err := readKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &budget.Observer{Token: token, MaxAge: maxAge, Threshold: threshold}, nil
+}
+
+// requireBudgetAge is the check a caller that reuses an observation across jobs
+// makes before building the observer.
+//
+// Here rather than in budget() because `afk budget` legitimately has no age -
+// a single hand-run has nothing to reuse - and before it because a
+// half-configured observer is the operator's mistake and should be reported as
+// one, ahead of anything that depends on the key file being readable.
+func (p *params) requireBudgetAge() error {
+	if optional(p.budgetKey, "AFK_BUDGET_KEY") != "" && optional(p.budgetAge, "AFK_BUDGET_AGE") == "" {
+		return usagef("--budget-key needs --budget-age (or set AFK_BUDGET_AGE)")
+	}
+	return nil
+}
+
+// readKey reads the API key from its file.
+//
+// Read once, at startup, rather than before each request. A key that is rotated
+// under a running process is a restart, which is what the NixOS module does when
+// the secret changes; re-reading it on every fetch would trade that for a file
+// the agent must be able to read for as long as it runs.
+//
+// The error names the path and never the contents: a key that is empty or
+// unreadable is a thing to report, and a key that is wrong is reported by the
+// endpoint as a 401.
+func readKey(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("--budget-key: %w", err)
+	}
+	key := strings.TrimSpace(string(b))
+	if key == "" {
+		return "", usagef("--budget-key: %s is empty", path)
+	}
+	return key, nil
 }
