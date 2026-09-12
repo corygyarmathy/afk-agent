@@ -1,8 +1,8 @@
 # Agent instructions
 
 `afk-agent` is an unattended agent that takes work from a GitHub issue tracker,
-does it, and leaves a pull request for a human to review and merge. Go, standard
-library only.
+does it, and leaves a pull request for a human to review and merge. Go, with one
+vendored dependency: the job store's SQLite driver (ADR 0004).
 
 ## Where things are
 
@@ -26,15 +26,21 @@ Read what the work needs. None of it is required reading.
 - Use `CONTEXT.md`'s words when you name things, and not the synonyms it lists
   under `_Avoid_`.
 - `gofmt` is the formatter of record. Run it before you commit, so formatting
-  lands in your commits rather than as drift.
+  lands in your commits rather than as drift. `scripts/check-format.sh` is the
+  check, and it covers this module's packages rather than the whole tree -
+  `vendor/` is excluded.
 - Tests run offline. No network, no live process, no model, no GitHub.
-- No third-party dependencies. `go.mod` has none; adding one is an ADR-sized
-  decision rather than an implementation detail.
+- Do not add a dependency. `go.mod` has exactly one, the job store's SQLite
+  driver, and ADR 0004 records why it was worth an exception and what the bar
+  is. Adding a second is an ADR-sized decision rather than an implementation
+  detail, and the answer is usually the standard library.
+- Everything in `vendor/` is upstream's. Do not edit it and do not format it;
+  re-vendor with `go mod vendor` after a version change and commit the result.
 
 ## Checks
 
 ```bash
-gofmt -l .                  # prints nothing
+scripts/check-format.sh     # prints nothing
 go build ./...
 go vet ./...
 scripts/offline-test.sh     # go test ./... with no network
