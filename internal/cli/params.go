@@ -269,8 +269,8 @@ func parseToken(v string) (string, int, error) {
 
 // percent resolves a percentage parameter. Bounded at both ends: a threshold
 // above 100 never fires, and one at or below zero is "no threshold" spelled as
-// a number, which is a way to configure the gate off by accident. Absence is
-// how it is turned off.
+// a number, which is a way to leave admission with nothing to stop new work
+// short of an actual limit without meaning to. Absence is how it is turned off.
 func percent(value, flagName string) (float64, error) {
 	v, err := strconv.ParseFloat(value, 64)
 	if err != nil || v <= 0 || v > 100 {

@@ -44,8 +44,8 @@ type Dispatcher struct {
 	// is what ADR 0001 §12 already accepts for the pay-as-you-go balance.
 	//
 	// It sits here and not in the runner, so `afk run` is unaffected. A
-	// hand-invocation is an operator deliberately asking for this job now; what
-	// this gate holds back is the pool starting work on its own.
+	// hand-invocation is an operator deliberately asking for this job now;
+	// admission is about the pool starting work on its own (CONTEXT.md).
 	Budget *budget.Observer
 
 	// Workers is how many transitions may execute at once.
@@ -182,7 +182,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 		// this one does not. Park it rather than spin on it, and say so - a
 		// job nothing can move is the operator's to look at.
 		d.logf("%s: %s is in state %q with no transition from it; parking it", holder, job.ID, job.State)
-		d.reschedule(ctx, holder, job, time.Time{})
+		d.park(ctx, holder, job)
 		return
 	}
 
@@ -241,6 +241,9 @@ func (d *Dispatcher) admit(ctx context.Context, holder string, job store.Job) bo
 		// that suppresses - the queue goes quiet until the window reopens, and
 		// an operator reading it sees jobs due at that timestamp rather than
 		// jobs that look due now and never run.
+		//
+		// A defer and not a park: Admit never returns a zero or past Until, so
+		// this always schedules the job for a time it comes back at.
 		d.reschedule(ctx, holder, job, adm.Until)
 		return false
 	}
@@ -256,9 +259,20 @@ func (d *Dispatcher) release(ctx context.Context, holder string, job store.Job) 
 	}
 }
 
+// park leaves a job in its persisted state with nothing scheduled, resting
+// until an operator moves it (CONTEXT.md: park).
+//
+// Spelled as scheduling it for the zero time, because that is what a park is in
+// the store: no lease, no next run. It is a separate name from reschedule
+// because it is the opposite thing - a rescheduled job comes back on its own
+// and a parked one does not - and a call reading `reschedule(job, time.Time{})`
+// says the first while meaning the second.
+func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) {
+	d.reschedule(ctx, holder, job, time.Time{})
+}
+
 // reschedule moves when a job next becomes due, leaving its state and its
-// attempt count alone. The zero time parks it: it keeps its state, is scheduled
-// for nothing, and waits for an operator.
+// attempt count alone.
 //
 // Attempts are untouched on purpose. Neither parking a job nothing can move nor
 // deferring one to a budget window is an attempt at the work, and counting
