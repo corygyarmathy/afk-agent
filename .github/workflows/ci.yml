@@ -2,13 +2,13 @@ name: CI
 
 # The gate on every pull request: format, build, vet, test (#7).
 #
-# Go tooling directly, not Nix. This repository is Go with no dependencies
-# (ADR 0001 §1), so a Nix evaluation would add a closure to build and an 8 GB
-# memory peak - the one ADR 0001 records OOM-killing a session - in front of
-# checks that take seconds. `dotfiles` keeps its own pipeline for its own
-# reasons; what carries over here is its ADR 0008 principle rather than its
-# implementation: one definition of each check, consumed by the editor, the
-# agent and this gate alike.
+# Go tooling directly, not Nix. This repository is Go, and its one dependency is
+# vendored (ADR 0004), so there is nothing to fetch and a Nix evaluation would
+# add a closure to build and an 8 GB memory peak - the one ADR 0001 records
+# OOM-killing a session - in front of checks that take seconds. `dotfiles` keeps
+# its own pipeline for its own reasons; what carries over here is its ADR 0008
+# principle rather than its implementation: one definition of each check,
+# consumed by the editor, the agent and this gate alike.
 #
 # Versions come from the repository, not from the runner image: `go-version-file`
 # reads `go.mod`, so the toolchain CI gates with is the toolchain the module
@@ -50,20 +50,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # `gofmt -l` lists what is unformatted and exits 0 either way, so the
-      # emptiness of its output is the assertion. `gofmt -d` then says what is
-      # wrong, because "ci.yml exited 1" is not a review comment anyone can act
-      # on. Checking rather than writing: AGENTS.md tells the agent to run
-      # gofmt before committing, so formatting lands in its commits and this
-      # stays a pure gate (dotfiles ADR 0008).
+      # Through the script, so the gate and the developer check the same set of
+      # files. That set is the module's own packages rather than the whole
+      # tree: `vendor/` arrived with the store's SQLite driver (ADR 0004) and
+      # is upstream's code, not ours to format. `-d` prints the diffs, because
+      # "ci.yml exited 1" is not a review comment anyone can act on. Checking
+      # rather than writing: AGENTS.md tells the agent to run gofmt before
+      # committing, so formatting lands in its commits and this stays a pure
+      # gate (dotfiles ADR 0008).
       - name: Check formatting
         run: |
-          set -euo pipefail
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt would change these files - run gofmt -w . and commit the result"
-            printf '%s\n' "$unformatted"
-            gofmt -d .
+          if ! ./scripts/check-format.sh -d; then
+            echo "::error::gofmt would change these files - run gofmt -w on them and commit the result"
             exit 1
           fi
           echo "::notice::gofmt clean"

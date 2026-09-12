@@ -22,11 +22,18 @@
 #   scripts/offline-test.sh -run TestMain_ExitCodes -v
 set -euo pipefail
 
-# The toolchain must not reach out either. `go.mod` has no requirements, so
-# there is nothing legitimate to fetch; GOPROXY=off turns an added dependency
-# into a failure here instead of a download, and GOTOOLCHAIN=local reports
-# "go.mod requires a newer Go" rather than trying to fetch that newer Go.
-export GOFLAGS="${GOFLAGS:-} -mod=readonly"
+# The toolchain must not reach out either. Every dependency is in `vendor/`
+# (ADR 0004), so there is nothing legitimate to fetch; GOPROXY=off turns an
+# import that nobody vendored into a failure here instead of a download, and
+# GOTOOLCHAIN=local reports "go.mod requires a newer Go" rather than trying to
+# fetch that newer Go.
+#
+# -mod=vendor, not -mod=readonly. Go already defaults to vendor when the
+# directory is present, but setting -mod explicitly overrides that default, and
+# -mod=readonly sends the build to the module cache instead - which on a cold
+# CI runner is a download, and with GOPROXY=off is a failure. Naming vendor here
+# keeps the two consistent.
+export GOFLAGS="${GOFLAGS:-} -mod=vendor"
 export GOPROXY=off
 export GOTOOLCHAIN=local
 
