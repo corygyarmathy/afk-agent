@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "source": {
+    "repo": "corygyarmathy/skills",
+    "url": "https://github.com/corygyarmathy/skills.git",
+    "prefix": "skills",
+    "rev": "2c304bfeac191ea7d350a74f3e12af9f95b790b1"
+  },
+  "vendorPath": ".agents/skills",
+  "linkPath": ".claude/skills",
+  "skills": {
+    "code-review": {
+      "path": "skills/code-review",
+      "hash": "1d908b4c2ccf0fdfabb8ded834dc710a7c3ea5d84ae38e0d6c921ca18b913f1b"
+    },
+    "codebase-design": {
+      "path": "skills/codebase-design",
+      "hash": "9cdaf206d4d13e38a569bef3e4abfee5ed4958777b33ff0a71322162c9c81318"
+    },
+    "diagnosing-bugs": {
+      "path": "skills/diagnosing-bugs",
+      "hash": "877b1a32ed425ba9524cf407a21b307e03143a8f66870f9676cfc0994631401e"
+    },
+    "domain-modeling": {
+      "path": "skills/domain-modeling",
+      "hash": "4f19c80e5354b4ff247d7082ea82686136a316ced34098f466ab63f04a35d28d"
+    },
+    "implement": {
+      "path": "skills/implement",
+      "hash": "e3ee162e817c7f68d4097637434f38dbb5c23051025a2545773bedd5f9aa4674"
+    },
+    "tdd": {
+      "path": "skills/tdd",
+      "hash": "26c550c905c3a0566f4bb51c171fdd3bea2cd28329fc4a6b7e2a5db4dc1afeb4"
+    }
+  }
+}
