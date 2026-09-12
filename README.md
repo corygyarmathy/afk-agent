@@ -18,7 +18,9 @@ Work arrives two ways: an eligibility label on an issue puts it in the queue, an
 
 ## Building
 
-Go, no dependencies:
+Go. One dependency, the job store's SQLite driver, vendored in-tree
+([ADR 0004](docs/adr/0004-the-job-store-is-sqlite-the-one-vendored-dependency.md)),
+so a clone builds without fetching anything:
 
 ```
 go build ./...
