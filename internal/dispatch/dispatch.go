@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -36,6 +37,16 @@ type Dispatcher struct {
 	transition.Runner
 
 	Pool *transition.Pool
+
+	// Budget is admission control (ADR 0001 §11). Nil is no admission control,
+	// which is the shape of an unconfigured budget and is safe: work then runs
+	// into the provider's limits and they arrive as transient failures, which
+	// is what ADR 0001 §12 already accepts for the pay-as-you-go balance.
+	//
+	// It sits here and not in the runner, so `afk run` is unaffected. A
+	// hand-invocation is an operator deliberately asking for this job now;
+	// admission is about the pool starting work on its own (CONTEXT.md).
+	Budget *budget.Observer
 
 	// Workers is how many transitions may execute at once.
 	Workers int
@@ -93,6 +104,8 @@ func (d *Dispatcher) validate() error {
 		return errors.New("dispatcher has no resource token wait")
 	case d.TokenWait >= d.LeaseTTL:
 		return fmt.Errorf("resource token wait %s is not shorter than the lease %s: a worker could still be queuing for a permit after its lease has lapsed", d.TokenWait, d.LeaseTTL)
+	case d.Budget != nil && d.Budget.MaxAge <= 0:
+		return errors.New("budget observation has no maximum age: every job dispatched would be a request to the usage endpoint")
 	}
 	for _, t := range d.Registry.All() {
 		if err := d.Pool.Known(t.Tokens); err != nil {
@@ -141,6 +154,9 @@ func (d *Dispatcher) work(ctx context.Context, holder string) {
 		case !ok:
 			d.wait(ctx)
 		default:
+			if !d.admit(ctx, holder, job) {
+				continue
+			}
 			d.dispatch(ctx, &runner, holder, job)
 		}
 	}
@@ -177,9 +193,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 		// Give the job back untouched. It is still due, so it is not lost;
 		// something else is using the permit, and holding a lease while
 		// queuing for it only stops another worker from getting there first.
-		if rerr := d.Store.Release(context.WithoutCancel(ctx), job.ID, holder); rerr != nil {
-			d.logf("%s: releasing %s: %v", holder, job.ID, rerr)
-		}
+		d.release(ctx, holder, job)
 		d.wait(ctx)
 		return
 	}
@@ -193,19 +207,89 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 	d.logf("%s: %s", holder, out)
 }
 
-// park leaves a job in its state with nothing scheduled, so no worker picks it
-// up again until something reschedules it.
+// admit consults the budget before a job starts, and gives the job back if it
+// may not (ADR 0001 §11). It reports whether the job may be dispatched.
+//
+// After the job is taken rather than before, for two reasons. Deferring needs a
+// job to reschedule, and taking the lease to give it straight back is exactly
+// what the resource token path above does when a permit is not free - one shape
+// for "this worker cannot run this job right now", not two.
+//
+// Work in flight is untouched either way. This runs between transitions, and a
+// transition that has already started is not interrupted by anything here.
+func (d *Dispatcher) admit(ctx context.Context, holder string, job store.Job) bool {
+	if d.Budget == nil {
+		return true
+	}
+
+	adm, err := d.Budget.Admit(ctx)
+	if err != nil {
+		// Reported rather than acted on: Admit's decision is usable whether or
+		// not the refresh worked, and a usage endpoint that is down is not an
+		// account that is spent.
+		d.logf("%s: reading the budget: %v", holder, err)
+	}
+	if adm.Starts() {
+		return true
+	}
+
+	d.logf("%s: %s: %s", holder, job.ID, adm)
+	if adm.Decision == budget.Defer {
+		// No wait afterwards: the rest of the due queue is deferred on the
+		// following passes, and once it is drained there is nothing due and the
+		// worker waits on its own. Deferring is what stops this being a poll
+		// that suppresses - the queue goes quiet until the window reopens, and
+		// an operator reading it sees jobs due at that timestamp rather than
+		// jobs that look due now and never run.
+		//
+		// A defer and not a park: Admit never returns a zero or past Until, so
+		// this always schedules the job for a time it comes back at.
+		d.reschedule(ctx, holder, job, adm.Until)
+		return false
+	}
+	d.release(ctx, holder, job)
+	d.wait(ctx)
+	return false
+}
+
+// release gives a job back untouched. It is still due, so it is not lost.
+func (d *Dispatcher) release(ctx context.Context, holder string, job store.Job) {
+	if err := d.Store.Release(context.WithoutCancel(ctx), job.ID, holder); err != nil {
+		d.logf("%s: releasing %s: %v", holder, job.ID, err)
+	}
+}
+
+// park leaves a job in its persisted state with nothing scheduled, resting
+// until an operator moves it (CONTEXT.md: park).
+//
+// Spelled as scheduling it for the zero time, because that is what a park is in
+// the store: no lease, no next run. It is a separate name from reschedule
+// because it is the opposite thing - a rescheduled job comes back on its own
+// and a parked one does not - and a call reading `reschedule(job, time.Time{})`
+// says the first while meaning the second.
 func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) {
+	d.reschedule(ctx, holder, job, time.Time{})
+}
+
+// reschedule moves when a job next becomes due, leaving its state and its
+// attempt count alone.
+//
+// Attempts are untouched on purpose. Neither parking a job nothing can move nor
+// deferring one to a budget window is an attempt at the work, and counting
+// either would spend the retry bound on the account being busy - a long enough
+// rate-limit window would then park every job in the queue for a human to find.
+func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Job, at time.Time) {
 	// Without the cancellation, for the same reason the runner's commit is:
 	// a stop that arrives here must not leave the lease standing.
 	err := d.Store.Commit(context.WithoutCancel(ctx), store.Commit{
-		JobID:    job.ID,
-		Holder:   holder,
-		State:    job.State,
-		Attempts: job.Attempts,
-		Release:  true,
+		JobID:     job.ID,
+		Holder:    holder,
+		State:     job.State,
+		Attempts:  job.Attempts,
+		NextRunAt: at,
+		Release:   true,
 	})
 	if err != nil {
-		d.logf("%s: parking %s: %v", holder, job.ID, err)
+		d.logf("%s: rescheduling %s: %v", holder, job.ID, err)
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,6 +157,28 @@ func TestMain_ExitCodes(t *testing.T) {
 			want:     ExitUsage,
 			stderrIs: `"lots" is not a positive whole number`,
 		},
+		{
+			// Half a budget observer, like half a retry policy: there is
+			// nothing for the threshold to be a threshold of.
+			name:     "a budget threshold with nothing to observe",
+			args:     append(workArgs(), "--budget-at", "80"),
+			want:     ExitUsage,
+			stderrIs: "need --budget-key",
+		},
+		{
+			// A pool reuses an observation across jobs, so it has to be told
+			// for how long; without it every job dispatched is a request.
+			name:     "work needs to be told how long an observation lasts",
+			args:     append(workArgs(), "--budget-key", "/nonexistent/key"),
+			want:     ExitUsage,
+			stderrIs: "--budget-key needs --budget-age",
+		},
+		{
+			name:     "budget has nothing to read",
+			args:     []string{"budget"},
+			want:     ExitUsage,
+			stderrIs: "budget needs --budget-key",
+		},
 	}
 
 	for _, tt := range tests {
@@ -173,6 +196,76 @@ func TestMain_ExitCodes(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.stderrIs)
 			}
 		})
+	}
+}
+
+// workArgs is a `work` invocation with every required parameter supplied, so a
+// test about one of the optional ones fails on that one rather than on the
+// first thing missing.
+func workArgs() []string {
+	return []string{"work", "--store", "/x", "--lease", "1m", "--workers", "1", "--poll", "1s", "--token-wait", "1s"}
+}
+
+// The key is read from a file rather than an argument or the environment: an
+// argument is visible in `ps` to every process on the host, and an environment
+// variable is visible in /proc to anything that can read the process.
+func TestTheBudgetKeyIsReadFromItsFile(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "usage-key")
+	if err := os.WriteFile(key, []byte("  secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty-key")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		p    params
+		want string // substring of the error, or "" for the key itself
+	}{
+		{name: "read and trimmed", p: params{budgetKey: key, budgetAge: "1m", budgetAt: "80"}},
+		{name: "no such file", p: params{budgetKey: filepath.Join(dir, "absent"), budgetAge: "1m"}, want: "--budget-key:"},
+		{name: "empty file", p: params{budgetKey: empty, budgetAge: "1m"}, want: "is empty"},
+		{name: "a threshold that is not a percentage", p: params{budgetKey: key, budgetAge: "1m", budgetAt: "120"}, want: "is not a percentage"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o, err := tt.p.budget()
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o.Token != "secret" {
+				t.Fatalf("token = %q, want the file trimmed", o.Token)
+			}
+			if o.MaxAge != time.Minute || o.Threshold != 80 {
+				t.Fatalf("observer = %+v, want the age and threshold given", o)
+			}
+		})
+	}
+}
+
+// No budget parameters is no observer, which is what the dispatcher reads as no
+// admission control.
+func TestNoBudgetParametersIsNoObserver(t *testing.T) {
+	t.Setenv("AFK_BUDGET_KEY", "")
+	t.Setenv("AFK_BUDGET_AGE", "")
+	t.Setenv("AFK_BUDGET_AT", "")
+
+	var p params
+	o, err := p.budget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o != nil {
+		t.Fatalf("observer = %+v, want none", o)
 	}
 }
 

@@ -63,7 +63,8 @@ type Ceiling struct {
 // because being limited means there is no candidate at all, which is a
 // different answer from "none qualified" and must not be confused with it.
 //
-// Observing it is #5's work. This is the shape the answer arrives in.
+// Observing it is internal/budget's work; budget.State.Resolver is the
+// conversion. This package stays pure and does not reach for it.
 type Budget struct {
 	// Limited is true when any window reports a rate-limited status. An OR
 	// across windows, computed by the observer: a check on one window reads
