@@ -15,9 +15,10 @@ name: CI
 # declares. A contributor's newer Go formatting files this gate then rejects is
 # the failure that closes.
 #
-# NOTE: the `go ci` job name is the status-check context that #8 will require on
-# `master`. Renaming the job silently blocks every merge until the ruleset is
-# updated to match, so treat the two as a pair.
+# NOTE: the `go ci` job name is the status-check context the `protect-master`
+# ruleset requires on `master` (ADR 0003 §5). Renaming the job silently blocks
+# every merge until the ruleset is updated to match, so treat the two as a pair -
+# `docs/agents/branch-protection.md` has the rules and how to read them back.
 
 on:
   push:
