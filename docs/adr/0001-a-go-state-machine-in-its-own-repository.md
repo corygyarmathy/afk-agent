@@ -17,7 +17,7 @@ Meanwhile the budget picture turned out to be different from what the prototype 
 
 ## Decision
 
-Parameters are excluded here by convention - counts, thresholds, intervals, tier membership, ceilings and label names live in the NixOS module that configures this agent. See `docs/agents/domain.md` in the `dotfiles` repository for why.
+Parameters are excluded here by convention - counts, thresholds, intervals, tier membership, ceilings and label names live in the NixOS module that configures this agent. See [`docs/agents/domain.md`](../agents/domain.md) for why.
 
 **1. The agent is written in Go, in its own repository.** Go for a type system and a compiler that finds a class of error before the program runs unattended at 04:00, and for a concurrency model that makes a supervised worker pool ordinary rather than clever. Its own repository because it has a different cadence from a fleet configuration - millisecond unit tests, its own CI, its own release tags - and because a program that will eventually work on its own tracker needs a tracker of its own. The `dotfiles` repository continues to package and configure it as a NixOS module, consumed as a flake input.
 
