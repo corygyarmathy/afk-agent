@@ -36,6 +36,27 @@ export GOTOOLCHAIN=local
 # those are `go test` flags, and `go build` rejects most of them.
 go build ./...
 
+# The environment is passed explicitly rather than inherited, because the
+# privileged path below crosses `sudo` and `runuser`, each of which resets it -
+# on a GitHub runner that silently cost PATH, so `go` resolved to an older
+# toolchain than go.mod asks for and the run died trying to download one from
+# inside the namespace it had just been sealed into. Resolving `go` and its
+# caches out here, where the environment is still ours, is what keeps the two
+# paths running the same toolchain against the same caches.
+go_env=(
+	"PATH=$PATH"
+	"HOME=$HOME"
+	"GOFLAGS=$GOFLAGS"
+	"GOPROXY=$GOPROXY"
+	"GOTOOLCHAIN=$GOTOOLCHAIN"
+	"GOCACHE=$(go env GOCACHE)"
+	"GOMODCACHE=$(go env GOMODCACHE)"
+)
+# `env` and `go` by absolute path for the same reason: the inner shell may have
+# a PATH neither of us chose, and that PATH is exactly what the runner failure
+# above was.
+test_cmd=("$(command -v env)" "${go_env[@]}" "$(command -v go)" test "$@" ./...)
+
 # `ip link set lo up` is best-effort: a host without iproute2 still runs the
 # tests, it just has no loopback, and saying so beats a mystery dial failure.
 readonly inner='ip link set lo up 2>/dev/null || printf "offline-test: could not bring loopback up; tests using 127.0.0.1 will fail\n" >&2
@@ -46,17 +67,17 @@ if unshare --user --map-root-user --net true 2>/dev/null; then
 	# to own a fresh network namespace that has no route anywhere.
 	printf 'offline-test: network isolated by an unprivileged user namespace\n' >&2
 	exec unshare --user --map-root-user --net -- \
-		bash -c "$inner" offline-test go test "$@" ./...
+		bash -c "$inner" offline-test "${test_cmd[@]}"
 fi
 
 if sudo -n true 2>/dev/null; then
-	# Fallback for hosts that refuse unprivileged user namespaces (Ubuntu's
-	# AppArmor restriction is the one that bites). Root owns the namespace and
-	# hands the tests straight back to the invoking user, so the caches and
-	# file ownership are unchanged.
+	# Fallback for hosts that refuse unprivileged user namespaces - Ubuntu's
+	# AppArmor restriction is the one that bites, and a GitHub runner is such a
+	# host. Root owns the namespace and hands the tests straight back to the
+	# invoking user, so nothing runs as root and the caches keep their owner.
 	printf 'offline-test: network isolated by sudo unshare --net\n' >&2
 	exec sudo -n unshare --net -- \
-		bash -c "$inner" offline-test runuser -u "$(id -un)" -- go test "$@" ./...
+		bash -c "$inner" offline-test runuser -u "$(id -un)" -- "${test_cmd[@]}"
 fi
 
 # Never fall through to a networked `go test`: a gate that quietly stops gating
