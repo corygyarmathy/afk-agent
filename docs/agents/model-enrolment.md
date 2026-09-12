@@ -54,6 +54,47 @@ unreachable or returns something that is not a catalogue, the cached copy is
 used and its age is reported; the cache is written only after the response has
 parsed.
 
+The cache is the fallback's half of the seam, and nothing depends on it working.
+A state directory that cannot be written, or no cache path at all, costs the
+insurance against the *next* outage and is reported as such - it does not fail a
+fetch that worked. A cached copy that no longer parses is not a cache either:
+the fetch it would have skipped runs, and replaces it. The load fails only with
+no fetch and no usable cache, which is the one case where the alternative is
+resolving against an empty catalogue.
+
+## Ceilings, and which price they are checked against
+
+A job kind may declare a ceiling - the dearest advertised price it is worth, per
+million tokens. It is not a budget and does not meter spend: the account's
+ceiling is enforced at the provider ([ADR 0001
+§12](../adr/0001-a-go-state-machine-in-its-own-repository.md)). What it catches
+is narrower - a model enrolled when it was cheap that has since been repriced.
+
+A ceiling is checked against the **dearest band the model publishes**, not the
+headline one. Several entries price by context length - `grok-4.6` is 2/6 and
+doubles to 4/12 above 200k tokens - and which band a request lands in is not
+knowable when the model is chosen. So write the number you would accept in the
+dear case: a ceiling of 3 excludes `grok-4.6` even though most runs would bill
+at 2. The rejection says where the number came from, so it can be reconciled
+with the page:
+
+```
+input 4 over ceiling 3 (long-context band; headline 2)
+```
+
+Two consequences worth knowing before you set one:
+
+- A model whose long-context band is over the ceiling falls out of the tier
+  entirely, including for the short runs that would have billed under it. The
+  next enrolled model is tried; nothing is handed back.
+- The ceiling also fires when upstream merely *adds* a dearer band to a model
+  whose headline price never moved. That is not a repricing of the work you are
+  doing, but it is enough to drop a model, and enough to empty a two-model tier.
+
+An unpriced model breaches every ceiling. Several hundred catalogue entries carry
+no cost block, and an absent price is upstream declining to say rather than a
+model being free.
+
 ## Which models the Go subscription covers
 
 OpenCode is two providers in the catalogue, and they are not the same list:

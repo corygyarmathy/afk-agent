@@ -176,6 +176,12 @@ func TestResolve(t *testing.T) {
 				if !strings.Contains(err.Error(), "input 4 over ceiling 3") {
 					t.Fatalf("want the dearest band quoted, got: %v", err)
 				}
+				// The 4 is not the number on models.dev's page. An operator
+				// who cannot reconcile the two cannot tell a repriced model
+				// from a band they did not know was being read.
+				if !strings.Contains(err.Error(), "long-context band; headline 2") {
+					t.Fatalf("the rejection does not say where the 4 came from: %v", err)
+				}
 			},
 		},
 		{
