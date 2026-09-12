@@ -16,6 +16,8 @@ library only.
   document owns which fact.
 - [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md) - what the
   tracker's labels mean.
+- [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what
+  protects `master`, and what that means for you.
 
 Read what the work needs. None of it is required reading.
 
@@ -50,7 +52,9 @@ the tests were honest about it.
 
 ## Do not
 
-- Merge, or weaken branch protection to get something through (ADR 0001 §15).
+- Merge, or weaken branch protection to get something through (ADR 0001 §15,
+  ADR 0003). There is no bypass, and disabling the ruleset is the operator's
+  procedure: [`branch-protection.md`](docs/agents/branch-protection.md).
 - Hard-code a parameter. Counts, intervals, thresholds, ceilings and label
   strings belong to the NixOS module that configures this agent.
 
