@@ -75,6 +75,27 @@ How to work in this repository: conventions, checks, what not to touch. Not a
 place for domain vocabulary (`CONTEXT.md`), decisions (`docs/adr/`), or specs
 (the tracker). It points at those and states the rest once.
 
+## docs/agents/ - reference and instructions, no reasoning
+
+What AGENTS.md points at when one subject needs more than the paragraph it can
+spare: the tracker, the vocabulary discipline, the labels, branch protection.
+Each file states what is true and what to do about it, for a reader who is about
+to act.
+
+The reasoning is not in these files. A sentence explaining *why* a rule is the
+way it is belongs in the ADR that decided it, and the agent doc links to that
+ADR instead of restating it - an instruction that arrives with its own
+justification invites the reader to weigh it, and these are not up for weighing
+at the point of use. Watch for "because", "rather than" and a rejected
+alternative: all three mean the paragraph is in the wrong file.
+
+If the why has no home to link to, that is the finding. Write the ADR, then
+write the instruction - which is how [ADR
+0003](../adr/0003-master-is-protected-by-a-ruleset-with-no-bypass.md) came to
+exist, out of a `branch-protection.md` that was half reference and half argument.
+
+AGENTS.md holds the index of these files; do not keep a second one here.
+
 ## Code comment - non-obvious why only
 
 Earns its place only if the code cannot say it for itself: a workaround, a
