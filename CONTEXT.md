@@ -24,9 +24,21 @@ _Avoid_: Assignment, lock
 A local, exclusive, expiring hold on a job, held by the process executing a transition. Distinct from a claim: a claim says the work is taken, a lease says a live process is holding it _right now_.
 _Avoid_: Lock, claim
 
+**Defer**:
+A job rescheduled to an absolute timestamp something else gave, rather than to an interval this agent chose. What waiting for a rate-limit window is: the provider says when it reopens, and the job is due then. The opposite of a park - a deferred job comes back on its own.
+_Avoid_: Backoff, sleep, snooze
+
 **Park**:
 A job left in its persisted state with nothing scheduled - no lease, no next run - resting until something reschedules it. How a job waits for an operator rather than for time: a due job comes back on its own, a parked job does not. About the scheduling, not about holding: a parked job is one whose lease has been given back _and_ whose re-entry nothing scheduled.
 _Avoid_: Stuck, suspended, dropped
+
+**Budget observation**:
+One reading of the account's usage, taken from the provider's own endpoint. Account-wide and dollar-denominated, across independent windows, and it sees interactive use as well as the agent's. Never a number this agent accumulated: the agent observes its budget and does not estimate it.
+_Avoid_: Ledger, estimate, quota, usage tracking
+
+**Admission**:
+Whether the worker pool may start a new job now, decided from a budget observation. Not a gate: a gate is a check one job must pass on its way through the state machine, and admission is about work starting at all. It never interrupts a job already in flight, and it never applies to a hand-invocation.
+_Avoid_: Throttle, gate, rate limiting
 
 **Command**:
 An instruction from a human to the agent, issued as a pull request comment (`/review`, `/revise`). The only imperative channel: every request for the agent to _do_ something is a command. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which is how work enters the queue at all and which the agent reads.
