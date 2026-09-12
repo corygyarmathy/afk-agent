@@ -51,15 +51,18 @@ func TestSourceFetchesAndCaches(t *testing.T) {
 	fetch, calls := serve(body(t))
 	s := &model.Source{Path: path, Fetch: fetch}
 
-	cat, age, err := s.Load(context.Background())
+	cat, st, err := s.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *calls != 1 {
 		t.Fatalf("fetched %d times", *calls)
 	}
-	if age != 0 {
-		t.Fatalf("a fresh fetch is not stale, got age %v", age)
+	if st.Stale() || st.Age != 0 {
+		t.Fatalf("a fresh fetch is not stale, got %+v", st)
+	}
+	if st.Cache != nil {
+		t.Fatalf("the fetch was not cached: %v", st.Cache)
 	}
 	if cat.Len() != 10 {
 		t.Fatalf("got %d models", cat.Len())
@@ -87,7 +90,7 @@ func TestSourceDegradesToTheLastGoodCatalogue(t *testing.T) {
 	fetch, calls := fail(down)
 	s := &model.Source{Path: path, Fetch: fetch, MaxAge: time.Hour}
 
-	cat, age, err := s.Load(context.Background())
+	cat, st, err := s.Load(context.Background())
 	if err != nil {
 		t.Fatalf("an unreachable upstream with a good cache must not fail: %v", err)
 	}
@@ -97,8 +100,11 @@ func TestSourceDegradesToTheLastGoodCatalogue(t *testing.T) {
 	if cat.Len() != 10 {
 		t.Fatalf("degraded to %d models rather than to the cached catalogue", cat.Len())
 	}
-	if age < 23*time.Hour {
-		t.Fatalf("staleness was not reported: got %v", age)
+	if st.Age < 23*time.Hour {
+		t.Fatalf("staleness was not reported: got %v", st.Age)
+	}
+	if !st.Stale() || !errors.Is(st.Fetch, down) {
+		t.Fatalf("the caller cannot tell this came from the cache: %+v", st)
 	}
 }
 
@@ -186,5 +192,79 @@ func TestSourceLeavesNoPartialFiles(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("the state directory holds %v", names)
+	}
+}
+
+// A cache that cannot be written does not fail a fetch that worked. The
+// catalogue in hand resolves every job correctly; what was lost is the
+// insurance against the next outage, which is reported rather than raised.
+func TestSourceKeepsAFetchItCouldNotCache(t *testing.T) {
+	// The cache path is made unusable by putting a *file* where its directory
+	// has to be, rather than by permissions: scripts/offline-test.sh runs the
+	// tests as a mapped root inside a user namespace, where a read-only
+	// directory is not read-only and a permissions test quietly proves nothing.
+	blocked := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetch, _ := serve(body(t))
+	s := &model.Source{Path: filepath.Join(blocked, "catalogue.json"), Fetch: fetch}
+
+	cat, st, err := s.Load(context.Background())
+	if err != nil {
+		t.Fatalf("a good fetch was thrown away because the cache could not be written: %v", err)
+	}
+	if cat.Len() != 10 {
+		t.Fatalf("got %d models", cat.Len())
+	}
+	if st.Cache == nil {
+		t.Fatal("the failed cache write was not reported")
+	}
+	if st.Stale() {
+		t.Fatalf("the catalogue came from upstream and is not stale: %+v", st)
+	}
+}
+
+// A Source with no cache path is a Source without the insurance, not a Source
+// that cannot load. Caching is the fallback's half of the seam; fetching is the
+// primary one and does not depend on it.
+func TestSourceLoadsWithNoCachePath(t *testing.T) {
+	fetch, calls := serve(body(t))
+	s := &model.Source{Fetch: fetch}
+
+	cat, st, err := s.Load(context.Background())
+	if err != nil {
+		t.Fatalf("want the fetched catalogue: %v", err)
+	}
+	if cat.Len() != 10 || *calls != 1 {
+		t.Fatalf("got %d models from %d fetches", cat.Len(), *calls)
+	}
+	if st.Cache == nil {
+		t.Fatal("having nowhere to cache should be reported")
+	}
+}
+
+// A cached copy that no longer parses is not a cache, even inside MaxAge: the
+// fetch it was about to skip is the thing that repairs it.
+func TestSourceFallsThroughAnUnparseableCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalogue.json")
+	if err := os.WriteFile(path, []byte("{ truncated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetch, calls := serve(body(t))
+	s := &model.Source{Path: path, Fetch: fetch, MaxAge: time.Hour}
+
+	cat, st, err := s.Load(context.Background())
+	if err != nil {
+		t.Fatalf("a fresh-but-corrupt cache must not fail the load: %v", err)
+	}
+	if *calls != 1 {
+		t.Fatalf("upstream should have been tried once, was tried %d times", *calls)
+	}
+	if cat.Len() != 10 || st.Cache != nil {
+		t.Fatalf("got %d models, cache error %v", cat.Len(), st.Cache)
+	}
+	if after, _ := os.ReadFile(path); len(after) == len("{ truncated") {
+		t.Fatal("the corrupt cache was not replaced by the fetch that succeeded")
 	}
 }
