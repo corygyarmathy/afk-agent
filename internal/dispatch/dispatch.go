@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
+	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -61,6 +62,17 @@ type Dispatcher struct {
 	Poll      time.Duration
 	TokenWait time.Duration
 
+	// Notify is the operator's interrupt channel (ADR 0001 §13). Nil is no
+	// notification at all, which is the shape of an unconfigured channel and is
+	// safe: both conditions it carries are also states the operator can query,
+	// and a pool with no notifier is one that must be looked at rather than one
+	// that goes wrong.
+	//
+	// It sits here and not in the runner, alongside Budget and for the same
+	// reason: `afk run` is a hand-invocation by an operator who is already
+	// watching the output, and a notification exists for the times nobody is.
+	Notify *notify.Notifier
+
 	// Log receives one line per dispatched job. Nil is silent: the happy path
 	// does not notify (ADR 0001 §13), and this is a log rather than a
 	// notification channel.
@@ -77,6 +89,24 @@ func (d *Dispatcher) now() time.Time {
 func (d *Dispatcher) logf(format string, a ...any) {
 	if d.Log != nil {
 		d.Log(fmt.Sprintf(format, a...))
+	}
+}
+
+// notify publishes one condition, best effort.
+//
+// A notification that could not be sent is a log line and changes nothing: the
+// park is already in the store and the budget is already readable with `afk
+// budget`, so the event it reports survives the channel failing to carry it.
+//
+// Without the caller's cancellation, for the reason the runner's commit is: a
+// SIGTERM arriving between the store write and this must not be what turns a
+// parked job into a silent one.
+func (d *Dispatcher) notify(ctx context.Context, holder string, send func(context.Context) error) {
+	if d.Notify == nil {
+		return
+	}
+	if err := send(context.WithoutCancel(ctx)); err != nil {
+		d.logf("%s: %v", holder, err)
 	}
 }
 
@@ -181,8 +211,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 		// scheduled, or a state written by a binary that knew a transition
 		// this one does not. Park it rather than spin on it, and say so - a
 		// job nothing can move is the operator's to look at.
+		cause := fmt.Errorf("no transition runs from state %q", job.State)
 		d.logf("%s: %s is in state %q with no transition from it; parking it", holder, job.ID, job.State)
 		d.park(ctx, holder, job)
+		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, job, cause) })
 		return
 	}
 
@@ -202,9 +234,18 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 	out, err := runner.Run(ctx, t.Name, job.ID)
 	if err != nil {
 		d.logf("%s: %s: %v", holder, job.ID, err)
-		return
+	} else {
+		d.logf("%s: %s", holder, out)
 	}
-	d.logf("%s: %s", holder, out)
+
+	// A failure that came to rest is the one job outcome that reaches the
+	// operator. Both halves of the condition matter: a failure the backoff
+	// rescheduled is retrying and is not yet anyone's problem, and a park with
+	// no error is a transition that chose to wait for a human - a hand-back is
+	// that, and ADR 0001 §13 rules it out of this channel explicitly.
+	if err != nil && out.Parked {
+		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, out.Job, err) })
+	}
 }
 
 // admit consults the budget before a job starts, and gives the job back if it
@@ -234,6 +275,16 @@ func (d *Dispatcher) admit(ctx context.Context, holder string, job store.Job) bo
 	}
 
 	d.logf("%s: %s: %s", holder, job.ID, adm)
+
+	// Exhaustion reaches the operator; approaching a limit does not. The window
+	// admission named is the one to ask, because it is the window that decided
+	// the answer - a threshold Wait names a window that is merely full, and a
+	// limit names one the provider has closed.
+	if adm.Window.Limited() {
+		w := adm.Window
+		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Exhausted(c, w) })
+	}
+
 	if adm.Decision == budget.Defer {
 		// No wait afterwards: the rest of the due queue is deferred on the
 		// following passes, and once it is drained there is nothing due and the

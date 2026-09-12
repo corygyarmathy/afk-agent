@@ -16,6 +16,8 @@ The pool that runs transitions unattended is `afk work`. It has two independent 
 
 The budget is observed, never estimated (ADR 0001 §11). Usage is read from the provider's own endpoint, which sees interactive use of the account as well as the agent's; being rate limited defers work to the timestamp the provider gave, and approaching a limit stops new jobs starting without interrupting jobs in flight. `afk budget` reads it by hand.
 
+Two things interrupt the operator, and nothing else does (ADR 0001 §13): a job that failed and came to rest needing a human, and a budget window the provider says is spent. A pull request ready for review, a job handed back and a red CI run are states queried when the operator chooses to look. The happy path is silent. Notifications publish to an ntfy topic supplied as a parameter; without one, nothing is notified.
+
 GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency (ADR 0001 §5). Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
 
 Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
