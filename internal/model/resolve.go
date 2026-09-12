@@ -92,18 +92,28 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 	if reqs.Tier == "" {
 		return nil, fmt.Errorf("resolve: no tier required")
 	}
-	if budget.Limited {
-		return nil, &LimitedError{ResetsAt: budget.ResetsAt}
-	}
-
+	// The tier is validated before the budget is consulted, though a limited
+	// budget stops the resolution either way. A typo'd tier name is a mistake in
+	// the module that no amount of waiting fixes, and checking the budget first
+	// hides it for as long as the account is limited: the job defers, reports a
+	// rate limit, and comes back to defer again. This costs a map lookup on data
+	// already in hand.
 	enrolled, ok := enrol.Tier(reqs.Tier)
 	if !ok {
 		return nil, &UnknownTierError{Tier: reqs.Tier, Known: enrol.Tiers()}
 	}
 
+	if budget.Limited {
+		return nil, &LimitedError{ResetsAt: budget.ResetsAt}
+	}
+
 	var (
 		candidates Candidates
 		rejected   []Rejection
+		// catalogued counts the tier's models the catalogue actually knows.
+		// Only they were checked against anything, so only they can support a
+		// claim about what the tier does and does not support.
+		catalogued int
 		// met records which required capabilities at least one enrolled model
 		// has. What is left over after the walk is the set no model in the
 		// tier supports, and that is the error the acceptance criterion asks
@@ -116,6 +126,7 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 			rejected = append(rejected, Rejection{ref, "not in the catalogue"})
 			continue
 		}
+		catalogued++
 		for _, c := range reqs.Capabilities {
 			if m.Has(c) {
 				met[c] = true
@@ -129,13 +140,24 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 	}
 
 	if len(candidates) == 0 {
+		// Missing is only claimed about models that exist. A tier whose models
+		// the catalogue has all lost supports nothing, trivially, and reporting
+		// every required capability as unsupported would send the operator to
+		// enrol a capability when what happened is that their tier evaporated.
 		var missing []Capability
-		for _, c := range reqs.Capabilities {
-			if !met[c] {
-				missing = append(missing, c)
+		if catalogued > 0 {
+			for _, c := range reqs.Capabilities {
+				if !met[c] {
+					missing = append(missing, c)
+				}
 			}
 		}
-		return nil, &NoCandidateError{Tier: reqs.Tier, Missing: missing, Rejected: rejected}
+		return nil, &NoCandidateError{
+			Tier:       reqs.Tier,
+			Missing:    missing,
+			Rejected:   rejected,
+			Catalogued: catalogued,
+		}
 	}
 	return candidates, nil
 }
@@ -269,6 +291,12 @@ type NoCandidateError struct {
 	Tier     Tier
 	Missing  []Capability
 	Rejected []Rejection
+
+	// Catalogued is how many of the tier's enrolled models the catalogue knew.
+	// Zero is a tier that has evaporated upstream rather than one that fell
+	// short, and Missing is empty in that case: nothing was checked against
+	// anything, so there is no claim to make about what the tier supports.
+	Catalogued int
 }
 
 // Rejection is one enrolled model that did not qualify, and why.
@@ -285,6 +313,9 @@ type Rejection struct {
 func (e *NoCandidateError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no enrolled model in tier %q can serve this job", e.Tier)
+	if e.Catalogued == 0 && len(e.Rejected) > 0 {
+		b.WriteString(": the catalogue carries none of them")
+	}
 	if len(e.Missing) > 0 {
 		names := make([]string, len(e.Missing))
 		for i, c := range e.Missing {

@@ -223,6 +223,35 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			// A tier the catalogue has lost entirely supports nothing,
+			// trivially. Reporting every required capability as unsupported
+			// would send the operator to enrol a model that can do this, when
+			// what happened is that the models they enrolled evaporated.
+			name: "a tier the catalogue has lost is not a tier that lacks a capability",
+			reqs: model.Requirements{
+				Tier:         "withdrawn",
+				Capabilities: []model.Capability{model.CapToolCall},
+			},
+			wantErr: func(t *testing.T, err error) {
+				var nc *model.NoCandidateError
+				if !errors.As(err, &nc) {
+					t.Fatalf("want *NoCandidateError, got %T: %v", err, err)
+				}
+				if len(nc.Missing) != 0 {
+					t.Fatalf("nothing was checked, so nothing is missing: %v", nc.Missing)
+				}
+				if nc.Catalogued != 0 {
+					t.Fatalf("the catalogue knows %d of them", nc.Catalogued)
+				}
+				if strings.Contains(err.Error(), "none supports") {
+					t.Fatalf("the error blames a capability for a withdrawal: %v", err)
+				}
+				if !strings.Contains(err.Error(), "the catalogue carries none of them") {
+					t.Fatalf("the error does not say what happened: %v", err)
+				}
+			},
+		},
+		{
 			name: "a tier nobody enrolled anything in names the tiers that exist",
 			reqs: model.Requirements{Tier: "premium"},
 			wantErr: func(t *testing.T, err error) {
@@ -464,5 +493,25 @@ func TestRejectionsAreReadable(t *testing.T) {
 		if want[got.Ref.String()] != got.Why {
 			t.Fatalf("%s: got %q, want %q", got.Ref, got.Why, want[got.Ref.String()])
 		}
+	}
+}
+
+// A limited budget stops the resolution, but it must not hide a tier name that
+// does not exist. A typo in the module is a mistake no amount of waiting fixes,
+// and a job that defers, reports a rate limit and comes back to defer again
+// never surfaces it.
+func TestALimitedBudgetDoesNotHideATypedTierName(t *testing.T) {
+	_, err := model.Resolve(
+		model.Requirements{Tier: "implementatoin"},
+		fixture(t),
+		enrolment(t, model.TierEnrolment{Name: "implementation", Models: refs(t, "opencode-go/glm-5.3-flash")}),
+		model.Budget{Limited: true, ResetsAt: time.Date(2026, 9, 13, 4, 0, 0, 0, time.UTC)},
+	)
+	var ut *model.UnknownTierError
+	if !errors.As(err, &ut) {
+		t.Fatalf("want *UnknownTierError, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "implementation") {
+		t.Fatalf("the error should name the tier that does exist: %v", err)
 	}
 }
