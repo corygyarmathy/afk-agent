@@ -16,6 +16,17 @@ GitHub owns what is to be done. A local store owns how it is being done - leases
 
 Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
 
+## Building
+
+Go, no dependencies:
+
+```
+go build ./...
+go test ./...
+```
+
+The binary is `cmd/afk`. No transition is implemented yet; `afk help` shows the surface they will be invoked through.
+
 ## Status
 
 Early. The design is settled and recorded in [ADR 0001](docs/adr/0001-a-go-state-machine-in-its-own-repository.md); the vocabulary it uses is in [CONTEXT.md](CONTEXT.md). It replaces a working bash prototype that ran for several weeks in [corygyarmathy/dotfiles](https://github.com/corygyarmathy/dotfiles), which is where the NixOS module that packages and configures this agent still lives.
