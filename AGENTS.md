@@ -32,11 +32,21 @@ Read what the work needs. None of it is required reading.
 ## Checks
 
 ```bash
-gofmt -l .        # prints nothing
+gofmt -l .                  # prints nothing
 go build ./...
 go vet ./...
-go test ./...
+scripts/offline-test.sh     # go test ./... with no network
 ```
+
+These four are the gate, in this order, in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every pull request.
+Run them locally rather than waiting for CI to tell you.
+
+`scripts/offline-test.sh` runs the tests in a network namespace with no route
+out, so "tests run offline" is enforced rather than trusted; it refuses to run
+at all on a host where it cannot isolate the network. `go test ./...` is still
+the faster thing to run while you iterate - the script is what decides whether
+the tests were honest about it.
 
 ## Do not
 
