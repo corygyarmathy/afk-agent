@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/corygyarmathy/afk-agent/internal/fetch"
 )
 
 // Endpoint is where the capability catalogue comes from.
@@ -152,20 +153,10 @@ func (s *Source) fetch(ctx context.Context) (*Catalogue, []byte, error) {
 	return c, body, nil
 }
 
+// httpFetch is the default Fetch: the catalogue is public, so it goes out with
+// no token.
 func httpFetch(ctx context.Context) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("%s: %s", Endpoint, resp.Status)
-	}
-	return resp.Body, nil
+	return fetch.Get(ctx, Endpoint, "")
 }
 
 // cacheAge is how old the cached copy is, without decoding it.
