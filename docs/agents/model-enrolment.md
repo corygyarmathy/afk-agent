@@ -56,12 +56,41 @@ parsed.
 
 ## Which models the Go subscription covers
 
-The `opencode-go` provider in the catalogue is the OpenCode Go subscription's
-endpoint, `https://opencode.ai/zen/go/v1` - the same base as the usage endpoint
-in [#5](https://github.com/corygyarmathy/afk-agent/issues/5). Enrolling only
-from that provider keeps work on the subscription. Models from other providers
-are reached pay-as-you-go and are bounded by the account balance, not by this
-agent ([ADR 0001 §12](../adr/0001-a-go-state-machine-in-its-own-repository.md)).
+OpenCode is two providers in the catalogue, and they are not the same list:
+
+| provider | endpoint | models | priced at zero |
+| --- | --- | --- | --- |
+| `opencode-go` | `https://opencode.ai/zen/go/v1` | 36 | 1 |
+| `opencode` | `https://opencode.ai/zen/v1` | 102 | 31 |
+
+`opencode-go` is the Go subscription - the same base as the usage endpoint in
+[#5](https://github.com/corygyarmathy/afk-agent/issues/5). Enrolling only from
+it keeps work on the subscription. Models from any other provider are reached
+pay-as-you-go and are bounded by the account balance, not by this agent
+([ADR 0001 §12](../adr/0001-a-go-state-machine-in-its-own-repository.md)).
+
+Twenty model ids appear in both providers. The same name is not the same entry:
+`muse-spark-1.3-contributor` is 0.10/0.20 under `opencode-go` and free as
+`muse-spark-1.3-contributor-free` under `opencode`. Enrol the full
+`provider/model`, and check the price of the one you enrolled.
+
+Counts above were read from the catalogue on 2026-09-12. They move.
+
+## Free models
+
+Thirty-one `opencode` entries and one `opencode-go` entry advertise a cost of
+zero. That is the catalogue's claim about list price; whether a free model draws
+on the subscription or the pay-as-you-go balance is OpenCode's to answer, and
+the usage endpoint in #5 is where to check it.
+
+Enrolling one is ordinary. Two things follow from what they are:
+
+- They are previews, and previews are withdrawn. An enrolled model the
+  catalogue no longer carries stops being a candidate; the rest of the tier
+  resolves in order, and nothing is handed back.
+- Nothing prefers them. Order within a tier is the order written in the
+  enrolment file, and putting a free model at the head of a tier is how it gets
+  tried first.
 
 ## Where the values live
 

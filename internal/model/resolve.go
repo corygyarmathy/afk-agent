@@ -103,7 +103,7 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 
 	var (
 		candidates Candidates
-		rejected   []rejection
+		rejected   []Rejection
 		// met records which required capabilities at least one enrolled model
 		// has. What is left over after the walk is the set no model in the
 		// tier supports, and that is the error the acceptance criterion asks
@@ -113,7 +113,7 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 	for _, ref := range enrolled {
 		m, known := cat.Lookup(ref)
 		if !known {
-			rejected = append(rejected, rejection{ref, "not in the catalogue"})
+			rejected = append(rejected, Rejection{ref, "not in the catalogue"})
 			continue
 		}
 		for _, c := range reqs.Capabilities {
@@ -122,7 +122,7 @@ func Resolve(reqs Requirements, cat *Catalogue, enrol *Enrolment, budget Budget)
 			}
 		}
 		if why := reject(m, reqs); why != "" {
-			rejected = append(rejected, rejection{ref, why})
+			rejected = append(rejected, Rejection{ref, why})
 			continue
 		}
 		candidates = append(candidates, ref)
@@ -261,10 +261,16 @@ func (e *UnknownTierError) Error() string {
 type NoCandidateError struct {
 	Tier     Tier
 	Missing  []Capability
-	Rejected []rejection
+	Rejected []Rejection
 }
 
-type rejection struct {
+// Rejection is one enrolled model that did not qualify, and why.
+//
+// Exported because the why is the useful half. "not in the catalogue" against a
+// model an operator enrolled last week is a different morning's work from
+// "input 4 over ceiling 3", and a caller that can only print the error string
+// cannot tell a notification which it is.
+type Rejection struct {
 	Ref Ref
 	Why string
 }
