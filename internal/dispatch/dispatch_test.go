@@ -2,6 +2,7 @@ package dispatch_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/dispatch"
+	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -580,3 +582,292 @@ func TestADispatcherRefusesAnObserverWithNoMaxAge(t *testing.T) {
 // that increment them run on several workers at once.
 func atomicAdd(n *int32)        { atomic.AddInt32(n, 1) }
 func atomicLoad(n *int32) int32 { return atomic.LoadInt32(n) }
+
+// published stands in for the ntfy server, so that a test asserts on what
+// reached the operator rather than on what was logged. The tests here run
+// offline (AGENTS.md); notify.Notifier's Post field is the seam.
+type published struct {
+	mu   sync.Mutex
+	sent []string
+}
+
+func (p *published) post(_ context.Context, title, _, body string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sent = append(p.sent, title+"\n"+body)
+	return nil
+}
+
+func (p *published) all() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.sent...)
+}
+
+// silent is the assertion the happy path has to pass. It is called after the
+// dispatcher has stopped, so there is nothing still in flight that could
+// publish after it looked.
+func (p *published) silent(t *testing.T) {
+	t.Helper()
+	if got := p.all(); len(got) != 0 {
+		t.Fatalf("%d notifications, want none:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+}
+
+// notifier wires a dispatcher to p.
+func notifier(p *published) *notify.Notifier {
+	return &notify.Notifier{URL: "https://ntfy.example/afk-agent", Post: p.post}
+}
+
+// failing is a transition that never succeeds, which is how a test reaches the
+// failure paths without a network or a model.
+func failing(cause error) *transition.Registry {
+	return transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{}, cause
+		},
+	})
+}
+
+// The first condition ADR 0001 §13 reserves the channel for: a failure that has
+// come to rest and needs a human. With no backoff policy a failed job parks on
+// its first attempt, which is what "waits for an operator" is in the store.
+func TestAFailureThatParkedReachesTheOperator(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	p := &published{}
+
+	d := dispatcher(t, s, failing(errors.New("the build did not finish")), pool(t, nil), 1)
+	d.Notify = notifier(p)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "park", func(j store.Job) bool { return j.Attempts > 0 && j.NextRunAt.IsZero() })
+	}()
+	runUntil(t, d, done)
+
+	got := p.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one parked job, want 1:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	for _, want := range []string{ids[0], "the build did not finish"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("the notification does not mention %q:\n%s", want, got[0])
+		}
+	}
+}
+
+// A failure the backoff rescheduled is retrying, and retrying is not yet
+// anyone's problem. Notifying here would report every transient failure at the
+// provider, which is the noise §13 exists to keep off the channel.
+func TestAFailureThatIsStillRetryingDoesNotNotify(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	p := &published{}
+
+	d := dispatcher(t, s, failing(errors.New("a transient failure")), pool(t, nil), 1)
+	d.Notify = notifier(p)
+	d.Backoff = func(int) (time.Time, bool) { return time.Now().Add(time.Hour), true }
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "be rescheduled", func(j store.Job) bool {
+			return j.Attempts > 0 && j.NextRunAt.After(time.Now())
+		})
+	}()
+	runUntil(t, d, done)
+
+	p.silent(t)
+}
+
+// The acceptance criterion: the happy path is silent. A successful run produces
+// no notification of any kind.
+func TestTheHappyPathIsSilent(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 3)
+	p := &published{}
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{State: "done"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 2)
+	d.Notify = notifier(p)
+	d.Budget = observer(&usage{doc: usageOK}, 80)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, id := range ids {
+			until(t, s, id, "finish", func(j store.Job) bool { return j.State == "done" })
+		}
+	}()
+	runUntil(t, d, done)
+
+	p.silent(t)
+}
+
+// The acceptance criterion: a hand-back does not notify. It is a state, not an
+// interrupt.
+//
+// A transition that comes to rest without failing is what a hand-back is in the
+// store - the job keeps its state and nothing is scheduled - so the condition
+// cannot be "the job parked". It is "the job parked because something failed".
+func TestAJobThatCameToRestWithoutFailingDoesNotNotify(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	p := &published{}
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			// No RunAt: the job rests where it is, waiting for a human.
+			return transition.Result{State: "handed-back"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 1)
+	d.Notify = notifier(p)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "hand back", func(j store.Job) bool { return j.State == "handed-back" })
+	}()
+	runUntil(t, d, done)
+
+	p.silent(t)
+}
+
+// A job in a state no transition leads out of is parked by the dispatcher
+// rather than by the runner, and it is as much the operator's to look at: a
+// terminal state left scheduled, or a state written by a binary that knew a
+// transition this one does not.
+func TestAJobNothingCanMoveReachesTheOperator(t *testing.T) {
+	s := openStore(t)
+	job := storetest.Seed(t, s, store.KindReview, 12, "a-state-from-a-newer-binary")
+	p := &published{}
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{State: "reviewed"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 1)
+	d.Notify = notifier(p)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, job.ID, "park", func(j store.Job) bool { return j.NextRunAt.IsZero() && j.Lease == nil })
+	}()
+	runUntil(t, d, done)
+
+	got := p.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one job nothing can move, want 1:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	if !strings.Contains(got[0], "a-state-from-a-newer-binary") {
+		t.Errorf("the notification does not name the state it is stuck in:\n%s", got[0])
+	}
+}
+
+// The second condition, and the acceptance criterion that repeated occurrences
+// do not re-notify on every poll. A limited window is re-observed by every
+// worker on every pass for as long as it lasts; the operator hears about it
+// once.
+func TestAnExhaustedBudgetReachesTheOperatorOnce(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 3)
+	p := &published{}
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{State: "done"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 2)
+	d.Notify = notifier(p)
+	d.Budget = observer(&usage{doc: usageLimited}, 0)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, id := range ids {
+			until(t, s, id, "defer", func(j store.Job) bool { return j.NextRunAt.After(time.Now()) })
+		}
+	}()
+	runUntil(t, d, done)
+
+	got := p.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one limited window observed by two workers across three jobs, want 1:\n%s",
+			len(got), strings.Join(got, "\n---\n"))
+	}
+	for _, want := range []string{"monthly", "2126-01-01T00:00:00Z"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("the notification does not mention %q:\n%s", want, got[0])
+		}
+	}
+}
+
+// Approaching a limit stops new jobs starting and says nothing. The queue
+// standing down while a rolling window drains is admission control working, and
+// a notification for it would train the operator to ignore the channel that
+// carries the other two.
+func TestApproachingALimitIsSilent(t *testing.T) {
+	s := openStore(t)
+	queue(t, s, 1)
+	p := &published{}
+
+	var ran int32
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			atomicAdd(&ran)
+			return transition.Result{State: "done"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 1)
+	d.Notify = notifier(p)
+	d.Budget = observer(&usage{doc: usageApproaching}, 80)
+
+	// The store does not change when admission waits - the job is given back
+	// untouched - so the log line is what says the pool has seen it.
+	done := make(chan struct{})
+	var once sync.Once
+	d.Log = func(msg string) {
+		t.Log(msg)
+		if strings.Contains(msg, "wait") {
+			once.Do(func() { close(done) })
+		}
+	}
+	runUntil(t, d, done)
+
+	p.silent(t)
+	if n := atomicLoad(&ran); n != 0 {
+		t.Fatalf("%d transitions ran while approaching a limit", n)
+	}
+}
+
+// No notifier is no notification, which is the shape of an unconfigured channel
+// and must not be a dispatcher that panics on the first park.
+func TestNoNotifierIsNoNotification(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 1)
+
+	d := dispatcher(t, s, failing(errors.New("boom")), pool(t, nil), 1)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "park", func(j store.Job) bool { return j.Attempts > 0 && j.NextRunAt.IsZero() })
+	}()
+	runUntil(t, d, done)
+}

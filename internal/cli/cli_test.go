@@ -442,3 +442,81 @@ func TestSubject_String(t *testing.T) {
 		}
 	}
 }
+
+// The ntfy token is read from a file for the same reason the usage key is: an
+// argument is visible in `ps` and an environment variable in /proc.
+func TestTheNotifyTokenIsReadFromItsFile(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "ntfy-token")
+	if err := os.WriteFile(token, []byte(" tk_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		p     params
+		want  string // substring of the error
+		token string // the token expected on the notifier
+	}{
+		{name: "read and trimmed", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: token}, token: "tk_secret"},
+		{name: "a topic anyone may publish to", p: params{notifyURL: "https://ntfy.example/afk"}},
+		{name: "no such file", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: filepath.Join(dir, "absent")}, want: "--notify-key:"},
+		{name: "a token with nowhere to publish", p: params{notifyKey: token}, want: "needs --notify-url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AFK_NOTIFY_URL", "")
+			t.Setenv("AFK_NOTIFY_KEY", "")
+
+			n, err := tt.p.notifier()
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.Token != tt.token {
+				t.Fatalf("token = %q, want %q", n.Token, tt.token)
+			}
+			if n.URL != tt.p.notifyURL {
+				t.Fatalf("url = %q, want %q", n.URL, tt.p.notifyURL)
+			}
+		})
+	}
+}
+
+// No notification parameters is no notifier, which the dispatcher reads as
+// nothing being notified. An agent nobody has given a channel to is silent
+// rather than broken.
+func TestNoNotifyParametersIsNoNotifier(t *testing.T) {
+	t.Setenv("AFK_NOTIFY_URL", "")
+	t.Setenv("AFK_NOTIFY_KEY", "")
+
+	var p params
+	n, err := p.notifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != nil {
+		t.Fatalf("notifier = %+v, want none", n)
+	}
+}
+
+// The notification parameters reach the binary from the environment too, the
+// way the NixOS module sets them in the unit.
+func TestTheNotifyURLComesFromTheEnvironmentToo(t *testing.T) {
+	t.Setenv("AFK_NOTIFY_URL", "https://ntfy.example/from-the-unit")
+	t.Setenv("AFK_NOTIFY_KEY", "")
+
+	var p params
+	n, err := p.notifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == nil || n.URL != "https://ntfy.example/from-the-unit" {
+		t.Fatalf("notifier = %+v, want the URL from the environment", n)
+	}
+}

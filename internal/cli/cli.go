@@ -266,6 +266,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindBackoff(fs)
 	p.bindPool(fs)
 	p.bindBudget(fs)
+	p.bindNotify(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return errUsage{err}
@@ -292,6 +293,10 @@ func workCmd(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	notifier, err := p.notifier()
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -306,6 +311,7 @@ func workCmd(args []string, stderr io.Writer) error {
 		Runner:    runner,
 		Pool:      pool,
 		Budget:    observer,
+		Notify:    notifier,
 		Workers:   workers,
 		Poll:      poll,
 		TokenWait: tokenWait,

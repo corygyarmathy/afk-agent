@@ -43,6 +43,9 @@ Undocumented, and added by
 A deferral names the window its timestamp came from, which is the window that
 reopens last and not necessarily the one nearest its limit.
 
+A window that is `rate-limited` also reaches the operator once, as a
+notification: [`notification.md`](notification.md). Approaching one does not.
+
 `afk run` is unaffected by all of it. A hand-invocation is an operator asking
 for this job now.
 

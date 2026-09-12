@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
+	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -49,11 +50,20 @@ Budget observation, for afk work and afk budget:
                                           (required by afk work)
   --budget-at <pct>     AFK_BUDGET_AT     percentage that stops new jobs
 
+Notification, for afk work:
+
+  --notify-url <url>    AFK_NOTIFY_URL    ntfy topic to publish to
+  --notify-key <path>   AFK_NOTIFY_KEY    file holding the ntfy token
+
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
 
 Without --budget-key there is no admission control: work runs into the
-provider's limits and they arrive as transient failures.`
+provider's limits and they arrive as transient failures.
+
+Without --notify-url nothing is notified. Two conditions reach the operator when
+it is set - a job that parked after a failure, and a budget window the provider
+says is spent - and nothing else does.`
 
 // params collects the configuration flags, before they are resolved against the
 // environment.
@@ -71,6 +81,9 @@ type params struct {
 	budgetKey string
 	budgetAge string
 	budgetAt  string
+
+	notifyURL string
+	notifyKey string
 }
 
 func (p *params) bindStore(fs *flag.FlagSet) {
@@ -98,6 +111,16 @@ func (p *params) bindBudget(fs *flag.FlagSet) {
 	fs.StringVar(&p.budgetKey, "budget-key", "", "file holding the usage API key (AFK_BUDGET_KEY)")
 	fs.StringVar(&p.budgetAge, "budget-age", "", "how long an observation is reused (AFK_BUDGET_AGE)")
 	fs.StringVar(&p.budgetAt, "budget-at", "", "percentage of a window that stops new jobs (AFK_BUDGET_AT)")
+}
+
+// bindNotify binds the operator's interrupt channel.
+//
+// The token is a path for the same reason the usage key is: an argument is
+// visible in `ps` and an environment variable in /proc, and the secret already
+// arrives as a file from sops or systemd's LoadCredential.
+func (p *params) bindNotify(fs *flag.FlagSet) {
+	fs.StringVar(&p.notifyURL, "notify-url", "", "ntfy topic to publish to (AFK_NOTIFY_URL)")
+	fs.StringVar(&p.notifyKey, "notify-key", "", "file holding the ntfy token (AFK_NOTIFY_KEY)")
 }
 
 func (p *params) bindPool(fs *flag.FlagSet) {
@@ -319,11 +342,42 @@ func (p *params) budget() (*budget.Observer, error) {
 		}
 	}
 
-	token, err := readKey(key)
+	token, err := readKey(key, "budget-key")
 	if err != nil {
 		return nil, err
 	}
 	return &budget.Observer{Token: token, MaxAge: maxAge, Threshold: threshold}, nil
+}
+
+// notifier builds the notification channel, or returns nil for "nothing is
+// notified".
+//
+// The URL is what decides whether there is one, and the token is genuinely
+// optional: an ntfy topic that anyone may publish to is a coherent deployment,
+// and an empty token sends no Authorization header rather than a broken one. A
+// token with no URL is the half-made configuration worth refusing - it is a
+// secret read for a channel that does not exist.
+func (p *params) notifier() (*notify.Notifier, error) {
+	url := optional(p.notifyURL, "AFK_NOTIFY_URL")
+	key := optional(p.notifyKey, "AFK_NOTIFY_KEY")
+
+	if url == "" {
+		if key != "" {
+			return nil, usagef("--notify-key needs --notify-url: there is nowhere to publish to")
+		}
+		return nil, nil
+	}
+
+	var (
+		token string
+		err   error
+	)
+	if key != "" {
+		if token, err = readKey(key, "notify-key"); err != nil {
+			return nil, err
+		}
+	}
+	return &notify.Notifier{URL: url, Token: token}, nil
 }
 
 // requireBudgetAge is the check a caller that reuses an observation across jobs
@@ -350,14 +404,14 @@ func (p *params) requireBudgetAge() error {
 // The error names the path and never the contents: a key that is empty or
 // unreadable is a thing to report, and a key that is wrong is reported by the
 // endpoint as a 401.
-func readKey(path string) (string, error) {
+func readKey(path, flagName string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("--budget-key: %w", err)
+		return "", fmt.Errorf("--%s: %w", flagName, err)
 	}
 	key := strings.TrimSpace(string(b))
 	if key == "" {
-		return "", usagef("--budget-key: %s is empty", path)
+		return "", usagef("--%s: %s is empty", flagName, path)
 	}
 	return key, nil
 }

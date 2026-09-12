@@ -1,16 +1,17 @@
-// Package fetch is the one authenticated GET this agent makes.
+// Package fetch is the authenticated HTTP this agent makes.
 //
-// Two packages read a document from upstream - the model catalogue and the
-// usage endpoint - and the request they make is the same request. It lives here
-// so that "what a fetch failure looks like" is decided once: the error names the
-// endpoint and the status, and never the token.
+// Three packages reach upstream - the model catalogue, the usage endpoint and
+// the notification channel - and the request they make is the same request. It
+// lives here so that "what a request failure looks like" is decided once: the
+// error names the endpoint and the status, and never the token.
 //
 // It is not a seam and nothing here is injectable. Each caller keeps its own
-// Fetch field and this is only what that field defaults to, which is what keeps
-// the tests offline (AGENTS.md).
+// Fetch or Post field and this is only what that field defaults to, which is
+// what keeps the tests offline (AGENTS.md).
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -30,9 +31,7 @@ func Get(ctx context.Context, url, token string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	authorise(req, token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -42,4 +41,48 @@ func Get(ctx context.Context, url, token string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	return resp.Body, nil
+}
+
+// Post issues a POST with the given headers and body, and discards the
+// response.
+//
+// The only caller is the notification channel, and what it needs back is
+// whether the message was published. A response body that says something more
+// than the status does is a body nobody would act on: a notification that
+// failed is logged and the event it reports is on the tracker or in the journal
+// already.
+//
+// The body is drained before it is closed even though it is thrown away, so the
+// connection returns to the pool rather than being torn down after every
+// notification.
+func Post(ctx context.Context, url, token string, header http.Header, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	for k, vs := range header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	authorise(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	return nil
+}
+
+// authorise adds the bearer token, if there is one. An empty token sends no
+// header at all.
+func authorise(req *http.Request, token string) {
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 }
