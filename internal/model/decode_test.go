@@ -31,7 +31,8 @@ func TestDecodeCatalogue(t *testing.T) {
 				InputModalities:  []string{"text"},
 				OutputModalities: []string{"text"},
 				Limit:            model.Limit{Context: 1_000_000, Output: 131072},
-				Price:            model.Price{Input: 1.4, Output: 4.4, CacheRead: 0.26, Known: true},
+				Price: model.Price{Input: 1.4, Output: 4.4, CacheRead: 0.26, Known: true,
+					Headline: model.Band{Input: 1.4, Output: 4.4, CacheRead: 0.26}},
 			},
 		},
 		{
@@ -50,7 +51,10 @@ func TestDecodeCatalogue(t *testing.T) {
 				InputModalities:  []string{"text", "image"},
 				OutputModalities: []string{"text"},
 				Limit:            model.Limit{Context: 500_000, Output: 500_000},
-				Price:            model.Price{Input: 4, Output: 12, CacheRead: 1, Known: true},
+				Price: model.Price{Input: 4, Output: 12, CacheRead: 1, Known: true,
+					// The headline band, carried so a rejection can be
+					// reconciled with the page the operator reads.
+					Headline: model.Band{Input: 2, Output: 6, CacheRead: 0.5}},
 			},
 		},
 		{

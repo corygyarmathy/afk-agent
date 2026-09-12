@@ -173,14 +173,21 @@ func overCeiling(p Price, ceiling Ceiling) string {
 		return "unpriced, and a ceiling is required"
 	}
 	for _, f := range []struct {
-		name        string
-		have, limit float64
+		name                  string
+		have, limit, headline float64
 	}{
-		{"input", p.Input, ceiling.Input},
-		{"output", p.Output, ceiling.Output},
-		{"cache read", p.CacheRead, ceiling.CacheRead},
+		{"input", p.Input, ceiling.Input, p.Headline.Input},
+		{"output", p.Output, ceiling.Output, p.Headline.Output},
+		{"cache read", p.CacheRead, ceiling.CacheRead, p.Headline.CacheRead},
 	} {
 		if f.limit > 0 && f.have > f.limit {
+			if f.headline < f.have {
+				// The number that excluded the model is not the number on
+				// models.dev's page, and an operator who cannot reconcile the
+				// two has no way to tell a repriced model from a band they did
+				// not know was being read. Say where it came from.
+				return fmt.Sprintf("%s %g over ceiling %g (long-context band; headline %g)", f.name, f.have, f.limit, f.headline)
+			}
 			return fmt.Sprintf("%s %g over ceiling %g", f.name, f.have, f.limit)
 		}
 	}

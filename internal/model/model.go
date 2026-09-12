@@ -109,11 +109,25 @@ type Price struct {
 	Output    float64
 	CacheRead float64
 
+	// Headline is the base band: the prices upstream lists first, and the ones
+	// an operator reading models.dev will see. Carried only so that a rejection
+	// can be reconciled with the document it came from - a ceiling is never
+	// checked against it. When a model publishes one band, it equals the
+	// fields above.
+	Headline Band
+
 	// Known is false for a model the catalogue prices nothing for. Several
 	// hundred entries carry no cost block at all, and an absent price must not
 	// read as free: a ceiling can only be honoured against a number, so an
 	// unpriced model fails a ceiling rather than passing it silently.
 	Known bool
+}
+
+// Band is a price per million tokens, as one of a model's advertised bands.
+type Band struct {
+	Input     float64
+	Output    float64
+	CacheRead float64
 }
 
 // Limit is the model's context and output window, in tokens.

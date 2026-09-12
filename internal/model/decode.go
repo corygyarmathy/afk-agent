@@ -71,11 +71,13 @@ func (c *wireCost) price() Price {
 	if c == nil {
 		return Price{}
 	}
+	headline := Band{Input: c.Input, Output: c.Output, CacheRead: c.CacheRead}
 	p := Price{
 		Input:     c.Input,
 		Output:    c.Output,
 		CacheRead: c.CacheRead,
 		Known:     true,
+		Headline:  headline,
 	}
 	worst := func(b wireBand) {
 		p.Input = max(p.Input, b.Input)
@@ -93,9 +95,10 @@ func (c *wireCost) price() Price {
 
 // DecodeCatalogue reads a models.dev document.
 //
-// It streams rather than reading the whole body into memory first: the live
-// document is several megabytes, and there is no reason for the agent's resident
-// size to track upstream's model count.
+// It decodes from a reader rather than from bytes, so a caller that has no
+// reason to hold the document can stream it. Source does hold it - the cache is
+// written by rename and there is nothing to rename without the bytes - so the
+// live several megabytes are resident on the fetch path regardless.
 func DecodeCatalogue(r io.Reader) (*Catalogue, error) {
 	var doc map[string]wireProvider
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
