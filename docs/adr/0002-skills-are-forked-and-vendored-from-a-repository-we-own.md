@@ -60,16 +60,25 @@ the links are per-skill.
 The same file name as before and a different question: not "has upstream moved
 away from us", but "is what is checked in here still what we pinned". The hash
 covers the whole skill directory, since a reference file beside `SKILL.md` is as
-load-bearing as the skill body. `scripts/sync-skills.sh verify` reports drift in
-all three directions - a vendored copy edited in place, a pinned skill missing,
-a skill present but unpinned - and `pull` re-vendors at the pinned commit.
+load-bearing as the skill body. `verify` reports drift in all three directions -
+a vendored copy edited in place, a pinned skill missing, a skill present but
+unpinned - and `pull` re-vendors at the pinned commit.
 
 **4. Local divergence is allowed, but not silently.** A consumer may edit its
 vendored copy. `verify` will say so, and the next `pull` will overwrite it. The
 mechanism has an opinion about visibility and none about whether the two copies
 agree, which is the opposite of what it replaces.
 
-**5. Which skills a repository vendors is its own choice.** This one takes
+**5. The vendoring tool is a Go program in the canonical repository, run
+straight from the module.** `go run github.com/corygyarmathy/skills/cmd/vendor-skills@latest`
+needs nothing checked in here, which removes a bootstrap problem rather than
+solving one: a script has to be present before it can vendor anything, so it has
+to be vendored itself, and then it has to detect its own staleness. The tool is
+deliberately not pinned by the lock. What must be reproducible is the vendored
+content, and that is pinned by commit and checked by hash, so a tool that wrote
+the wrong thing is caught by the next `verify` rather than trusted.
+
+**6. Which skills a repository vendors is its own choice.** This one takes
 `implement`, `tdd`, `code-review`, `domain-modeling`, `codebase-design` (which
 `tdd` invokes by name for the seam vocabulary) and `diagnosing-bugs`. The
 fleet-specific skills in `dotfiles` are not brought across.
@@ -95,6 +104,9 @@ fleet-specific skills in `dotfiles` are not brought across.
   lock file it replaces would at least have said that upstream had moved.
 - A vendored copy plus a lock file is machinery. Two consumers do not obviously
   need it, and it will feel like overhead until the third.
+- `pull` now needs a Go toolchain where a script needed none. That costs
+  nothing in this repository and little in a Nix one, but it is a real
+  requirement placed on any future consumer.
 - `dotfiles` now carries copies with the old provenance until it adopts this,
   so there is a window in which the same skill has two lock formats in two
   repositories.
@@ -119,6 +131,11 @@ fleet-specific skills in `dotfiles` are not brought across.
   configuration: a CI runner, a fresh clone or a container gets no skills, and
   the per-project discovery the prototype's prompts depend on stops being what
   carries them.
+- **A shell script, vendored into each consumer.** What this replaced. Rejected
+  on both counts that matter: the bootstrap above is pure self-inflicted
+  machinery, and the first cut of it shipped a cleanup trap that referenced a
+  variable scoped to the function that set it - the class of defect shell is
+  good at hiding and that nothing but running it would have caught.
 - **A git submodule instead of a vendored copy.** Keeps one copy with a pinned
   commit, which is most of what is wanted. Rejected for the shape of the thing
   being pinned: a submodule brings all of the skills or none, cannot be edited
