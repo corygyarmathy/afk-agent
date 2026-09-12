@@ -150,6 +150,37 @@ func (s Subject) jobID(ctx context.Context, st store.Store, t transition.Transit
 	return job.ID, nil
 }
 
+// resolve opens the store from the resolved parameters and builds the runner
+// configuration both commands share. The context it takes is the one the
+// store's lifetime is bound to.
+func resolve(p params, ctx context.Context) (store.Store, transition.Runner, error) {
+	path, err := p.storePath()
+	if err != nil {
+		return nil, transition.Runner{}, err
+	}
+	lease, err := p.leaseTTL()
+	if err != nil {
+		return nil, transition.Runner{}, err
+	}
+	backoff, err := p.backoff()
+	if err != nil {
+		return nil, transition.Runner{}, err
+	}
+
+	st, err := store.Open(path)
+	if err != nil {
+		return nil, transition.Runner{}, err
+	}
+	r := transition.Runner{
+		Store:    st,
+		Registry: catalogue(),
+		Holder:   holder(),
+		LeaseTTL: lease,
+		Backoff:  backoff,
+	}
+	return st, r, nil
+}
+
 // runCmd implements `afk run <transition> (--job <id> | --issue <n> | --pr <n>)`.
 func runCmd(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("afk run", flag.ContinueOnError)
@@ -189,33 +220,22 @@ func runCmd(args []string, stdout io.Writer) error {
 		return err
 	}
 
+	// A mistyped transition name is the operator's mistake, and it is
+	// reported before anything is opened or resolved.
 	reg := catalogue()
 	t, ok := reg.Get(name)
 	if !ok {
 		return usagef("unknown transition %q; %s", name, known(reg))
 	}
 
-	path, err := p.storePath()
-	if err != nil {
-		return err
-	}
-	lease, err := p.leaseTTL()
-	if err != nil {
-		return err
-	}
-	backoff, err := p.backoff()
-	if err != nil {
-		return err
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	st, err := store.Open(path)
+	st, runner, err := resolve(p, ctx)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	now := time.Now()
 	id, err := subject.jobID(ctx, st, t, now)
@@ -223,13 +243,6 @@ func runCmd(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	runner := &transition.Runner{
-		Store:    st,
-		Registry: reg,
-		Holder:   holder(),
-		LeaseTTL: lease,
-		Backoff:  backoff,
-	}
 	out, err := runner.Run(ctx, name, id)
 	if err != nil {
 		return err
@@ -258,18 +271,6 @@ func workCmd(args []string, stderr io.Writer) error {
 		return usagef("unexpected argument %q", rest[0])
 	}
 
-	path, err := p.storePath()
-	if err != nil {
-		return err
-	}
-	lease, err := p.leaseTTL()
-	if err != nil {
-		return err
-	}
-	backoff, err := p.backoff()
-	if err != nil {
-		return err
-	}
 	workers, poll, tokenWait, capacity, err := p.poolConfig()
 	if err != nil {
 		return err
@@ -279,22 +280,21 @@ func workCmd(args []string, stderr io.Writer) error {
 		return err
 	}
 
-	st, err := store.Open(path)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, runner, err := resolve(p, ctx)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
 	d := &dispatch.Dispatcher{
-		Store:     st,
-		Registry:  catalogue(),
+		Runner:    runner,
 		Pool:      pool,
 		Workers:   workers,
-		Holder:    holder(),
-		LeaseTTL:  lease,
 		Poll:      poll,
 		TokenWait: tokenWait,
-		Backoff:   backoff,
 		Log:       func(msg string) { fmt.Fprintln(stderr, msg) },
 	}
 
@@ -302,8 +302,6 @@ func workCmd(args []string, stderr io.Writer) error {
 	// worker that has released its lease is doing nothing, and one that has
 	// not finishes what it started. Restarting costs at most one transition
 	// per worker, which is the property the whole design is for.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}

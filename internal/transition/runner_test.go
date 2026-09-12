@@ -3,37 +3,22 @@ package transition_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/store"
+	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
 func openStore(t *testing.T) store.Store {
-	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return s
+	return storetest.Open(t)
 }
 
 // seed puts a job in the store in a given state, which is the "fixture state" a
 // transition is tested from.
 func seed(t *testing.T, s store.Store, kind store.Kind, num int, state string) store.Job {
-	t.Helper()
-	typ := store.SubjectPR
-	if kind == store.KindImplement {
-		typ = store.SubjectIssue
-	}
-	j, err := s.Ensure(context.Background(), kind, store.Subject{Type: typ, Number: num}, state, time.Now())
-	if err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
-	return j
+	return storetest.Seed(t, s, kind, num, state)
 }
 
 func runner(s store.Store, reg *transition.Registry, mut ...func(*transition.Runner)) *transition.Runner {
@@ -307,6 +292,99 @@ func TestAttemptsCarryOnARetryAndResetOnAMove(t *testing.T) {
 	if got.State != "handed-off" || got.Attempts != 0 {
 		t.Errorf("state = %q, attempts = %d; want handed-off, 0", got.State, got.Attempts)
 	}
+}
+
+// Cancellation must not reach the commit or the release. A SIGTERM that did
+// would throw away a transition that had already finished, and leave a lease
+// standing on a process that had exited, so the next worker waits out a full
+// TTL for a job nobody is working on. The transition's own work stays
+// cancellable - losing it is allowed; the writes that record what happened to
+// the job are not.
+func TestCancellationDoesNotReachTheCommitOrTheRelease(t *testing.T) {
+	var cancel context.CancelFunc
+	boom := errors.New("gone")
+	// The stop lands mid-transition, where a cancellation-aware commit or
+	// release would be lost to it. A non-nil failure makes the run take the
+	// failure path instead of the success path.
+	reg := func(fail error) *transition.Registry {
+		return transition.MustRegistry(transition.Transition{
+			Name: "review", Kind: store.KindReview, From: "start",
+			Run: func(ctx context.Context, _ transition.In) (transition.Result, error) {
+				cancel()
+				if fail != nil {
+					return transition.Result{}, fail
+				}
+				return transition.Result{
+					State:   "reviewed",
+					Effects: []transition.Effect{{Key: "k", Do: func(context.Context) error { return nil }}},
+				}, nil
+			},
+		})
+	}
+
+	t.Run("the commit lands", func(t *testing.T) {
+		ctx, c := context.WithCancel(context.Background())
+		cancel = c
+		s := openStore(t)
+		job := seed(t, s, store.KindReview, 12, "start")
+
+		out, err := runner(s, reg(nil)).Run(ctx, "review", job.ID)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if out.From != "start" || out.To != "reviewed" {
+			t.Errorf("outcome = %s -> %s, want start -> reviewed", out.From, out.To)
+		}
+		got, _ := s.Job(context.Background(), job.ID)
+		if got.State != "reviewed" {
+			t.Errorf("state = %q, want reviewed: a finished transition must not be thrown away", got.State)
+		}
+		if got.Lease != nil {
+			t.Errorf("lease = %+v; want it released", got.Lease)
+		}
+		if reserved, _ := s.Reserved(context.Background(), "k"); !reserved {
+			t.Error("the key was not reserved with the commit")
+		}
+	})
+
+	t.Run("the release lands", func(t *testing.T) {
+		ctx, c := context.WithCancel(context.Background())
+		cancel = c
+		s := openStore(t)
+		job := seed(t, s, store.KindReview, 12, "start")
+
+		if _, err := runner(s, reg(boom)).Run(ctx, "review", job.ID); !errors.Is(err, boom) {
+			t.Fatalf("Run error = %v, want %v", err, boom)
+		}
+		got, _ := s.Job(context.Background(), job.ID)
+		if got.Lease != nil {
+			t.Errorf("lease = %+v; want it released: the next worker must not wait out a TTL for a process that has exited", got.Lease)
+		}
+	})
+
+	t.Run("the transition's own work stays cancellable", func(t *testing.T) {
+		ctx, c := context.WithCancel(context.Background())
+		cancel = c
+		s := openStore(t)
+		job := seed(t, s, store.KindReview, 12, "start")
+
+		waitReg := transition.MustRegistry(transition.Transition{
+			Name: "review", Kind: store.KindReview, From: "start",
+			Run: func(ctx context.Context, _ transition.In) (transition.Result, error) {
+				cancel()
+				<-ctx.Done()
+				return transition.Result{State: "reviewed"}, ctx.Err()
+			},
+		})
+		_, err := runner(s, waitReg).Run(ctx, "review", job.ID)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want %v: losing the work is allowed, and here it is what happened", err, context.Canceled)
+		}
+		got, _ := s.Job(context.Background(), job.ID)
+		if got.State != "start" {
+			t.Errorf("state = %q, want start: the transition was lost, and lost is what it must be", got.State)
+		}
+	})
 }
 
 func TestRunRefusesWhatItCannotRun(t *testing.T) {

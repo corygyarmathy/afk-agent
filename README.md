@@ -6,15 +6,15 @@ It exists to spend the computer's time instead of the operator's. End-to-end lat
 
 ## Shape
 
-A job is a persisted state machine attached to one tracker subject. A transition moves it from one state to the next, and a transition is the only thing that ever runs - nothing waits in-process, so a crash, a restart or a host upgrade costs at most one transition rather than a pipeline. Every transition is also invokable by hand:
+A job is a persisted state machine attached to one tracker subject (ADR 0001 §2). A transition moves it from one state to the next, and a transition is the only thing that ever runs - nothing waits in-process, so a crash, a restart or a host upgrade costs at most one transition rather than a pipeline. Every transition is also invokable by hand (ADR 0001 §4):
 
 ```
 afk run review --pr 12
 ```
 
-The pool that runs transitions unattended is `afk work`. It has two independent limits: how many transitions may execute at once, and how many may hold a given resource token - a named permit for a host constraint, so that eight network-bound reviews can overlap while two builds cannot. Parameters have no defaults in the code; the NixOS module that packages this agent supplies them, and `afk help` lists them.
+The pool that runs transitions unattended is `afk work`. It has two independent limits (ADR 0001 §8): how many transitions may execute at once, and how many may hold a given resource token - a named permit for a host constraint, so that eight network-bound reviews can overlap while two builds cannot. Parameters have no defaults in the code; the NixOS module that packages this agent supplies them, and `afk help` lists them.
 
-GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency. Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
+GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency (ADR 0001 §5). Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
 
 Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
 

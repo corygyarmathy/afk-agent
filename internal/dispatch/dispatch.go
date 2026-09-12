@@ -26,41 +26,34 @@ import (
 )
 
 // Dispatcher runs transitions for jobs that are due.
+//
+// It embeds the transition.Runner every worker runs, so the execution path's
+// fields - Store, Registry, Holder, LeaseTTL, Backoff, Clock - are declared
+// once. The Runner's Holder names this process; each worker takes its lease
+// under a distinct name derived from it, so "which worker is holding this" is
+// answerable from the store.
 type Dispatcher struct {
-	Store    store.Store
-	Registry *transition.Registry
-	Pool     *transition.Pool
+	transition.Runner
+
+	Pool *transition.Pool
 
 	// Workers is how many transitions may execute at once.
 	Workers int
 
-	// Holder names this process in a lease; each worker takes its lease under
-	// a distinct name derived from it, so "which worker is holding this" is
-	// answerable from the store.
-	Holder string
-
-	// LeaseTTL, Poll and TokenWait are deployment parameters, supplied rather
-	// than chosen here (AGENTS.md). Poll is how long a worker waits before
-	// looking again when there is nothing due - polling is the trigger, as it
-	// was in the prototype (ADR 0001 §3). TokenWait is how long a worker will
-	// hold a job while waiting for its resource tokens before giving it back
-	// for someone else to take; it must be shorter than LeaseTTL, or a worker
-	// can still be queuing for a permit after its lease has lapsed.
-	LeaseTTL  time.Duration
+	// Poll and TokenWait are deployment parameters, supplied rather than
+	// chosen here (AGENTS.md). Poll is how long a worker waits before looking
+	// again when there is nothing due - polling is the trigger, as it was in
+	// the prototype (ADR 0001 §3). TokenWait is how long a worker will hold a
+	// job while waiting for its resource tokens before giving it back for
+	// someone else to take; it must be shorter than LeaseTTL, or a worker can
+	// still be queuing for a permit after its lease has lapsed.
 	Poll      time.Duration
 	TokenWait time.Duration
-
-	// Backoff schedules re-entry after a failed transition. See
-	// transition.Runner.
-	Backoff transition.Backoff
 
 	// Log receives one line per dispatched job. Nil is silent: the happy path
 	// does not notify (ADR 0001 §13), and this is a log rather than a
 	// notification channel.
 	Log func(msg string)
-
-	// Clock is the time source. Nil means time.Now.
-	Clock func() time.Time
 }
 
 func (d *Dispatcher) now() time.Time {
@@ -107,9 +100,7 @@ func (d *Dispatcher) validate() error {
 		}
 	}
 	return nil
-}
-
-// Run starts the workers and returns when ctx is done. It is the only
+} // Run starts the workers and returns when ctx is done. It is the only
 // long-lived thing in this agent, and it holds no job: a worker between
 // transitions has released its lease, so stopping here costs at most one
 // transition per worker.
@@ -133,14 +124,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 // work is one worker: take the longest-waiting due job, run its transition,
 // repeat.
 func (d *Dispatcher) work(ctx context.Context, holder string) {
-	runner := &transition.Runner{
-		Store:    d.Store,
-		Registry: d.Registry,
-		Holder:   holder,
-		LeaseTTL: d.LeaseTTL,
-		Backoff:  d.Backoff,
-		Clock:    d.Clock,
-	}
+	// The dispatcher's own Runner is the template: a worker copies it and
+	// names itself in the lease, so the execution path is spelled out once.
+	runner := d.Runner
+	runner.Holder = holder
 
 	for ctx.Err() == nil {
 		job, ok, err := d.Store.Due(ctx, holder, d.now(), d.LeaseTTL)
@@ -154,7 +141,7 @@ func (d *Dispatcher) work(ctx context.Context, holder string) {
 		case !ok:
 			d.wait(ctx)
 		default:
-			d.dispatch(ctx, runner, holder, job)
+			d.dispatch(ctx, &runner, holder, job)
 		}
 	}
 }

@@ -155,26 +155,18 @@ func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("%w: %s", ErrHeld, jobID)
 	}
 
-	out, err := r.apply(ctx, t, job, now)
-	if err != nil {
-		// Release rather than let the lease run out: the job is going back on
-		// the queue, and making the next worker wait out a full TTL for a
-		// failure this process already knows about is time spent for nothing.
-		if rerr := r.Store.Release(finishing(ctx), job.ID, r.Holder); rerr != nil {
-			err = errors.Join(err, rerr)
-		}
-	}
-	return out, err
+	return r.apply(ctx, t, job, now)
 }
 
-// apply runs the transition and commits what it decided. Split from Run so that
-// every path out of it - including a panic - passes through Run's release.
+// apply runs the transition and commits what it decided. Every path out of it
+// that still holds the lease gives it back exactly once: through the commit's
+// own release, or through abandon for the paths that return without a commit.
 func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now time.Time) (out Outcome, err error) {
 	if job.Kind != t.Kind {
-		return Outcome{}, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind)
+		return Outcome{}, r.abandon(ctx, job, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind))
 	}
 	if job.State != t.From {
-		return Outcome{}, fmt.Errorf("%w: %s is in state %q, transition %q runs from %q", ErrWrongState, job.ID, job.State, t.Name, t.From)
+		return Outcome{}, r.abandon(ctx, job, fmt.Errorf("%w: %s is in state %q, transition %q runs from %q", ErrWrongState, job.ID, job.State, t.Name, t.From))
 	}
 
 	res, err := r.decide(ctx, t, job, now)
@@ -188,17 +180,23 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 	// Filter before committing, not after: the keys this commit reserves are
 	// the ones this run is about to perform, so an effect a previous run
 	// already reserved must be dropped here or the two sets stop agreeing.
+	//
+	// Under `done`, not the caller's context: this check is part of the
+	// commit's machinery - it decides what the commit reserves - and a
+	// cancellation here would throw away a transition that had already
+	// decided, which is what `finishing` exists to prevent.
+	done := finishing(ctx)
 	todo := make([]Effect, 0, len(res.Effects))
 	var skipped []string
 	for _, e := range res.Effects {
 		if e.Key == "" || e.Do == nil {
 			return r.fail(ctx, t, job, now, fmt.Errorf("transition %q returned an effect with no key or nothing to do", t.Name))
 		}
-		done, err := r.Store.Reserved(ctx, e.Key)
+		reserved, err := r.Store.Reserved(done, e.Key)
 		if err != nil {
 			return r.fail(ctx, t, job, now, err)
 		}
-		if done {
+		if reserved {
 			skipped = append(skipped, e.Key)
 			continue
 		}
@@ -221,9 +219,8 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Keys:      Result{Effects: todo}.keys(),
 		Release:   true,
 	}
-	done := finishing(ctx)
 	if err := r.Store.Commit(done, c); err != nil {
-		return Outcome{}, err
+		return Outcome{}, r.abandon(ctx, job, err)
 	}
 
 	committed, err := r.Store.Job(done, job.ID)
@@ -249,6 +246,20 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		out.Performed = append(out.Performed, e.Key)
 	}
 	return out, nil
+}
+
+// abandon gives the lease back on a run that ends without a commit, and
+// returns the cause. The store's Release is its own guard: it drops only this
+// holder's lease, so a commit that already released makes this a no-op rather
+// than a double release.
+func (r *Runner) abandon(ctx context.Context, job store.Job, cause error) error {
+	// Release rather than let the lease run out: the job is going back on the
+	// queue, and making the next worker wait out a full TTL for a failure this
+	// process already knows about is time spent for nothing.
+	if rerr := r.Store.Release(finishing(ctx), job.ID, r.Holder); rerr != nil {
+		return errors.Join(cause, rerr)
+	}
+	return cause
 }
 
 // decide runs the transition's own code, turning a panic in it into an error.
@@ -286,12 +297,12 @@ func (r *Runner) fail(ctx context.Context, t Transition, job store.Job, now time
 	}
 	done := finishing(ctx)
 	if err := r.Store.Commit(done, c); err != nil {
-		return Outcome{}, errors.Join(cause, err)
+		return Outcome{}, r.abandon(ctx, job, errors.Join(cause, err))
 	}
 
 	committed, err := r.Store.Job(done, job.ID)
 	if err != nil {
-		return Outcome{}, errors.Join(cause, err)
+		return Outcome{}, r.abandon(ctx, job, errors.Join(cause, err))
 	}
 	out := Outcome{
 		Transition: t.Name,

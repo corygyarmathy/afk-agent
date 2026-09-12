@@ -2,7 +2,6 @@ package dispatch_test
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,17 +10,12 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/dispatch"
 	"github.com/corygyarmathy/afk-agent/internal/store"
+	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
 func openStore(t *testing.T) store.Store {
-	t.Helper()
-	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return s
+	return storetest.Open(t)
 }
 
 func pool(t *testing.T, capacity map[string]int) *transition.Pool {
@@ -39,12 +33,14 @@ func pool(t *testing.T, capacity map[string]int) *transition.Pool {
 func dispatcher(t *testing.T, s store.Store, reg *transition.Registry, p *transition.Pool, workers int) *dispatch.Dispatcher {
 	t.Helper()
 	return &dispatch.Dispatcher{
-		Store:     s,
-		Registry:  reg,
+		Runner: transition.Runner{
+			Store:    s,
+			Registry: reg,
+			Holder:   "test",
+			LeaseTTL: time.Minute,
+		},
 		Pool:      p,
 		Workers:   workers,
-		Holder:    "test",
-		LeaseTTL:  time.Minute,
 		Poll:      time.Millisecond,
 		TokenWait: 5 * time.Second,
 		Log:       func(msg string) { t.Log(msg) },
@@ -70,15 +66,6 @@ func runUntil(t *testing.T, d *dispatch.Dispatcher, done <-chan struct{}) {
 	}
 	cancel()
 	wg.Wait()
-}
-
-func seed(t *testing.T, s store.Store, kind store.Kind, typ store.SubjectType, n int, state string) store.Job {
-	t.Helper()
-	j, err := s.Ensure(context.Background(), kind, store.Subject{Type: typ, Number: n}, state, time.Now())
-	if err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
-	return j
 }
 
 // Worker parallelism and token capacity are two limits, not one. Eight workers
@@ -138,10 +125,10 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 	)
 
 	for i := range heavy {
-		seed(t, s, store.KindImplement, store.SubjectIssue, 100+i, "start")
+		storetest.Seed(t, s, store.KindImplement, 100+i, "start")
 	}
 	for i := range light {
-		seed(t, s, store.KindReview, store.SubjectPR, 200+i, "start")
+		storetest.Seed(t, s, store.KindReview, 200+i, "start")
 	}
 
 	runUntil(t, dispatcher(t, s, reg, pool(t, map[string]int{"heavy-build": 1}), workers), done)
@@ -179,7 +166,7 @@ func TestEachJobIsRunOnce(t *testing.T) {
 	})
 
 	for i := range jobs {
-		seed(t, s, store.KindReview, store.SubjectPR, 300+i, "start")
+		storetest.Seed(t, s, store.KindReview, 300+i, "start")
 	}
 
 	runUntil(t, dispatcher(t, s, reg, pool(t, nil), 8), done)
@@ -205,7 +192,7 @@ func TestEachJobIsRunOnce(t *testing.T) {
 // going nowhere. It is parked instead, where an operator can see it.
 func TestAJobWithNoTransitionOutOfItsStateIsParked(t *testing.T) {
 	s := openStore(t)
-	job := seed(t, s, store.KindReview, store.SubjectPR, 12, "a-state-from-a-newer-binary")
+	job := storetest.Seed(t, s, store.KindReview, 12, "a-state-from-a-newer-binary")
 
 	reg := transition.MustRegistry(transition.Transition{
 		Name: "review", Kind: store.KindReview, From: "start",
@@ -293,7 +280,7 @@ func TestRunRefusesAMisconfiguredDispatcher(t *testing.T) {
 func TestStoppingLeavesNothingHeld(t *testing.T) {
 	s := openStore(t)
 	for i := range 5 {
-		seed(t, s, store.KindReview, store.SubjectPR, 400+i, "start")
+		storetest.Seed(t, s, store.KindReview, 400+i, "start")
 	}
 
 	var remaining atomic.Int64

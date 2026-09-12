@@ -24,6 +24,10 @@ _Avoid_: Assignment, lock
 A local, exclusive, expiring hold on a job, held by the process executing a transition. Distinct from a claim: a claim says the work is taken, a lease says a live process is holding it _right now_.
 _Avoid_: Lock, claim
 
+**Park**:
+A job left in its persisted state with nothing scheduled - no lease, no next run - resting until something reschedules it. How a job waits for an operator rather than for time: a due job comes back on its own, a parked job does not. About the scheduling, not about holding: a parked job is one whose lease has been given back _and_ whose re-entry nothing scheduled.
+_Avoid_: Stuck, suspended, dropped
+
 **Command**:
 An instruction from a human to the agent, issued as a pull request comment (`/review`, `/revise`). The only imperative channel: every request for the agent to _do_ something is a command. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which is how work enters the queue at all and which the agent reads.
 _Avoid_: Trigger, directive
