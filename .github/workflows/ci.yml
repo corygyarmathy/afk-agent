@@ -1,0 +1,82 @@
+name: CI
+
+# The gate on every pull request: format, build, vet, test (#7).
+#
+# Go tooling directly, not Nix. This repository is Go with no dependencies
+# (ADR 0001 §1), so a Nix evaluation would add a closure to build and an 8 GB
+# memory peak - the one ADR 0001 records OOM-killing a session - in front of
+# checks that take seconds. `dotfiles` keeps its own pipeline for its own
+# reasons; what carries over here is its ADR 0008 principle rather than its
+# implementation: one definition of each check, consumed by the editor, the
+# agent and this gate alike.
+#
+# Versions come from the repository, not from the runner image: `go-version-file`
+# reads `go.mod`, so the toolchain CI gates with is the toolchain the module
+# declares. A contributor's newer Go formatting files this gate then rejects is
+# the failure that closes.
+#
+# NOTE: the `go ci` job name is the status-check context that #8 will require on
+# `master`. Renaming the job silently blocks every merge until the ruleset is
+# updated to match, so treat the two as a pair.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Nothing here writes. This repository has no promotion step and no bot
+# branches; a gate that can push is a gate with a bypass.
+permissions:
+  contents: read
+
+# A newer commit on a pull request makes an in-flight run obsolete. Master runs
+# are never cancelled - they are the record of what the branch actually does.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: go ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # `gofmt -l` lists what is unformatted and exits 0 either way, so the
+      # emptiness of its output is the assertion. `gofmt -d` then says what is
+      # wrong, because "ci.yml exited 1" is not a review comment anyone can act
+      # on. Checking rather than writing: AGENTS.md tells the agent to run
+      # gofmt before committing, so formatting lands in its commits and this
+      # stays a pure gate (dotfiles ADR 0008).
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files - run gofmt -w . and commit the result"
+            printf '%s\n' "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+          echo "::notice::gofmt clean"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Through the script, not `go test` directly: it runs the tests in a
+      # network namespace with no route out, which is how "tests run offline"
+      # (AGENTS.md) becomes a fact about the tests rather than a claim about
+      # them. It fails loudly if it cannot isolate the network, so this step
+      # cannot degrade into a networked test run that still reports green.
+      - name: Test, offline
+        run: ./scripts/offline-test.sh
