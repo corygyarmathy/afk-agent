@@ -391,3 +391,72 @@ func TestAttempt(t *testing.T) {
 		})
 	}
 }
+
+// A free model is a preview, and a preview is withdrawn. That is the ordinary
+// life of the zero-cost entries the catalogue carries - `big-pickle`,
+// `ox-alpha-free`, `x-preview-f-free` - and enrolling one at the head of a tier
+// is a reasonable thing to do with it.
+//
+// So the case that has to hold is this one: the head of a tier disappears
+// upstream, and the tier keeps working, in order, without an operator being
+// woken. The model is not assumed to still exist and is not assumed to have
+// been capable; it is simply no longer a candidate.
+func TestAWithdrawnModelDoesNotTakeTheTierWithIt(t *testing.T) {
+	cat := fixture(t)
+	enrol := enrolment(t, model.TierEnrolment{Name: "implementation", Models: refs(t,
+		"opencode/big-pickle", // free, and gone from the catalogue
+		"opencode-go/glm-5.3-flash",
+		"opencode-go/deepseek-v4.1-flash",
+	)})
+
+	got, err := model.Resolve(model.Requirements{
+		Tier:         "implementation",
+		Capabilities: []model.Capability{model.CapToolCall},
+	}, cat, enrol, model.Budget{})
+	if err != nil {
+		t.Fatalf("a withdrawn model at the head of a tier broke the tier: %v", err)
+	}
+	want := []string{"opencode-go/glm-5.3-flash", "opencode-go/deepseek-v4.1-flash"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].String() != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+// The why is the useful half of a rejection, and a caller must be able to read
+// it rather than only print it: an enrolled model that has vanished is a
+// different morning's work from one that has been repriced.
+func TestRejectionsAreReadable(t *testing.T) {
+	cat := fixture(t)
+	enrol := enrolment(t, model.TierEnrolment{Name: "t", Models: refs(t,
+		"opencode/big-pickle",
+		"anthropic/claude-opus-5",
+	)})
+
+	_, err := model.Resolve(model.Requirements{
+		Tier:    "t",
+		Ceiling: model.Ceiling{Input: 1},
+	}, cat, enrol, model.Budget{})
+
+	var nc *model.NoCandidateError
+	if !errors.As(err, &nc) {
+		t.Fatalf("want *NoCandidateError, got %T: %v", err, err)
+	}
+	want := map[string]string{
+		"opencode/big-pickle":     "not in the catalogue",
+		"anthropic/claude-opus-5": "input 5 over ceiling 1",
+	}
+	if len(nc.Rejected) != len(want) {
+		t.Fatalf("got %d rejections, want %d", len(nc.Rejected), len(want))
+	}
+	for _, r := range nc.Rejected {
+		var got model.Rejection = r // the type must be nameable outside the package
+		if want[got.Ref.String()] != got.Why {
+			t.Fatalf("%s: got %q, want %q", got.Ref, got.Why, want[got.Ref.String()])
+		}
+	}
+}
