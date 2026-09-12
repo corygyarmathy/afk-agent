@@ -52,71 +52,104 @@ type Source struct {
 	Now func() time.Time
 }
 
+// Staleness is what a Load had to settle for, and is not an error.
+//
+// A caller that wants to say something about a day-old catalogue has the
+// numbers; one that does not can ignore the value entirely and still get a
+// working resolution, which is the point. Every field is the zero value after a
+// fetch that worked and cached cleanly.
+type Staleness struct {
+	// Age is how old the returned catalogue is, and zero after a fresh fetch.
+	Age time.Duration
+
+	// Fetch is why upstream was not used, when the answer came from the cache
+	// instead. Non-nil means the catalogue is the last good one rather than
+	// the current one.
+	Fetch error
+
+	// Cache is why a fresh catalogue was not written to the cache. The
+	// resolution it came back with is unaffected - what is lost is the
+	// insurance against the *next* outage, which is a different day's problem
+	// and not a reason to fail this one.
+	Cache error
+}
+
+// Stale reports whether the catalogue came from the cache rather than upstream.
+func (s Staleness) Stale() bool { return s.Fetch != nil }
+
 // Load returns the catalogue, refreshing the cache if it is due, and falling
 // back to the cached copy if upstream cannot be reached or does not parse.
-//
-// The second return value is the staleness of what came back: zero after a
-// successful fetch, and the age of the cached copy otherwise. A caller that
-// wants to say something about a day-old catalogue has the number; one that
-// does not can ignore it and still get a working resolution, which is the point.
 //
 // It fails only when there is nothing usable at all - no fetch and no cache.
 // That is the one case where continuing would mean resolving against an empty
 // catalogue, and an error naming both failures is more use than a candidate
-// list that is empty for reasons nobody can see.
-func (s *Source) Load(ctx context.Context) (*Catalogue, time.Duration, error) {
-	cached, age, cacheErr := s.loadCache()
-	if cacheErr == nil && s.MaxAge > 0 && age < s.MaxAge {
-		return cached, age, nil
+// list that is empty for reasons nobody can see. In particular a cache that
+// cannot be written does not fail a fetch that worked: the catalogue in hand
+// resolves every job correctly, and refusing it because the next outage will be
+// worse is trading a real answer for a hypothetical one.
+func (s *Source) Load(ctx context.Context) (*Catalogue, Staleness, error) {
+	if age, err := s.cacheAge(); err == nil && s.MaxAge > 0 && age < s.MaxAge {
+		// Decoded only now that the cache is known to be the answer. The age
+		// is a stat; the decode is several megabytes, and doing it before the
+		// fetch is decided spends it on every Load that goes upstream anyway.
+		if cached, cachedAge, err := s.loadCache(); err == nil {
+			return cached, Staleness{Age: cachedAge}, nil
+		}
+		// A cached copy that no longer parses is not a cache. Falling through
+		// to the fetch is the same bargain as an outage, in the other
+		// direction: the file is replaced once upstream answers.
 	}
 
-	fresh, fetchErr := s.fetch(ctx)
+	fresh, body, fetchErr := s.fetch(ctx)
 	if fetchErr == nil {
 		// Written after it parsed, never before: a cache is only worth having
 		// if what is in it is known good, and a truncated or error-page body
 		// saved over the last good copy turns one bad morning into a
 		// persistent one.
-		if err := s.writeCache(fresh); err != nil {
-			return nil, 0, fmt.Errorf("cache catalogue: %w", err)
-		}
-		c, err := DecodeCatalogue(bytes.NewReader(fresh))
-		if err != nil {
-			return nil, 0, err
-		}
-		return c, 0, nil
+		return fresh, Staleness{Cache: s.writeCache(body)}, nil
 	}
 
+	cached, age, cacheErr := s.loadCache()
 	if cacheErr != nil {
-		return nil, 0, fmt.Errorf("no catalogue: fetch failed (%v) and no usable cache (%v)", fetchErr, cacheErr)
+		return nil, Staleness{}, fmt.Errorf("no catalogue: fetch failed (%v) and no usable cache (%v)", fetchErr, cacheErr)
 	}
-	return cached, age, nil
+	return cached, Staleness{Age: age, Fetch: fetchErr}, nil
 }
 
-// fetch retrieves and validates the document, returning its bytes.
+// fetch retrieves the document, returning the catalogue and the bytes it was
+// decoded from.
 //
 // It decodes before returning so that an unparseable response is a fetch
 // failure rather than a fresh catalogue - upstream returning an HTML error page
 // with a 200 is the ordinary way this goes wrong, and it must degrade to the
-// cache like any other outage.
-func (s *Source) fetch(ctx context.Context) ([]byte, error) {
+// cache like any other outage. The catalogue comes back rather than being
+// thrown away and rebuilt by the caller, because this document is several
+// megabytes and decoding it twice to learn the same thing twice is waste the
+// daily refresh pays every day.
+//
+// The bytes come back too, and the whole body is held in memory to produce
+// them: the cache is written by rename and there is nothing to rename without
+// them.
+func (s *Source) fetch(ctx context.Context) (*Catalogue, []byte, error) {
 	get := s.Fetch
 	if get == nil {
 		get = httpFetch
 	}
 	rc, err := get(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rc.Close()
 
 	body, err := io.ReadAll(rc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := DecodeCatalogue(bytes.NewReader(body)); err != nil {
-		return nil, err
+	c, err := DecodeCatalogue(bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
 	}
-	return body, nil
+	return c, body, nil
 }
 
 func httpFetch(ctx context.Context) (io.ReadCloser, error) {
@@ -133,6 +166,31 @@ func httpFetch(ctx context.Context) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%s: %s", Endpoint, resp.Status)
 	}
 	return resp.Body, nil
+}
+
+// cacheAge is how old the cached copy is, without decoding it.
+//
+// Separate from loadCache because the freshness question is a stat and the
+// answer is several megabytes of JSON: a Load that is going upstream anyway has
+// no reason to have parsed the file it is about to replace.
+func (s *Source) cacheAge() (time.Duration, error) {
+	if s.Path == "" {
+		return 0, errors.New("no cache path configured")
+	}
+	info, err := os.Stat(s.Path)
+	if err != nil {
+		return 0, err
+	}
+	return s.age(info.ModTime()), nil
+}
+
+// age is how long ago mod was, floored at zero: a cached copy stamped in the
+// future is odd but is not fresher than now.
+func (s *Source) age(mod time.Time) time.Duration {
+	if d := s.now().Sub(mod); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // loadCache reads the cached copy and its age.
@@ -154,11 +212,7 @@ func (s *Source) loadCache() (*Catalogue, time.Duration, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	age := s.now().Sub(info.ModTime())
-	if age < 0 {
-		age = 0
-	}
-	return c, age, nil
+	return c, s.age(info.ModTime()), nil
 }
 
 // writeCache replaces the cached copy atomically.
