@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/model"
+	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -18,13 +22,15 @@ func withCatalogue(t *testing.T, ts ...transition.Transition) {
 	t.Helper()
 	reg := transition.MustRegistry(ts...)
 	was := catalogue
-	catalogue = func() *transition.Registry { return reg }
-	t.Cleanup(func() { catalogue = was })
+	catalogue = func(*review.Deps) *transition.Registry { return reg }
+	wasDeps := reviewDeps
+	reviewDeps = func(context.Context, params, store.Store) (*review.Deps, error) { return nil, nil }
+	t.Cleanup(func() { catalogue, reviewDeps = was, wasDeps })
 }
 
-// review is a transition that decides something and touches nothing: no
+// decides is a transition that decides something and touches nothing: no
 // network, no model, no daemon.
-func review(next string) transition.Transition {
+func decides(next string) transition.Transition {
 	return transition.Transition{
 		Name: "review", Kind: store.KindReview, From: "start",
 		Run: func(context.Context, transition.In) (transition.Result, error) {
@@ -183,7 +189,7 @@ func TestMain_ExitCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			withCatalogue(t, review("reviewed"))
+			withCatalogue(t, decides("reviewed"))
 			var stdout, stderr bytes.Buffer
 			got := Main(tt.args, &stdout, &stderr)
 			if got != tt.want {
@@ -273,7 +279,7 @@ func TestNoBudgetParametersIsNoObserver(t *testing.T) {
 // no daemon present, named by the tracker subject rather than by a job id. The
 // job does not have to exist first - the subject is what names it.
 func TestRunAgainstATrackerSubjectWithNoDaemon(t *testing.T) {
-	withCatalogue(t, review("reviewed"))
+	withCatalogue(t, decides("reviewed"))
 	path := filepath.Join(t.TempDir(), "state.db")
 
 	var stdout, stderr bytes.Buffer
@@ -306,7 +312,7 @@ func TestRunAgainstATrackerSubjectWithNoDaemon(t *testing.T) {
 // kind and the subject rather than allocated. By then the job has moved on, and
 // the same state machine applies to a hand-run as to a scheduled one.
 func TestASecondRunMeetsTheStateMachine(t *testing.T) {
-	withCatalogue(t, review("reviewed"))
+	withCatalogue(t, decides("reviewed"))
 	path := filepath.Join(t.TempDir(), "state.db")
 	args := []string{"run", "review", "--pr", "12", "--store", path, "--lease", "1m"}
 
@@ -327,7 +333,7 @@ func TestASecondRunMeetsTheStateMachine(t *testing.T) {
 // The NixOS module sets the parameters once, in the unit's environment, and the
 // operator's hand-run inherits the same values rather than a second set.
 func TestParametersComeFromTheEnvironmentToo(t *testing.T) {
-	withCatalogue(t, review("reviewed"))
+	withCatalogue(t, decides("reviewed"))
 	t.Setenv("AFK_STORE", filepath.Join(t.TempDir(), "state.db"))
 	t.Setenv("AFK_LEASE", "1m")
 
@@ -338,7 +344,7 @@ func TestParametersComeFromTheEnvironmentToo(t *testing.T) {
 }
 
 func TestRunAgainstAJobThatIsNotThere(t *testing.T) {
-	withCatalogue(t, review("reviewed"))
+	withCatalogue(t, decides("reviewed"))
 	path := filepath.Join(t.TempDir(), "state.db")
 
 	var stdout, stderr bytes.Buffer
@@ -359,7 +365,7 @@ func TestRunAgainstAJobThatIsNotThere(t *testing.T) {
 // TestTheStandaloneCheckCatchesATransitionThatCannotRunAlone exists beside it:
 // that one proves the check itself works.
 func TestEveryTransitionRunsStandalone(t *testing.T) {
-	for _, tr := range catalogue().All() {
+	for _, tr := range catalogue(standaloneDeps(t)).All() {
 		t.Run(tr.Name, func(t *testing.T) {
 			if err := runsStandalone(t, tr); err != nil {
 				t.Errorf("%s cannot be run on its own: %v", tr.Name, err)
@@ -378,7 +384,7 @@ func TestTheStandaloneCheckCatchesATransitionThatCannotRunAlone(t *testing.T) {
 	if err := runsStandalone(t, needsSomethingLive); err == nil {
 		t.Error("the check passed a transition that cannot run on its own")
 	}
-	if err := runsStandalone(t, review("reviewed")); err != nil {
+	if err := runsStandalone(t, decides("reviewed")); err != nil {
 		t.Errorf("the check failed a transition that can: %v", err)
 	}
 }
@@ -595,14 +601,88 @@ func TestIntakeNeedsARepository(t *testing.T) {
 
 // Every command's job kind starts at a state some transition runs from, or the
 // command makes due a job the pool can only park.
-//
-// Skipped until the review transition is registered (#29), which is the change
-// that has to make it pass.
 func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
-	reg := catalogue()
+	reg := catalogue(nil)
 	for _, cmd := range commands() {
 		if _, ok := reg.Next(cmd.Kind, cmd.Start); !ok {
-			t.Skipf("%s starts %s jobs in %q, and no transition runs from there yet (#29)", cmd.Word, cmd.Kind, cmd.Start)
+			t.Errorf("%s starts %s jobs in %q, and no transition runs from there", cmd.Word, cmd.Kind, cmd.Start)
 		}
+	}
+}
+
+// standaloneDeps is the review's dependencies with nothing live behind them: a
+// tracker that answers from memory, and a budget that is limited, so every
+// transition reaches a decision from its starting state without a network, a
+// model or a checkout.
+func standaloneDeps(t *testing.T) *review.Deps {
+	return &review.Deps{
+		Tracker: closedTracker{},
+		Resolve: func(context.Context) (model.Candidates, error) {
+			return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+		},
+		Bound:    1,
+		TierWait: time.Hour,
+		Login:    "afk-bot",
+		StateDir: t.TempDir(),
+	}
+}
+
+// closedTracker is a pull request that is closed and has nothing on it.
+type closedTracker struct{}
+
+func (closedTracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
+	return github.PullRequest{Number: n, State: "closed", HeadSHA: "abc"}, nil
+}
+func (closedTracker) Diff(context.Context, int) (string, error)               { return "", nil }
+func (closedTracker) Comments(context.Context, int) ([]github.Comment, error) { return nil, nil }
+func (closedTracker) Reactions(context.Context, int64) ([]github.Reaction, error) {
+	return nil, nil
+}
+func (closedTracker) Comment(context.Context, int, string) (github.Comment, error) {
+	return github.Comment{}, nil
+}
+func (closedTracker) React(context.Context, int64, string) error { return nil }
+
+func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
+	full := params{opencode: "/bin/opencode", enrolment: "/etc/afk/enrolment.json", reviewTier: "review", modelAttempts: "3", tierWait: "30m"}
+
+	t.Run("resolved", func(t *testing.T) {
+		p := full
+		p.reviewNeeds = "tool_call, input:image,"
+		p.catalogueAge = "24h"
+		m, err := p.model()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.tier != "review" || m.attempts != 3 || m.tierWait != 30*time.Minute || m.catalogueAge != 24*time.Hour {
+			t.Errorf("model = %+v", m)
+		}
+		if fmt.Sprint(m.needs) != "[tool_call input:image]" {
+			t.Errorf("needs = %v, want [tool_call input:image]", m.needs)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		spoil func(*params)
+		want  string
+	}{
+		{"no opencode", func(p *params) { p.opencode = "" }, "--opencode is required"},
+		{"no enrolment", func(p *params) { p.enrolment = "" }, "--enrolment is required"},
+		{"no tier", func(p *params) { p.reviewTier = "" }, "--review-tier is required"},
+		{"no attempt bound", func(p *params) { p.modelAttempts = "" }, "--model-attempts is required"},
+		{"an attempt bound that is not a count", func(p *params) { p.modelAttempts = "some" }, "--model-attempts"},
+		{"no tier wait", func(p *params) { p.tierWait = "" }, "--tier-wait is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, env := range []string{"AFK_OPENCODE", "AFK_ENROLMENT", "AFK_REVIEW_TIER", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS"} {
+				t.Setenv(env, "")
+			}
+			p := full
+			tc.spoil(&p)
+			if _, err := p.model(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
 	}
 }
