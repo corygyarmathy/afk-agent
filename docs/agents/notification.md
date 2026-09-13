@@ -23,7 +23,11 @@ The happy path publishes nothing at all.
 ## What is not a notification
 
 - **A hand-back.** A job that came to rest without failing is a state. The
-  condition is a park *with* an error, not a park.
+  condition is a park *with* an error, not a park. The exception is a hand-back
+  whose own effect failed: the state moved and the job is resting, but the
+  comment that was to tell the human never posted, so the tracker says nothing
+  and this channel is the only thing left. A hand-back that posted its comment
+  is silent.
 - **A deferral.** A deferred job comes back on its own at the timestamp the
   provider gave; nobody has to do anything.
 - **A retry.** A failure the backoff rescheduled has not come to rest.
@@ -42,6 +46,11 @@ parked, so what is suppressed is the repeat rather than the condition:
   is spent is published again;
 - a parked job is one occurrence per state and attempt count, so a job an
   operator freed and which parked again is published again.
+
+A limit the provider reports with no `resetsAt` is the one occurrence this does
+not divide: its key is the same every time, so a later exhaustion of that window
+is silent for the life of the process. The pool waits and re-asks on its own
+poll there rather than deferring, so the condition itself is not lost.
 
 Suppression is in memory. A restart re-publishes a condition that is still true.
 
@@ -68,8 +77,16 @@ already runs the ntfy server and holds a token as
 
 ## Reading it by hand
 
-Both conditions are tested by hand once each, against the real server. Neither
-needs a network or a model to reach:
+One of the two has been read off the real server, and the other has not:
+
+- **A park** was published to the live topic and read back off it, through the
+  "no transition runs from this state" path below.
+- **A budget window that is spent** has not been. `budget.Endpoint` is a
+  constant and the status comes from the provider, so a `rate-limited` window
+  cannot be arranged - it has to be caught the next time the account is
+  actually limited.
+
+Neither needs a network or a model to reach:
 
 ```bash
 # A park. Any transition that fails, with no retry policy configured, parks on

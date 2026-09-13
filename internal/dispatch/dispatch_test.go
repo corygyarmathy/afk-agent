@@ -871,3 +871,48 @@ func TestNoNotifierIsNoNotification(t *testing.T) {
 	}()
 	runUntil(t, d, done)
 }
+
+// The one case that reads as a hand-back and notifies anyway: a transition that
+// parked deliberately and whose outward effect then failed. The state moved and
+// the job is resting, but the comment that was to tell the human never posted -
+// so the tracker says nothing, and this channel is all that is left.
+//
+// It is the boundary of the condition above rather than a second condition:
+// TestAJobThatCameToRestWithoutFailingDoesNotNotify is the same park with an
+// effect that worked, and it is silent.
+func TestAHandBackWhoseEffectFailedReachesTheOperator(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	p := &published{}
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			// No RunAt: the job rests where it is, waiting for a human who is
+			// told by the effect below - which does not happen.
+			return transition.Result{
+				State: "handed-back",
+				Effects: []transition.Effect{{Key: "say-so", Do: func(context.Context) error {
+					return errors.New("posting the hand-back comment: 502 Bad Gateway")
+				}}},
+			}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 1)
+	d.Notify = notifier(p)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "hand back", func(j store.Job) bool { return j.State == "handed-back" })
+	}()
+	runUntil(t, d, done)
+
+	got := p.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for a hand-back nobody was told about, want 1:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	if !strings.Contains(got[0], "502 Bad Gateway") {
+		t.Errorf("the notification does not say what failed:\n%s", got[0])
+	}
+}

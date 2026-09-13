@@ -213,8 +213,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 		// job nothing can move is the operator's to look at.
 		cause := fmt.Errorf("no transition runs from state %q", job.State)
 		d.logf("%s: %s is in state %q with no transition from it; parking it", holder, job.ID, job.State)
-		d.park(ctx, holder, job)
-		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, job, cause) })
+		// Only if it actually parked. A commit that failed leaves the job due,
+		// and this is the one notification that would otherwise be suppressed
+		// on the pass that has something true to say: the key is the job, its
+		// state and its attempts, none of which the failed commit changed.
+		if d.park(ctx, holder, job) {
+			d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, job, cause) })
+		}
 		return
 	}
 
@@ -243,6 +248,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 	// rescheduled is retrying and is not yet anyone's problem, and a park with
 	// no error is a transition that chose to wait for a human - a hand-back is
 	// that, and ADR 0001 §13 rules it out of this channel explicitly.
+	//
+	// One case reads as a hand-back and is caught here anyway, on purpose: a
+	// transition that parked deliberately and whose outward effect then failed
+	// (Runner.apply returns the committed outcome alongside that error). The
+	// state moved and the job is resting, but the comment that was to tell the
+	// human never posted - so the tracker says nothing and this channel is all
+	// that is left. A hand-back that published its comment is silent, which is
+	// the rule; a hand-back nobody was told about is not.
 	if err != nil && out.Parked {
 		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, out.Job, err) })
 	}
@@ -318,8 +331,8 @@ func (d *Dispatcher) release(ctx context.Context, holder string, job store.Job) 
 // because it is the opposite thing - a rescheduled job comes back on its own
 // and a parked one does not - and a call reading `reschedule(job, time.Time{})`
 // says the first while meaning the second.
-func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) {
-	d.reschedule(ctx, holder, job, time.Time{})
+func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) bool {
+	return d.reschedule(ctx, holder, job, time.Time{})
 }
 
 // reschedule moves when a job next becomes due, leaving its state and its
@@ -329,7 +342,11 @@ func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) {
 // deferring one to a budget window is an attempt at the work, and counting
 // either would spend the retry bound on the account being busy - a long enough
 // rate-limit window would then park every job in the queue for a human to find.
-func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Job, at time.Time) {
+// It reports whether the store took the change, for the one caller that has
+// something to do about it: a park that did not commit is a job still due, and
+// notifying an operator that it "stays there until someone moves it" would be
+// a message that is not true about a job the next pass picks up again.
+func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Job, at time.Time) bool {
 	// Without the cancellation, for the same reason the runner's commit is:
 	// a stop that arrives here must not leave the lease standing.
 	err := d.Store.Commit(context.WithoutCancel(ctx), store.Commit{
@@ -342,5 +359,7 @@ func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Jo
 	})
 	if err != nil {
 		d.logf("%s: rescheduling %s: %v", holder, job.ID, err)
+		return false
 	}
+	return true
 }

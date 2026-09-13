@@ -71,14 +71,19 @@ type Notifier struct {
 	// that has to be honoured is better than one that has to be remembered.
 	Post func(ctx context.Context, title, tag, body string) error
 
-	// Now is the clock, for tests. Nil means time.Now.
-	Now func() time.Time
-
 	mu sync.Mutex
 
 	// sent is the conditions already published, by the key that identifies one
 	// occurrence of one. It is how the same condition, re-observed on every
 	// pass of every worker, is reported once.
+	//
+	// A set, and nothing is ever taken out of it except a publish that failed.
+	// There is deliberately no expiry: a key that aged out would re-publish a
+	// condition nobody has fixed, which is the poll-that-suppresses shape this
+	// package exists to avoid, and an occurrence that is genuinely new already
+	// has a new key. It grows with the number of distinct occurrences one
+	// process lives through, which is bounded by the work the queue actually
+	// did.
 	//
 	// In memory, and nowhere else. The store holds run state (ADR 0001 §5,
 	// §6), and its idempotency history is job-scoped by its schema - a budget
@@ -86,7 +91,7 @@ type Notifier struct {
 	// worker happened to claim would be a record that says something untrue. A
 	// restart therefore re-notifies a condition that is still true, which is
 	// the right way round: the operator may not have seen the first one.
-	sent map[string]time.Time
+	sent map[string]struct{}
 }
 
 // Parked reports a job that has come to rest and will not move without an
@@ -125,6 +130,18 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	// The reset timestamp is in the key, so the next time the same window is
 	// spent is a new occurrence. Without it, one notification would cover every
 	// future exhaustion of that window for the life of the process.
+	//
+	// Two edges this does not handle, both narrow and both left alone:
+	//
+	//   - A limit the provider reports with no resetsAt has the zero time in
+	//     its key, which is stable, so it is the case the timestamp was meant
+	//     to fix and does not. The pool is waiting rather than deferring there
+	//     and re-asks every poll, so the condition is not lost - only the
+	//     second notification is.
+	//   - Admission names the window that reopens last while it can defer, and
+	//     the worst one once the timestamp has passed with the account still
+	//     limited. Those can be different windows, and a second name is a
+	//     second key. One limit episode can therefore publish twice.
 	key := fmt.Sprintf("exhausted:%s:%s", w.Name, w.ResetsAt.Format(time.RFC3339))
 
 	body := w.String() + "\n\n"
@@ -181,9 +198,9 @@ func (n *Notifier) reserve(key string) bool {
 		return false
 	}
 	if n.sent == nil {
-		n.sent = map[string]time.Time{}
+		n.sent = map[string]struct{}{}
 	}
-	n.sent[key] = n.now()
+	n.sent[key] = struct{}{}
 	return true
 }
 
@@ -200,13 +217,6 @@ func (n *Notifier) publish(ctx context.Context, title, tag, body string) error {
 		"Title": {title},
 		"Tags":  {tag},
 	}, []byte(body))
-}
-
-func (n *Notifier) now() time.Time {
-	if n.Now != nil {
-		return n.Now()
-	}
-	return time.Now()
 }
 
 // clean makes a string safe to carry in a header. A newline in a title is a
