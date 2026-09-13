@@ -234,6 +234,11 @@ func runCmd(args []string, stdout io.Writer) error {
 		return usagef("unknown transition %q; %s", name, known(reg))
 	}
 
+	tr, err := p.tracker()
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -243,7 +248,7 @@ func runCmd(args []string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	deps, err := reviewDeps(ctx, p, st)
+	deps, err := reviewDeps(ctx, p, st, tr)
 	if err != nil {
 		return err
 	}
@@ -309,6 +314,10 @@ func workCmd(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	tr, err := p.tracker()
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -330,13 +339,13 @@ func workCmd(args []string, stderr io.Writer) error {
 		Log:       func(msg string) { fmt.Fprintln(stderr, msg) },
 	}
 
-	deps, err := reviewDeps(ctx, p, st)
+	deps, err := reviewDeps(ctx, p, st, tr)
 	if err != nil {
 		return err
 	}
 	d.Registry = catalogue(deps)
 
-	in, err := p.intake(ctx, st, runner.Holder, runner.LeaseTTL)
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL)
 	if err != nil {
 		return err
 	}
@@ -467,7 +476,8 @@ func intakeCmd(args []string, stdout io.Writer) error {
 		return usagef("intake needs --repo (or set AFK_REPO)")
 	}
 	// The operator's mistakes, before anything is opened.
-	if _, err := p.tracker(); err != nil {
+	tr, err := p.tracker()
+	if err != nil {
 		return err
 	}
 
@@ -480,7 +490,7 @@ func intakeCmd(args []string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	in, err := p.intake(ctx, st, runner.Holder, runner.LeaseTTL)
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL)
 	if err != nil {
 		return err
 	}

@@ -3,10 +3,18 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +32,7 @@ func withCatalogue(t *testing.T, ts ...transition.Transition) {
 	was := catalogue
 	catalogue = func(*review.Deps) *transition.Registry { return reg }
 	wasDeps := reviewDeps
-	reviewDeps = func(context.Context, params, store.Store) (*review.Deps, error) { return nil, nil }
+	reviewDeps = func(context.Context, params, store.Store, *tracker) (*review.Deps, error) { return nil, nil }
 	t.Cleanup(func() { catalogue, reviewDeps = was, wasDeps })
 }
 
@@ -527,11 +535,19 @@ func TestTheNotifyURLComesFromTheEnvironmentToo(t *testing.T) {
 	}
 }
 
-// The tracker token is a file, for the reason every secret here is.
-func TestTheTrackerKeyIsReadFromItsFile(t *testing.T) {
+// The App's private key is a file, for the reason every secret here is, and the
+// client authenticates as the App built from it (#34).
+func TestTheAppKeyIsReadFromItsFile(t *testing.T) {
 	dir := t.TempDir()
-	token := filepath.Join(dir, "github-token")
-	if err := os.WriteFile(token, []byte(" ghp_secret\n"), 0o600); err != nil {
+	rsaKey := testAppKey()
+	key := filepath.Join(dir, "app-key.pem")
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)})
+	if err := os.WriteFile(key, append([]byte("\n"), pemKey...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "ghp_not-a-private-key"
+	notAKey := filepath.Join(dir, "token")
+	if err := os.WriteFile(notAKey, []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -540,29 +556,39 @@ func TestTheTrackerKeyIsReadFromItsFile(t *testing.T) {
 		p    params
 		want string // substring of the error, or "" for a client
 	}{
-		{name: "read and trimmed", p: params{repo: "corygyarmathy/afk-agent", trackerKey: token}},
-		{name: "no such file", p: params{repo: "o/n", trackerKey: filepath.Join(dir, "absent")}, want: "--tracker-key:"},
-		{name: "a repository with no token", p: params{repo: "o/n"}, want: "needs --tracker-key"},
-		{name: "a token with no repository", p: params{trackerKey: token}, want: "needs --repo"},
-		{name: "a repository that is not owner/name", p: params{repo: "afk-agent", trackerKey: token}, want: "is not owner/name"},
+		{name: "read and parsed", p: params{repo: "corygyarmathy/afk-agent", appID: "Iv23li", appKey: key}},
+		{name: "no such file", p: params{repo: "o/n", appID: "1", appKey: filepath.Join(dir, "absent")}, want: "--app-key:"},
+		{name: "a file that is not a key", p: params{repo: "o/n", appID: "1", appKey: notAKey}, want: "--app-key: " + notAKey},
+		{name: "a repository with no App", p: params{repo: "o/n"}, want: "needs --app-id"},
+		{name: "an App with no key", p: params{repo: "o/n", appID: "1"}, want: "needs --app-key"},
+		{name: "a key with no App id", p: params{repo: "o/n", appKey: key}, want: "needs --app-id"},
+		{name: "an App with no repository", p: params{appID: "1", appKey: key}, want: "need --repo"},
+		{name: "a repository that is not owner/name", p: params{repo: "afk-agent", appID: "1", appKey: key}, want: "is not owner/name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("AFK_REPO", "")
-			t.Setenv("AFK_TRACKER_KEY", "")
+			t.Setenv("AFK_APP_ID", "")
+			t.Setenv("AFK_APP_KEY", "")
 
-			c, err := tt.p.tracker()
+			tr, err := tt.p.tracker()
 			if tt.want != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.want) {
 					t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+				}
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("error %q quotes the key file", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.Token != "ghp_secret" || c.Repo != tt.p.repo {
-				t.Fatalf("client = %+v, want the repository and the trimmed token", c)
+			if tr.client.Repo != tt.p.repo || tr.app.Repo != tt.p.repo || tr.app.ID != tt.p.appID || !tr.app.Key.Equal(rsaKey) {
+				t.Fatalf("app = %+v, want the repository, the id and the key", tr.app)
+			}
+			if tr.client.Credential != tr.app {
+				t.Error("the client does not authenticate as the App")
 			}
 		})
 	}
@@ -571,15 +597,88 @@ func TestTheTrackerKeyIsReadFromItsFile(t *testing.T) {
 // No tracker parameters is no tracker, which afk work reads as no intake.
 func TestNoTrackerParametersIsNoTracker(t *testing.T) {
 	t.Setenv("AFK_REPO", "")
-	t.Setenv("AFK_TRACKER_KEY", "")
+	t.Setenv("AFK_APP_ID", "")
+	t.Setenv("AFK_APP_KEY", "")
 
 	var p params
-	c, err := p.tracker()
+	tr, err := p.tracker()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != nil {
-		t.Fatalf("client = %+v, want none", c)
+	if tr != nil {
+		t.Fatalf("tracker = %+v, want none", tr)
+	}
+}
+
+// testAppKey is one App key for the package: generating RSA keys is slow.
+var testAppKey = sync.OnceValue(func() *rsa.PrivateKey {
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	return k
+})
+
+// The login is read from GitHub once per process, whoever asks first, and a
+// failure to read it is not kept.
+func TestTheLoginIsReadOnce(t *testing.T) {
+	var reads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/app" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if reads.Add(1) == 1 {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"slug":"afk-agent"}`)
+	}))
+	t.Cleanup(srv.Close)
+	tr := &tracker{app: &github.App{ID: "1", Key: testAppKey(), Repo: "o/n", BaseURL: srv.URL}}
+
+	if _, err := tr.Login(context.Background()); err == nil {
+		t.Fatal("no error when GitHub is unavailable")
+	}
+	for range 2 {
+		if login, err := tr.Login(context.Background()); err != nil || login != "afk-agent[bot]" {
+			t.Fatalf("login = %q, %v, want afk-agent[bot]", login, err)
+		}
+	}
+	if n := reads.Load(); n != 2 {
+		t.Errorf("read the login %d times, want twice: once failing, once for good", n)
+	}
+}
+
+// Review and intake reach the tracker through the one the command built, so a
+// process has one token and one login (ADR 0005 §5).
+func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
+	for _, env := range []string{"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS"} {
+		t.Setenv(env, "")
+	}
+	// A login already read, so nothing here reaches a network.
+	tr := &tracker{client: &github.Client{Repo: "o/n"}, login: "afk-agent[bot]"}
+	p := params{
+		store:         filepath.Join(t.TempDir(), "state.db"),
+		opencode:      "/bin/opencode",
+		enrolment:     "/etc/afk/enrolment.json",
+		reviewTier:    "review",
+		modelAttempts: "3",
+		tierWait:      "30m",
+	}
+
+	deps, err := reviewDeps(context.Background(), p, nil, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deps.Tracker != tr.client || in.Tracker != tr.client {
+		t.Error("review and intake do not share the command's client")
+	}
+	if deps.Login != tr.login || in.Login != tr.login {
+		t.Errorf("logins %q and %q, want both %q", deps.Login, in.Login, tr.login)
 	}
 }
 
@@ -587,7 +686,8 @@ func TestNoTrackerParametersIsNoTracker(t *testing.T) {
 // anything.
 func TestIntakeNeedsARepository(t *testing.T) {
 	t.Setenv("AFK_REPO", "")
-	t.Setenv("AFK_TRACKER_KEY", "")
+	t.Setenv("AFK_APP_ID", "")
+	t.Setenv("AFK_APP_KEY", "")
 
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"intake", "--store", filepath.Join(t.TempDir(), "state.db"), "--lease", "1m"}, &stdout, &stderr)

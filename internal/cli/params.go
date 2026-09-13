@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
@@ -71,13 +72,15 @@ Model choice, for afk run and afk work:
   --tier-wait <dur>     AFK_TIER_WAIT       how long an exhausted tier defers  (required)
   --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
 
-Command intake, for afk intake and afk work:
+The tracker, for afk intake, afk run and afk work:
 
   --repo <owner/name>   AFK_REPO          repository commands are read from
-  --tracker-key <path>  AFK_TRACKER_KEY   file holding the GitHub token
+  --app-id <id>         AFK_APP_ID        the GitHub App's client ID or app ID
+  --app-key <path>      AFK_APP_KEY       file holding the App's private key
 
-Without --repo afk work reads no commands, and runs only the jobs already in the
-store.
+The agent authenticates as the App's installation on --repo, and its own login
+is the App's [bot] account. Without --repo afk work reads no commands, and runs
+only the jobs already in the store.
 
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
@@ -109,8 +112,9 @@ type params struct {
 	notifyURL string
 	notifyKey string
 
-	repo       string
-	trackerKey string
+	repo   string
+	appID  string
+	appKey string
 
 	opencode      string
 	enrolment     string
@@ -452,58 +456,92 @@ func readKey(path, flagName string) (string, error) {
 }
 
 // bindTracker binds the tracker: the repository commands are read from, and the
-// token that reads them.
-//
-// The token is a path for the reason the usage key is: an argument is visible
-// in `ps` and an environment variable in /proc, and the secret already arrives
-// as a file from sops or systemd's LoadCredential.
+// GitHub App the agent is on it (ADR 0005). The key is a path, read once (ADR
+// 0005 §6).
 func (p *params) bindTracker(fs *flag.FlagSet) {
 	fs.StringVar(&p.repo, "repo", "", "repository commands are read from, owner/name (AFK_REPO)")
-	fs.StringVar(&p.trackerKey, "tracker-key", "", "file holding the GitHub token (AFK_TRACKER_KEY)")
+	fs.StringVar(&p.appID, "app-id", "", "the GitHub App's client ID or app ID (AFK_APP_ID)")
+	fs.StringVar(&p.appKey, "app-key", "", "file holding the GitHub App's private key (AFK_APP_KEY)")
 }
 
-// tracker is the tracker client, or nil if no repository is configured.
+// tracker is the agent on the tracker: the client, and the App it authenticates
+// as. A command builds one and hands it to everything that reaches the tracker,
+// so a process holds one token and reads its login once (ADR 0005 §5).
+type tracker struct {
+	client *github.Client
+	app    *github.App
+
+	mu    sync.Mutex
+	login string
+}
+
+// Login is the agent's own login, read from the tracker the first time it is
+// asked for. A failure is not kept, so the next caller asks again.
+func (t *tracker) Login(ctx context.Context) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.login == "" {
+		login, err := t.app.Login(ctx)
+		if err != nil {
+			return "", fmt.Errorf("reading the agent's own login: %w", err)
+		}
+		t.login = login
+	}
+	return t.login, nil
+}
+
+// tracker resolves the tracker, or nil if no repository is configured.
 //
-// A repository with no token is refused rather than read anonymously. Intake
-// has to know the agent's own login to tell its comments and its claims from
-// anyone else's, and only an authenticated request can say whose that is.
-func (p *params) tracker() (*github.Client, error) {
+// A repository with no App is refused rather than read anonymously. Intake has
+// to know the agent's own login to tell its comments and its claims from
+// anyone else's, and only the App can say whose that is.
+//
+// The key is read and parsed here, so a key file that is wrong is reported
+// before anything is opened. GitHub is not reached until something asks.
+func (p *params) tracker() (*tracker, error) {
 	repo := optional(p.repo, "AFK_REPO")
-	key := optional(p.trackerKey, "AFK_TRACKER_KEY")
+	id := optional(p.appID, "AFK_APP_ID")
+	keyPath := optional(p.appKey, "AFK_APP_KEY")
 
 	if repo == "" {
-		if key != "" {
-			return nil, usagef("--tracker-key needs --repo: there is no repository to read")
+		if id != "" || keyPath != "" {
+			return nil, usagef("--app-id and --app-key need --repo: there is no repository to read")
 		}
 		return nil, nil
 	}
 	if owner, name, ok := strings.Cut(repo, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 		return nil, usagef("--repo: %q is not owner/name", repo)
 	}
-	if key == "" {
-		return nil, usagef("--repo needs --tracker-key: intake reads the agent's own login, which takes a token")
+	if id == "" {
+		return nil, usagef("--repo needs --app-id (or set AFK_APP_ID): the agent authenticates as a GitHub App")
 	}
-	token, err := readKey(key, "tracker-key")
+	if keyPath == "" {
+		return nil, usagef("--repo needs --app-key (or set AFK_APP_KEY): the agent authenticates as a GitHub App")
+	}
+	pemKey, err := readKey(keyPath, "app-key")
 	if err != nil {
 		return nil, err
 	}
-	return &github.Client{Repo: repo, Token: token}, nil
+	key, err := github.ParseKey([]byte(pemKey))
+	if err != nil {
+		return nil, usagef("--app-key: %s: %v", keyPath, err)
+	}
+	app := &github.App{ID: id, Key: key, Repo: repo}
+	return &tracker{client: &github.Client{Repo: repo, Credential: app}, app: app}, nil
 }
 
-// intake is command intake over the configured tracker, or nil if there is no
-// tracker. It asks the tracker who the agent is, once, rather than on every
-// pass.
-func (p *params) intake(ctx context.Context, st store.Store, holder string, lease time.Duration) (*intake.Intake, error) {
-	client, err := p.tracker()
-	if err != nil || client == nil {
+// newIntake is command intake over the command's tracker, or nil if there is
+// none. It asks the tracker who the agent is once, rather than on every pass.
+func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, lease time.Duration) (*intake.Intake, error) {
+	if tr == nil {
+		return nil, nil
+	}
+	login, err := tr.Login(ctx)
+	if err != nil {
 		return nil, err
 	}
-	login, err := client.Login(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reading the agent's own login: %w", err)
-	}
 	return &intake.Intake{
-		Tracker:  client,
+		Tracker:  tr.client,
 		Store:    st,
 		Commands: commands(),
 		Login:    login,
