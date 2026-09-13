@@ -257,3 +257,28 @@ func TestARepositoryThatIsNotOwnerSlashNameIsRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestReactionsNameWhoReacted(t *testing.T) {
+	var srvURL string
+	c, srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/issues/comments/99/reactions", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `[{"id":2,"content":"eyes","user":{"login":"afk-bot"}}]`)
+			return
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/issues/comments/99/reactions?page=2>; rel="next"`, srvURL))
+		fmt.Fprint(w, `[{"id":1,"content":"+1","user":{"login":"alice"}}]`)
+	})
+	srvURL = srv.URL
+
+	got, err := c.Reactions(context.Background(), 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []github.Reaction{{Login: "alice", Content: "+1"}, {Login: "afk-bot", Content: "eyes"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}

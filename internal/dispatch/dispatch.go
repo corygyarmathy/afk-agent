@@ -73,6 +73,16 @@ type Dispatcher struct {
 	// watching the output, and a notification exists for the times nobody is.
 	Notify *notify.Notifier
 
+	// Intake re-derives the queue from the tracker (ADR 0001 §5). It runs once
+	// when the pool starts and then every poll interval, on a goroutine of its
+	// own, so a slow tracker never holds a worker. Nil is no intake, which is
+	// the shape of a pool given no repository: it runs the jobs already in the
+	// store, and `afk run` still makes more.
+	//
+	// It is not subject to admission. Making a job due is not starting it, and
+	// the worker that takes the job is where Budget is asked.
+	Intake func(ctx context.Context) error
+
 	// Log receives one line per dispatched job. Nil is silent: the happy path
 	// does not notify (ADR 0001 §13), and this is a log rather than a
 	// notification channel.
@@ -153,6 +163,13 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
+	if d.Intake != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.intake(ctx)
+		}()
+	}
 	for i := range d.Workers {
 		wg.Add(1)
 		go func() {
@@ -362,4 +379,16 @@ func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Jo
 		return false
 	}
 	return true
+}
+
+// intake runs Intake until ctx is done. An intake that failed is a log line
+// and another try on the next poll: a tracker that cannot be read is not a
+// reason to stop running the jobs already queued.
+func (d *Dispatcher) intake(ctx context.Context) {
+	for ctx.Err() == nil {
+		if err := d.Intake(ctx); err != nil && ctx.Err() == nil {
+			d.logf("%s: intake: %v", d.Holder, err)
+		}
+		d.wait(ctx)
+	}
 }

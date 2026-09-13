@@ -916,3 +916,79 @@ func TestAHandBackWhoseEffectFailedReachesTheOperator(t *testing.T) {
 		t.Errorf("the notification does not say what failed:\n%s", got[0])
 	}
 }
+
+// Intake runs on every poll, beside the workers rather than inside one.
+func TestIntakeRunsOnEveryPoll(t *testing.T) {
+	s := openStore(t)
+	d := dispatcher(t, s, transition.MustRegistry(), pool(t, nil), 1)
+
+	var calls int32
+	done := make(chan struct{})
+	d.Intake = func(context.Context) error {
+		if atomic.AddInt32(&calls, 1) == 3 {
+			close(done)
+		}
+		return nil
+	}
+	runUntil(t, d, done)
+}
+
+// A tracker that cannot be read is a log line and another try, not a pool that
+// stops.
+func TestAnIntakeThatFailsIsLoggedAndTriedAgain(t *testing.T) {
+	s := openStore(t)
+	d := dispatcher(t, s, transition.MustRegistry(), pool(t, nil), 1)
+
+	var (
+		mu    sync.Mutex
+		lines []string
+		calls int32
+	)
+	d.Log = func(msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, msg)
+	}
+	done := make(chan struct{})
+	d.Intake = func(context.Context) error {
+		if atomic.AddInt32(&calls, 1) == 2 {
+			close(done)
+		}
+		return errors.New("listing open pull requests: 502 Bad Gateway")
+	}
+	runUntil(t, d, done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) == 0 || !strings.Contains(lines[0], "intake: listing open pull requests: 502 Bad Gateway") {
+		t.Errorf("log = %q, want the intake failure", lines)
+	}
+}
+
+// What intake makes due is what the workers run.
+func TestAJobIntakeMadeDueIsRun(t *testing.T) {
+	s := openStore(t)
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{State: "reviewed"}, nil
+		},
+	})
+	d := dispatcher(t, s, reg, pool(t, nil), 1)
+	ensured := make(chan struct{})
+	var once sync.Once
+	d.Intake = func(ctx context.Context) error {
+		_, err := s.Ensure(ctx, store.KindReview, store.Subject{Type: store.SubjectPR, Number: 12}, "start", time.Now())
+		once.Do(func() { close(ensured) })
+		return err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// The job does not exist until intake has run once.
+		<-ensured
+		until(t, s, "review-pr-12", "get reviewed", func(j store.Job) bool { return j.State == "reviewed" })
+	}()
+	runUntil(t, d, done)
+}

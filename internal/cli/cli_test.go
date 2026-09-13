@@ -520,3 +520,89 @@ func TestTheNotifyURLComesFromTheEnvironmentToo(t *testing.T) {
 		t.Fatalf("notifier = %+v, want the URL from the environment", n)
 	}
 }
+
+// The tracker token is a file, for the reason every secret here is.
+func TestTheTrackerKeyIsReadFromItsFile(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "github-token")
+	if err := os.WriteFile(token, []byte(" ghp_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		p    params
+		want string // substring of the error, or "" for a client
+	}{
+		{name: "read and trimmed", p: params{repo: "corygyarmathy/afk-agent", trackerKey: token}},
+		{name: "no such file", p: params{repo: "o/n", trackerKey: filepath.Join(dir, "absent")}, want: "--tracker-key:"},
+		{name: "a repository with no token", p: params{repo: "o/n"}, want: "needs --tracker-key"},
+		{name: "a token with no repository", p: params{trackerKey: token}, want: "needs --repo"},
+		{name: "a repository that is not owner/name", p: params{repo: "afk-agent", trackerKey: token}, want: "is not owner/name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AFK_REPO", "")
+			t.Setenv("AFK_TRACKER_KEY", "")
+
+			c, err := tt.p.tracker()
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Token != "ghp_secret" || c.Repo != tt.p.repo {
+				t.Fatalf("client = %+v, want the repository and the trimmed token", c)
+			}
+		})
+	}
+}
+
+// No tracker parameters is no tracker, which afk work reads as no intake.
+func TestNoTrackerParametersIsNoTracker(t *testing.T) {
+	t.Setenv("AFK_REPO", "")
+	t.Setenv("AFK_TRACKER_KEY", "")
+
+	var p params
+	c, err := p.tracker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != nil {
+		t.Fatalf("client = %+v, want none", c)
+	}
+}
+
+// afk intake is nothing without a repository, and says so before it opens
+// anything.
+func TestIntakeNeedsARepository(t *testing.T) {
+	t.Setenv("AFK_REPO", "")
+	t.Setenv("AFK_TRACKER_KEY", "")
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"intake", "--store", filepath.Join(t.TempDir(), "state.db"), "--lease", "1m"}, &stdout, &stderr)
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d; stderr:\n%s", code, ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--repo") {
+		t.Errorf("stderr does not name --repo:\n%s", stderr.String())
+	}
+}
+
+// Every command's job kind starts at a state some transition runs from, or the
+// command makes due a job the pool can only park.
+//
+// Skipped until the review transition is registered (#29), which is the change
+// that has to make it pass.
+func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
+	reg := catalogue()
+	for _, cmd := range commands() {
+		if _, ok := reg.Next(cmd.Kind, cmd.Start); !ok {
+			t.Skipf("%s starts %s jobs in %q, and no transition runs from there yet (#29)", cmd.Word, cmd.Kind, cmd.Start)
+		}
+	}
+}
