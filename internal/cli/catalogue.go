@@ -1,6 +1,9 @@
 package cli
 
-import "github.com/corygyarmathy/afk-agent/internal/transition"
+import (
+	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/transition"
+)
 
 // catalogue is the set of transitions this build knows.
 //
@@ -10,14 +13,15 @@ import "github.com/corygyarmathy/afk-agent/internal/transition"
 // transitions would then be a property of the import graph, and
 // TestEveryTransitionRunsStandalone could not know what it was meant to check.
 //
-// It is empty today. The first entry is `/review` (#3); the runner, the
-// dispatcher and this command surface are what it will be entered into, and
-// they are complete without it. Everything in this package is tested against
-// registries built in the tests, so nothing here is waiting on that issue -
-// but the standalone-invocation test is vacuous until it lands, and says so.
+// It takes the review's dependencies because a transition's Run reaches them.
+// Naming a transition does not: a registry built from nil dependencies answers
+// every question about names, kinds and states, and only running a transition
+// needs them - which is how `afk run` refuses a mistyped name before it has
+// opened or resolved anything.
+//
 // It is a variable so that the tests in this package can put a transition in
 // front of the command surface without shipping one; nothing but a test ever
 // assigns to it.
-var catalogue = func() *transition.Registry {
-	return transition.MustRegistry()
+var catalogue = func(d *review.Deps) *transition.Registry {
+	return transition.MustRegistry(review.Transitions(d)...)
 }

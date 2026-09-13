@@ -147,17 +147,8 @@ func (in *Intake) pullRequest(ctx context.Context, number int) ([]store.Job, err
 // by an account with write access that is not the agent's, and starting with a
 // registered word.
 func (in *Intake) command(c github.Comment) (Command, bool) {
-	// Logins are case-insensitive on GitHub, so the agent's own account is too.
-	if strings.EqualFold(c.Login, in.Login) || !writers[c.Association] {
-		return Command{}, false
-	}
-	line, _, _ := strings.Cut(strings.TrimSpace(c.Body), "\n")
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return Command{}, false
-	}
 	for _, cmd := range in.Commands {
-		if fields[0] == cmd.Word {
+		if IsCommand(c, in.Login, cmd.Word) {
 			return cmd, true
 		}
 	}
@@ -169,12 +160,7 @@ func (in *Intake) answered(ctx context.Context, commentID int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, r := range reactions {
-		if r.Content == Claim && strings.EqualFold(r.Login, in.Login) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return Claimed(reactions, in.Login), nil
 }
 
 // arm makes the job a command asks for due, and reserves the command's key in
@@ -269,4 +255,31 @@ func (in *Intake) now() time.Time {
 		return in.Clock()
 	}
 	return time.Now()
+}
+
+// IsCommand reports whether a comment issues the command word: written by an
+// account with write access that is not login, with word as its first word.
+//
+// Exported because intake is not the only thing that has to agree on what a
+// command is. The transition that answers one reads the same comments, and two
+// definitions would let intake arm a job for a comment the transition then
+// fails to claim.
+func IsCommand(c github.Comment, login, word string) bool {
+	// Logins are case-insensitive on GitHub, so the agent's own account is too.
+	if strings.EqualFold(c.Login, login) || !writers[c.Association] {
+		return false
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(c.Body), "\n")
+	fields := strings.Fields(line)
+	return len(fields) > 0 && fields[0] == word
+}
+
+// Claimed reports whether reactions carry login's claim.
+func Claimed(reactions []github.Reaction, login string) bool {
+	for _, r := range reactions {
+		if r.Content == Claim && strings.EqualFold(r.Login, login) {
+			return true
+		}
+	}
+	return false
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -59,6 +60,17 @@ Notification, for afk work:
   --notify-url <url>    AFK_NOTIFY_URL    ntfy topic to publish to
   --notify-key <path>   AFK_NOTIFY_KEY    file holding the ntfy token
 
+Model choice, for afk run and afk work:
+
+  --opencode <path>     AFK_OPENCODE        the opencode binary                (required)
+  --enrolment <path>    AFK_ENROLMENT       the enrolment file                 (required)
+  --review-tier <name>  AFK_REVIEW_TIER     the tier a review draws from       (required)
+  --review-needs <caps> AFK_REVIEW_NEEDS    capabilities a review requires, comma-separated
+  --model-attempts <n>  AFK_MODEL_ATTEMPTS  candidates tried before a tier is exhausted,
+                                            and posts before a reply is handed back (required)
+  --tier-wait <dur>     AFK_TIER_WAIT       how long an exhausted tier defers  (required)
+  --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
+
 Command intake, for afk intake and afk work:
 
   --repo <owner/name>   AFK_REPO          repository commands are read from
@@ -99,6 +111,14 @@ type params struct {
 
 	repo       string
 	trackerKey string
+
+	opencode      string
+	enrolment     string
+	catalogueAge  string
+	reviewTier    string
+	reviewNeeds   string
+	modelAttempts string
+	tierWait      string
 }
 
 func (p *params) bindStore(fs *flag.FlagSet) {
@@ -490,4 +510,75 @@ func (p *params) intake(ctx context.Context, st store.Store, holder string, leas
 		Holder:   holder,
 		LeaseTTL: lease,
 	}, nil
+}
+
+// bindModel binds model choice: the files the resolver reads, what a review
+// requires of a model, and how failure across a tier is bounded.
+func (p *params) bindModel(fs *flag.FlagSet) {
+	fs.StringVar(&p.opencode, "opencode", "", "the opencode binary (AFK_OPENCODE)")
+	fs.StringVar(&p.enrolment, "enrolment", "", "the enrolment file (AFK_ENROLMENT)")
+	fs.StringVar(&p.catalogueAge, "catalogue-age", "", "how long the cached catalogue is used (AFK_CATALOGUE_AGE)")
+	fs.StringVar(&p.reviewTier, "review-tier", "", "the tier a review draws from (AFK_REVIEW_TIER)")
+	fs.StringVar(&p.reviewNeeds, "review-needs", "", "capabilities a review requires, comma-separated (AFK_REVIEW_NEEDS)")
+	fs.StringVar(&p.modelAttempts, "model-attempts", "", "candidates tried before a tier is exhausted (AFK_MODEL_ATTEMPTS)")
+	fs.StringVar(&p.tierWait, "tier-wait", "", "how long an exhausted tier defers (AFK_TIER_WAIT)")
+}
+
+// modelParams is model choice, resolved.
+type modelParams struct {
+	opencode     string
+	enrolment    string
+	catalogueAge time.Duration
+	tier         model.Tier
+	needs        []model.Capability
+	attempts     int
+	tierWait     time.Duration
+}
+
+// model resolves model choice.
+//
+// The attempt bound is required rather than defaulting to the tier's length:
+// it also bounds how many times a reply that never appears is posted, and an
+// unset bound there would be one post and no recovery from a lost one.
+func (p *params) model() (modelParams, error) {
+	var (
+		m   modelParams
+		err error
+	)
+	if m.opencode, err = required(p.opencode, "opencode", "AFK_OPENCODE"); err != nil {
+		return modelParams{}, err
+	}
+	if m.enrolment, err = required(p.enrolment, "enrolment", "AFK_ENROLMENT"); err != nil {
+		return modelParams{}, err
+	}
+	tier, err := required(p.reviewTier, "review-tier", "AFK_REVIEW_TIER")
+	if err != nil {
+		return modelParams{}, err
+	}
+	m.tier = model.Tier(tier)
+	attempts, err := required(p.modelAttempts, "model-attempts", "AFK_MODEL_ATTEMPTS")
+	if err != nil {
+		return modelParams{}, err
+	}
+	if m.attempts, err = count(attempts, "model-attempts"); err != nil {
+		return modelParams{}, err
+	}
+	wait, err := required(p.tierWait, "tier-wait", "AFK_TIER_WAIT")
+	if err != nil {
+		return modelParams{}, err
+	}
+	if m.tierWait, err = duration(wait, "tier-wait"); err != nil {
+		return modelParams{}, err
+	}
+	if v := optional(p.catalogueAge, "AFK_CATALOGUE_AGE"); v != "" {
+		if m.catalogueAge, err = duration(v, "catalogue-age"); err != nil {
+			return modelParams{}, err
+		}
+	}
+	for _, c := range strings.Split(optional(p.reviewNeeds, "AFK_REVIEW_NEEDS"), ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			m.needs = append(m.needs, model.Capability(c))
+		}
+	}
+	return m, nil
 }

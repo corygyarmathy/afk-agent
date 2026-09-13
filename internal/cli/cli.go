@@ -177,7 +177,6 @@ func resolve(p params, ctx context.Context) (store.Store, transition.Runner, err
 	}
 	r := transition.Runner{
 		Store:    st,
-		Registry: catalogue(),
 		Holder:   holder(),
 		LeaseTTL: lease,
 		Backoff:  backoff,
@@ -199,6 +198,9 @@ func runCmd(args []string, stdout io.Writer) error {
 	p.bindStore(fs)
 	p.bindLease(fs)
 	p.bindBackoff(fs)
+	p.bindTracker(fs)
+	p.bindModel(fs)
+	p.bindBudget(fs)
 
 	// The transition name is positional and comes first, so that the flags
 	// after it read as arguments to it rather than to the binary.
@@ -226,7 +228,7 @@ func runCmd(args []string, stdout io.Writer) error {
 
 	// A mistyped transition name is the operator's mistake, and it is
 	// reported before anything is opened or resolved.
-	reg := catalogue()
+	reg := catalogue(nil)
 	t, ok := reg.Get(name)
 	if !ok {
 		return usagef("unknown transition %q; %s", name, known(reg))
@@ -240,6 +242,12 @@ func runCmd(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer st.Close()
+
+	deps, err := reviewDeps(ctx, p, st)
+	if err != nil {
+		return err
+	}
+	runner.Registry = catalogue(deps)
 
 	now := time.Now()
 	id, err := subject.jobID(ctx, st, t, now)
@@ -269,6 +277,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindPool(fs)
 	p.bindBudget(fs)
 	p.bindNotify(fs)
+	p.bindModel(fs)
 	p.bindTracker(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -320,6 +329,12 @@ func workCmd(args []string, stderr io.Writer) error {
 		TokenWait: tokenWait,
 		Log:       func(msg string) { fmt.Fprintln(stderr, msg) },
 	}
+
+	deps, err := reviewDeps(ctx, p, st)
+	if err != nil {
+		return err
+	}
+	d.Registry = catalogue(deps)
 
 	in, err := p.intake(ctx, st, runner.Holder, runner.LeaseTTL)
 	if err != nil {
