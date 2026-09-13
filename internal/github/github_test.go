@@ -13,14 +13,20 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 )
 
-const token = "ghp_this-must-never-appear-in-an-error"
+const token = "ghs_this-must-never-appear-in-an-error"
+
+// fixed is a credential that always presents the same token.
+type fixed string
+
+func (f fixed) Token(context.Context) (string, error) { return string(f), nil }
+func (fixed) Refused(string)                          {}
 
 // serve stands up a tracker on loopback and returns a client pointed at it.
 func serve(t *testing.T, h http.HandlerFunc) (*github.Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &github.Client{Repo: "o/n", Token: token, BaseURL: srv.URL}, srv
+	return &github.Client{Repo: "o/n", Credential: fixed(token), BaseURL: srv.URL}, srv
 }
 
 // expect fails the request, and the test, when it is not the one the client
@@ -197,22 +203,6 @@ func TestReactAcceptsAReactionThatAlreadyExists(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-func TestLoginIsTheTokensAccount(t *testing.T) {
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		if expect(t, w, r, "GET", "/user", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"login":"afk-bot","id":5}`)
-		}
-	})
-
-	got, err := c.Login(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "afk-bot" {
-		t.Errorf("got %q, want afk-bot", got)
 	}
 }
 

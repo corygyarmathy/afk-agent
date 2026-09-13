@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,10 +44,9 @@ type Client struct {
 	// configuration.
 	Repo string
 
-	// Token is the bearer token. It never appears in an error: a failure names
-	// the endpoint and the status, and a 401 says the token is wrong without
-	// saying what it is. Empty sends no Authorization header.
-	Token string
+	// Credential supplies the bearer token each request carries. Nil sends no
+	// Authorization header.
+	Credential Credential
 
 	// BaseURL is the API root. Empty means DefaultBaseURL; a test points it at
 	// an httptest server.
@@ -54,6 +54,18 @@ type Client struct {
 
 	// HTTP is the client requests go through. Nil means http.DefaultClient.
 	HTTP *http.Client
+}
+
+// Credential is where a Client's token comes from. *App is one.
+//
+// A token never appears in an error: a failure names the endpoint and the
+// status, and a 401 says the token is wrong without saying what it is.
+type Credential interface {
+	// Token returns the token to present now.
+	Token(ctx context.Context) (string, error)
+
+	// Refused reports that GitHub answered token with a 401.
+	Refused(token string)
 }
 
 // PullRequest is the part of a pull request a transition decides on.
@@ -198,21 +210,6 @@ func (c *Client) React(ctx context.Context, commentID int64, content string) err
 	return c.postJSON(ctx, u, map[string]string{"content": content}, nil)
 }
 
-// Login returns the account the token authenticates as - the agent's own, which
-// is how it recognises the comments it wrote.
-func (c *Client) Login(ctx context.Context) (string, error) {
-	var w struct {
-		Login string `json:"login"`
-	}
-	if _, err := c.getJSON(ctx, c.base()+"/user", &w); err != nil {
-		return "", err
-	}
-	if w.Login == "" {
-		return "", fmt.Errorf("GET %s/user: no login in the response", c.base())
-	}
-	return w.Login, nil
-}
-
 type wirePR struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
@@ -260,9 +257,8 @@ func (c *Client) getJSON(ctx context.Context, u string, v any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer drain(resp.Body)
-	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-		return "", fmt.Errorf("GET %s: decoding: %w", u, err)
+	if err := readJSON(resp, http.MethodGet, u, v); err != nil {
+		return "", err
 	}
 	return c.next(resp.Header.Get("Link"))
 }
@@ -273,20 +269,46 @@ func (c *Client) postJSON(ctx context.Context, u string, payload, v any) error {
 	if err != nil {
 		return err
 	}
-	defer drain(resp.Body)
 	if v == nil {
+		drain(resp.Body)
 		return nil
 	}
+	return readJSON(resp, http.MethodPost, u, v)
+}
+
+// readJSON decodes a response's document into v, and closes the body.
+func readJSON(resp *http.Response, method, u string, v any) error {
+	defer drain(resp.Body)
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-		return fmt.Errorf("POST %s: decoding: %w", u, err)
+		return fmt.Errorf("%s %s: decoding: %w", method, u, err)
 	}
 	return nil
 }
 
-// send makes one request. A response outside 2xx is a StatusError, and its body
-// is closed here: an error page is not a document, and the status is the part
-// worth reporting.
+// send makes one request with the credential's token.
+//
+// A 401 is reported to the credential, so a revoked token is not presented
+// again. The request is not retried here: a 401 means it was not performed, and
+// whether to try again is the transition's to decide.
 func (c *Client) send(ctx context.Context, method, u, accept string, payload any) (*http.Response, error) {
+	var token string
+	if c.Credential != nil {
+		var err error
+		if token, err = c.Credential.Token(ctx); err != nil {
+			return nil, fmt.Errorf("%s %s: no token: %w", method, u, err)
+		}
+	}
+	resp, err := request(ctx, c.HTTP, method, u, accept, token, payload)
+	if se := (*StatusError)(nil); errors.As(err, &se) && se.Code == http.StatusUnauthorized && c.Credential != nil {
+		c.Credential.Refused(token)
+	}
+	return resp, err
+}
+
+// request makes one request, bearing token unless it is empty. A response
+// outside 2xx is a StatusError, and its body is closed here: an error page is
+// not a document, and the status is the part worth reporting.
+func request(ctx context.Context, httpc *http.Client, method, u, accept, token string, payload any) (*http.Response, error) {
 	var body io.Reader
 	if payload != nil {
 		b, err := json.Marshal(payload)
@@ -304,11 +326,10 @@ func (c *Client) send(ctx context.Context, method, u, accept string, payload any
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	httpc := c.HTTP
 	if httpc == nil {
 		httpc = http.DefaultClient
 	}
@@ -346,18 +367,28 @@ func (c *Client) next(link string) (string, error) {
 // repoURL is an endpoint under the repository, or an error if Repo is not
 // `owner/name` - reported before anything is sent.
 func (c *Client) repoURL(format string, a ...any) (string, error) {
-	owner, name, ok := strings.Cut(c.Repo, "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+	if _, _, ok := splitRepo(c.Repo); !ok {
 		return "", fmt.Errorf("repository %q is not owner/name", c.Repo)
 	}
 	return c.base() + "/repos/" + c.Repo + fmt.Sprintf(format, a...), nil
 }
 
 func (c *Client) base() string {
-	if c.BaseURL == "" {
+	return baseURL(c.BaseURL)
+}
+
+// splitRepo splits `owner/name`, and reports whether repo is spelled that way.
+func splitRepo(repo string) (owner, name string, ok bool) {
+	owner, name, ok = strings.Cut(repo, "/")
+	return owner, name, ok && owner != "" && name != "" && !strings.Contains(name, "/")
+}
+
+// baseURL is the API root u names, or DefaultBaseURL if it is empty.
+func baseURL(u string) string {
+	if u == "" {
 		return DefaultBaseURL
 	}
-	return strings.TrimRight(c.BaseURL, "/")
+	return strings.TrimRight(u, "/")
 }
 
 // drain reads what is left of a body before closing it, so the connection goes

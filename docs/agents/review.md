@@ -2,7 +2,9 @@
 
 What `/review` does, what it needs on the host, and how to run one by hand. The
 decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md)
-§2, §5, §7, §10 and §14; the spec is
+§2, §5, §7, §10 and §14, and
+[ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) for how the
+agent authenticates; the spec is
 [#3](https://github.com/corygyarmathy/afk-agent/issues/3) and
 [#29](https://github.com/corygyarmathy/afk-agent/issues/29); the code is
 [`internal/intake`](../../internal/intake) and
@@ -35,8 +37,11 @@ history and never a second review of a head already reviewed.
   repository cannot be reviewed yet.
 - **opencode**, at `--opencode`, with credentials for every provider enrolled in
   the review tier.
-- **A GitHub token**, in the file at `--tracker-key`, that can read pull requests
-  and write issue comments and reactions on `--repo`.
+- **The GitHub App**, `--app-id`, with its private key in the file at
+  `--app-key`. It must be installed on `--repo` with permission to read pull
+  requests and write issue comments and reactions. The agent mints its own
+  installation tokens, scoped to `--repo`, and its login is the App's
+  `<slug>[bot]` account, read from GitHub at startup.
 - **The enrolment file**, at `--enrolment`: [`model-enrolment.md`](model-enrolment.md).
 
 The state directory is the directory holding `--store`. Beside the store it

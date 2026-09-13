@@ -12,16 +12,13 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
-// reviewDeps builds what the review's transitions reach, from the parameters.
+// reviewDeps builds what the review's transitions reach, from the parameters and
+// the command's tracker, which it shares with intake (ADR 0005 §5).
 //
 // A variable for the reason catalogue is: the tests in this package put fixture
 // transitions in front of the command surface, and those reach nothing.
-var reviewDeps = func(ctx context.Context, p params, st store.Store) (*review.Deps, error) {
-	client, err := p.tracker()
-	if err != nil {
-		return nil, err
-	}
-	if client == nil {
+var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker) (*review.Deps, error) {
+	if tr == nil {
 		return nil, usagef("a review needs --repo (or set AFK_REPO)")
 	}
 	m, err := p.model()
@@ -36,9 +33,9 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store) (*review.De
 	if err != nil {
 		return nil, err
 	}
-	login, err := client.Login(ctx)
+	login, err := tr.Login(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading the agent's own login: %w", err)
+		return nil, err
 	}
 
 	// Beside the store and not in it (ADR 0001 §5): the catalogue is
@@ -72,10 +69,10 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store) (*review.De
 	}
 
 	return &review.Deps{
-		Tracker:  client,
+		Tracker:  tr.client,
 		Model:    opencode.Command{Path: m.opencode},
 		Store:    st,
-		Checkout: review.Git{Remote: "https://github.com/" + client.Repo + ".git"}.Checkout,
+		Checkout: review.Git{Remote: "https://github.com/" + tr.client.Repo + ".git"}.Checkout,
 		Resolve:  resolve,
 		Bound:    m.attempts,
 		TierWait: m.tierWait,
