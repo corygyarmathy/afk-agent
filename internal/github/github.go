@@ -366,3 +366,39 @@ func drain(rc io.ReadCloser) {
 	io.Copy(io.Discard, rc)
 	rc.Close()
 }
+
+// Reaction is one account's reaction to a comment.
+type Reaction struct {
+	Login string
+
+	// Content is the API's spelling of the reaction: `eyes`, `+1`, and so on.
+	Content string
+}
+
+// Reactions lists every reaction to a conversation comment, to the last page.
+//
+// It is how a command reads as answered: the agent's own reaction is the
+// claim, and it lives on the tracker rather than in the store, so a wiped
+// store does not make an old command look new.
+func (c *Client) Reactions(ctx context.Context, commentID int64) ([]Reaction, error) {
+	u, err := c.repoURL("/issues/comments/%d/reactions?per_page=%d", commentID, perPage)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := all[wireReaction](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	rs := make([]Reaction, len(ws))
+	for i, w := range ws {
+		rs[i] = Reaction{Login: w.User.Login, Content: w.Content}
+	}
+	return rs, nil
+}
+
+type wireReaction struct {
+	Content string `json:"content"`
+	User    struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}

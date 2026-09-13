@@ -55,6 +55,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		err = runCmd(args[1:], stdout)
 	case "work":
 		err = workCmd(args[1:], stderr)
+	case "intake":
+		err = intakeCmd(args[1:], stdout)
 	case "budget":
 		err = budgetCmd(args[1:], stdout)
 	case "version":
@@ -267,6 +269,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindPool(fs)
 	p.bindBudget(fs)
 	p.bindNotify(fs)
+	p.bindTracker(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return errUsage{err}
@@ -316,6 +319,22 @@ func workCmd(args []string, stderr io.Writer) error {
 		Poll:      poll,
 		TokenWait: tokenWait,
 		Log:       func(msg string) { fmt.Fprintln(stderr, msg) },
+	}
+
+	in, err := p.intake(ctx, st, runner.Holder, runner.LeaseTTL)
+	if err != nil {
+		return err
+	}
+	if in == nil {
+		fmt.Fprintln(stderr, "afk work: no --repo, so no commands are read; only jobs already in the store run")
+	} else {
+		d.Intake = func(ctx context.Context) error {
+			made, err := in.Pass(ctx)
+			for _, job := range made {
+				fmt.Fprintf(stderr, "intake: %s is due\n", job.ID)
+			}
+			return err
+		}
 	}
 
 	// A signal stops the pool between transitions rather than inside one: a
@@ -396,6 +415,7 @@ const usage = `afk - an unattended agent that takes work from a tracker and leav
 Usage:
   afk run <transition> (--job <id> | --issue <n> | --pr <n>)
   afk work
+  afk intake
   afk budget
   afk version
   afk help
@@ -409,4 +429,49 @@ Every transition is invokable on its own, with no daemon present:
 
 func writeUsage(w io.Writer) {
 	fmt.Fprint(w, usage)
+}
+
+// intakeCmd implements `afk intake`: one intake pass, by hand, with no pool
+// running (ADR 0001 §4). It prints the jobs it made due, so an operator can see
+// what the pool would pick up without starting it.
+func intakeCmd(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("afk intake", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var p params
+	p.bindStore(fs)
+	p.bindLease(fs)
+	p.bindTracker(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return errUsage{err}
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		return usagef("unexpected argument %q", rest[0])
+	}
+	if optional(p.repo, "AFK_REPO") == "" {
+		return usagef("intake needs --repo (or set AFK_REPO)")
+	}
+	// The operator's mistakes, before anything is opened.
+	if _, err := p.tracker(); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, runner, err := resolve(p, ctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	in, err := p.intake(ctx, st, runner.Holder, runner.LeaseTTL)
+	if err != nil {
+		return err
+	}
+	made, err := in.Pass(ctx)
+	for _, job := range made {
+		fmt.Fprintf(stdout, "%s due %s\n", job.ID, job.NextRunAt.Format(time.RFC3339))
+	}
+	return err
 }

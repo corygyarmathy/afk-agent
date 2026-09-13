@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,7 +11,10 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
+	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
+	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -55,6 +59,14 @@ Notification, for afk work:
   --notify-url <url>    AFK_NOTIFY_URL    ntfy topic to publish to
   --notify-key <path>   AFK_NOTIFY_KEY    file holding the ntfy token
 
+Command intake, for afk intake and afk work:
+
+  --repo <owner/name>   AFK_REPO          repository commands are read from
+  --tracker-key <path>  AFK_TRACKER_KEY   file holding the GitHub token
+
+Without --repo afk work reads no commands, and runs only the jobs already in the
+store.
+
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
 
@@ -84,6 +96,9 @@ type params struct {
 
 	notifyURL string
 	notifyKey string
+
+	repo       string
+	trackerKey string
 }
 
 func (p *params) bindStore(fs *flag.FlagSet) {
@@ -414,4 +429,65 @@ func readKey(path, flagName string) (string, error) {
 		return "", usagef("--%s: %s is empty", flagName, path)
 	}
 	return key, nil
+}
+
+// bindTracker binds the tracker: the repository commands are read from, and the
+// token that reads them.
+//
+// The token is a path for the reason the usage key is: an argument is visible
+// in `ps` and an environment variable in /proc, and the secret already arrives
+// as a file from sops or systemd's LoadCredential.
+func (p *params) bindTracker(fs *flag.FlagSet) {
+	fs.StringVar(&p.repo, "repo", "", "repository commands are read from, owner/name (AFK_REPO)")
+	fs.StringVar(&p.trackerKey, "tracker-key", "", "file holding the GitHub token (AFK_TRACKER_KEY)")
+}
+
+// tracker is the tracker client, or nil if no repository is configured.
+//
+// A repository with no token is refused rather than read anonymously. Intake
+// has to know the agent's own login to tell its comments and its claims from
+// anyone else's, and only an authenticated request can say whose that is.
+func (p *params) tracker() (*github.Client, error) {
+	repo := optional(p.repo, "AFK_REPO")
+	key := optional(p.trackerKey, "AFK_TRACKER_KEY")
+
+	if repo == "" {
+		if key != "" {
+			return nil, usagef("--tracker-key needs --repo: there is no repository to read")
+		}
+		return nil, nil
+	}
+	if owner, name, ok := strings.Cut(repo, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return nil, usagef("--repo: %q is not owner/name", repo)
+	}
+	if key == "" {
+		return nil, usagef("--repo needs --tracker-key: intake reads the agent's own login, which takes a token")
+	}
+	token, err := readKey(key, "tracker-key")
+	if err != nil {
+		return nil, err
+	}
+	return &github.Client{Repo: repo, Token: token}, nil
+}
+
+// intake is command intake over the configured tracker, or nil if there is no
+// tracker. It asks the tracker who the agent is, once, rather than on every
+// pass.
+func (p *params) intake(ctx context.Context, st store.Store, holder string, lease time.Duration) (*intake.Intake, error) {
+	client, err := p.tracker()
+	if err != nil || client == nil {
+		return nil, err
+	}
+	login, err := client.Login(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the agent's own login: %w", err)
+	}
+	return &intake.Intake{
+		Tracker:  client,
+		Store:    st,
+		Commands: commands(),
+		Login:    login,
+		Holder:   holder,
+		LeaseTTL: lease,
+	}, nil
 }
