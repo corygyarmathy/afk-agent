@@ -40,6 +40,10 @@ _Avoid_: Ledger, estimate, quota, usage tracking
 Whether the worker pool may start a new job now, decided from a budget observation. Not a gate: a gate is a check one job must pass on its way through the state machine, and admission is about work starting at all. It never interrupts a job already in flight, and it never applies to a hand-invocation.
 _Avoid_: Throttle, gate, rate limiting
 
+**Waiver**:
+An operator's permission for work to continue through one spent budget window, until that window next resets. Spends the pay-as-you-go balance, and is never granted by the agent itself.
+_Avoid_: Override, bypass, failover
+
 **Command**:
 An instruction from a human to the agent, issued as a pull request comment (`/review`, `/revise`). The only imperative channel: every request for the agent to _do_ something is a command. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which is how work enters the queue at all and which the agent reads.
 _Avoid_: Trigger, directive
