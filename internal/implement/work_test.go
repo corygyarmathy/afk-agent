@@ -151,7 +151,7 @@ func (f *fixture) drive() []error {
 			errs = append(errs, err)
 		}
 		job = f.now()
-		if job.NextRunAt.IsZero() || job.State == implement.Deferred {
+		if job.NextRunAt.IsZero() || job.State == implement.Deferred || job.NextRunAt.After(f.at) {
 			return errs
 		}
 	}

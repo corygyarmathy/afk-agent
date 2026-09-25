@@ -1,8 +1,8 @@
 // Package implement is the implement job kind's transitions: an issue becomes a
 // pull request, for a human to review and merge (#40).
 //
-// The claim (#49), the work (#50) and the push (#51) are here. The CI watch and
-// the review follow as their own transitions (#52, #53):
+// The claim (#49), the work (#50), the push (#51) and the CI watch (#52) are
+// here. The review follows as its own transitions (#53):
 //
 //	start        --implement-------->  implementing  claim every unanswered command
 //	implementing --implement-run---->  gating        one candidate model, in the workspace
@@ -14,6 +14,10 @@
 //	opening      --implement-open--->  watching      the push is on the remote, and so is the pull request
 //	                                   opening       the pull request, under the next key
 //	                                   pushing       the push is not on the remote: again
+//	watching     --implement-watch-->  reviewing     CI is green on the pushed head
+//	                                   watching      not finished: again after the CI wait
+//	                                   implementing  red: back to the session, with what CI said
+//	                                   start         out of rounds, or past the ceiling: hand-back on the pull request
 //	deferred     --implement-resume->  implementing  the tier again, from its first model
 //
 // The claim is its own transition for the reason review's is: it is committed
@@ -59,9 +63,11 @@ const (
 	Pushing = "pushing"
 	Opening = "opening"
 
-	// Watching is where CI is watched. No transition runs from it until
-	// #52, so a job that reaches it parks.
 	Watching = "watching"
+
+	// Reviewing is where the review is asked for and waited on. No
+	// transition runs from it until #53, so a job that reaches it parks.
+	Reviewing = "reviewing"
 )
 
 // Word is the command that asks for an issue to be implemented.
@@ -77,6 +83,7 @@ type Tracker interface {
 	React(ctx context.Context, commentID int64, content string) error
 	Label(ctx context.Context, number int, label string) error
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
+	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 }
 
 // Model runs one model. opencode.Command is one.
@@ -122,6 +129,14 @@ type Deps struct {
 	// HandBackLabel is the label a hand-back applies. A parameter.
 	HandBackLabel string
 
+	// CIWait is how long a head whose checks are not finished waits before
+	// it is looked at again, CICeiling how long after its push they may
+	// take before the work is handed back, and CIRounds how many times a
+	// red run is sent back to the session. Parameters.
+	CIWait    time.Duration
+	CICeiling time.Duration
+	CIRounds  int
+
 	// Denylist is the paths the agent may never push, as globs (see
 	// denied). A parameter.
 	Denylist []string
@@ -147,6 +162,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "implement-gate", Kind: store.KindImplement, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
 		{Name: "implement-push", Kind: store.KindImplement, From: Pushing, Run: d.pushTransition},
 		{Name: "implement-open", Kind: store.KindImplement, From: Opening, Run: d.openPR},
+		{Name: "implement-watch", Kind: store.KindImplement, From: Watching, Run: d.watch},
 		{Name: "implement-resume", Kind: store.KindImplement, From: Deferred, Run: d.resume},
 	}
 }

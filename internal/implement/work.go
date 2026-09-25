@@ -78,6 +78,12 @@ type progress struct {
 	// until the first push is seen, when the branch must not exist yet.
 	Pushed string `json:"pushed,omitempty"`
 
+	// PushedAt is when that push was seen, which the CI ceiling runs from.
+	PushedAt time.Time `json:"pushed_at,omitzero"`
+
+	// Rounds is how many times CI has sent the work back to the session.
+	Rounds int `json:"rounds,omitempty"`
+
 	// Session is the opencode session that wrote the branch's commits, to
 	// continue with a failure. Empty until a run succeeds.
 	Session string `json:"session,omitempty"`
@@ -229,7 +235,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if dirty, err := uncommitted(ctx, ws); err != nil {
 		return transition.Result{}, err
 	} else if dirty != "" {
-		why = "The session left changes to tracked files uncommitted, and the gate reads commits."
+		why = fmt.Sprintf("The local gate, `%s`, was not run: the session left changes to tracked files uncommitted, and the gate reads commits.", d.Gate)
 		failure = "git status --porcelain --untracked-files=no:\n" + dirty + "\n"
 	} else {
 		// Untracked files go before the gate runs rather than fail it
@@ -250,13 +256,13 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 			}
 			return transition.Result{State: Pushing, RunAt: in.Now}, nil
 		}
-		why, failure = "It exited non-zero.", output
+		why, failure = fmt.Sprintf("The local gate, `%s`, failed on the work: it exited non-zero.", d.Gate), output
 	}
 
 	p.Attempts++
 	p.Failure, p.Why = failure, why
 	if p.Attempts >= d.Attempts {
-		return d.handBack(in, p, fmt.Sprintf("The local gate, `%s`, still failed after %d attempts. %s", d.Gate, p.Attempts, why), failure)
+		return d.handBack(in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, why), failure)
 	}
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
@@ -279,14 +285,8 @@ func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, e
 // workspace that fails again says so again.
 func (d *Deps) handBack(in transition.In, p progress, reason, output string) (transition.Result, error) {
 	n := in.Job.Subject.Number
-	var b strings.Builder
-	fmt.Fprintf(&b, "<!-- afk:hand-back issue=%d branch=%s -->\n", n, p.Branch)
-	fmt.Fprintf(&b, "I stopped without opening a pull request. %s\n", reason)
-	if output = strings.TrimSpace(tail(output, handBackTail)); output != "" {
-		fmt.Fprintf(&b, "\nThe end of the last output:\n\n````\n%s\n````\n", output)
-	}
-	fmt.Fprintf(&b, "\nNothing was pushed. Reshape the issue and `%s` again, or take it by hand.\n", Word)
-	body := b.String()
+	body := handBackBody(n, p, "I stopped without opening a pull request. "+reason, output,
+		fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word))
 
 	effects := []transition.Effect{
 		{
@@ -308,6 +308,19 @@ func (d *Deps) handBack(in transition.In, p progress, reason, output string) (tr
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Start, Effects: effects}, nil
+}
+
+// handBackBody is a hand-back comment: what stopped, the end of the output
+// that said so, and what a human can do next.
+func handBackBody(n int, p progress, stopped, output, next string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<!-- afk:hand-back issue=%d branch=%s -->\n", n, p.Branch)
+	fmt.Fprintf(&b, "%s\n", stopped)
+	if output = strings.TrimSpace(tail(output, handBackTail)); output != "" {
+		fmt.Fprintf(&b, "\nThe end of the last output:\n\n````\n%s\n````\n", output)
+	}
+	fmt.Fprintf(&b, "\n%s\n", next)
+	return b.String()
 }
 
 // workspace is the job's workspace and its progress, made afresh unless both

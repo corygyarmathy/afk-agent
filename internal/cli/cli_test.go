@@ -689,7 +689,7 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_DENYLIST",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
 		t.Setenv(env, "")
 	}
@@ -706,6 +706,9 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		implementTier: "build",
 		handBackLabel: "needs-decision",
 		denylist:      ".github/**, flake.lock",
+		ciWait:        "5m",
+		ciCeiling:     "2h",
+		ciRounds:      "2",
 	}
 
 	d, err := implementDeps(context.Background(), full, nil, tr)
@@ -717,6 +720,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
+		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIRounds != 2 ||
 		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
 	}
@@ -735,6 +739,9 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.implementTier = "" }, "--implement-tier is required"},
 		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
 		{func(p *params) { p.denylist = "" }, "--denylist is required"},
+		{func(p *params) { p.ciWait = "" }, "--ci-wait is required"},
+		{func(p *params) { p.ciCeiling = "soon" }, "--ci-ceiling"},
+		{func(p *params) { p.ciRounds = "0" }, "--ci-rounds"},
 		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 	} {
 		p := full
@@ -832,6 +839,9 @@ func (closedTracker) Comment(context.Context, int, string) (github.Comment, erro
 }
 func (closedTracker) React(context.Context, int64, string) error { return nil }
 func (closedTracker) Label(context.Context, int, string) error   { return nil }
+func (closedTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
+	return nil, nil
+}
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }

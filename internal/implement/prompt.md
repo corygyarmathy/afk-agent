@@ -13,8 +13,8 @@ disagree, the instructions are the more recent word.
 {{- if .Failed}}
 
 This is not the first attempt. An earlier session worked on this branch, and
-its commits are still on it. When it finished, the local gate failed. The
-gate's output is in `.git/afk-gate.log`. Read it first, and make the gate pass.
+its commits are still on it. Then a check failed: {{.Why}} The output is in
+`.git/afk-gate.log`. Read it first, and fix the cause.
 {{- end}}
 
 This workspace is not the one the skill expects, in three ways:

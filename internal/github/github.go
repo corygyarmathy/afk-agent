@@ -274,6 +274,63 @@ func (c *Client) React(ctx context.Context, commentID int64, content string) err
 	return c.postJSON(ctx, u, map[string]string{"content": content}, nil)
 }
 
+// CheckRun is one check on a commit, as the Checks API reports it: a CI job,
+// usually.
+type CheckRun struct {
+	Name string
+
+	// Status is `queued`, `in_progress` or `completed` (among others the
+	// API adds for pending states); only a completed run has a Conclusion.
+	Status string
+
+	// Conclusion is `success`, `failure`, `neutral`, `cancelled`,
+	// `skipped`, `timed_out`, `action_required` and so on.
+	Conclusion string
+
+	// URL is the run's page, for a human.
+	URL string
+
+	// Title, Summary and Text are the run's output, as the check wrote
+	// it. Any may be empty.
+	Title, Summary, Text string
+}
+
+// CheckRuns lists every check run on a commit, to the last page.
+func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) {
+	u, err := c.repoURL("/commits/%s/check-runs?per_page=%d", sha, perPage)
+	if err != nil {
+		return nil, err
+	}
+	var out []CheckRun
+	for u != "" {
+		var page struct {
+			CheckRuns []struct {
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HTMLURL    string `json:"html_url"`
+				Output     struct {
+					Title   string `json:"title"`
+					Summary string `json:"summary"`
+					Text    string `json:"text"`
+				} `json:"output"`
+			} `json:"check_runs"`
+		}
+		next, err := c.getJSON(ctx, u, &page)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range page.CheckRuns {
+			out = append(out, CheckRun{
+				Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL,
+				Title: r.Output.Title, Summary: r.Output.Summary, Text: r.Output.Text,
+			})
+		}
+		u = next
+	}
+	return out, nil
+}
+
 // NewPullRequest is a pull request to open: from the branch Head into Base.
 type NewPullRequest struct {
 	Title string
