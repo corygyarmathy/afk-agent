@@ -1,7 +1,7 @@
 // Package intake is how a command enters the store.
 //
-// A pass reads the open pull requests for command comments nobody has answered,
-// and makes a job due for each (ADR 0001 §14). It keeps nothing of its own about
+// A pass reads the open issues and pull requests for command comments nobody
+// has answered, and makes a job due for each (ADR 0001 §14). It keeps nothing of its own about
 // which commands exist: the queue is re-derived from the tracker on every pass
 // (ADR 0001 §5), and the store only deduplicates.
 //
@@ -36,16 +36,25 @@ var writers = map[string]bool{"OWNER": true, "MEMBER": true, "COLLABORATOR": tru
 
 // Tracker is what a pass reads. *github.Client is one; a test's is a fixture.
 type Tracker interface {
-	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
+	// OpenIssues is every open issue and pull request, from one listing.
+	OpenIssues(ctx context.Context) ([]github.Issue, error)
 	Comments(ctx context.Context, number int) ([]github.Comment, error)
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
 }
 
 // Command is one entry in the command registry: the word a comment starts
-// with, the job kind it asks for, and the state a job of that kind starts in.
-// Adding a command is an entry and a kind, not a change here (ADR 0001 §14).
+// with, the kind of subject it is issued on, the job kind it asks for, and the
+// state a job of that kind starts in. Adding a command is an entry and a kind,
+// not a change here (ADR 0001 §14).
 type Command struct {
-	Word  string
+	Word string
+
+	// On is the kind of subject the command is issued on: `/implement` on an
+	// issue, `/review` on a pull request. The same word on the other kind is
+	// not this command, and is ignored the way any comment that is not a
+	// command is.
+	On store.SubjectType
+
 	Kind  store.Kind
 	Start string
 }
@@ -77,43 +86,46 @@ func Key(commentID int64) string {
 
 // Pass reads the tracker once and returns the jobs it made due.
 //
-// A pull request that cannot be read does not stop the rest: its error is
-// returned alongside whatever the pass did manage, and the next pass tries it
-// again. Making a job due is all a pass does. Whether that job starts is
+// A subject that cannot be read does not stop the rest: its error is returned
+// alongside whatever the pass did manage, and the next pass tries it again. Making a job due is all a pass does. Whether that job starts is
 // admission's decision (ADR 0001 §11), and a pass never runs anything.
 func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
-	prs, err := in.Tracker.OpenPullRequests(ctx)
+	open, err := in.Tracker.OpenIssues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing open pull requests: %w", err)
+		return nil, fmt.Errorf("listing open issues: %w", err)
 	}
 
 	var (
 		made []store.Job
 		errs []error
 	)
-	for _, pr := range prs {
-		jobs, err := in.pullRequest(ctx, pr.Number)
+	for _, is := range open {
+		subject := store.Subject{Type: store.SubjectIssue, Number: is.Number}
+		name := "issue"
+		if is.PullRequest {
+			subject.Type, name = store.SubjectPR, "pull request"
+		}
+		jobs, err := in.subject(ctx, subject)
 		made = append(made, jobs...)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("pull request %d: %w", pr.Number, err))
+			errs = append(errs, fmt.Errorf("%s %d: %w", name, is.Number, err))
 		}
 	}
 	return made, errors.Join(errs...)
 }
 
-func (in *Intake) pullRequest(ctx context.Context, number int) ([]store.Job, error) {
-	comments, err := in.Tracker.Comments(ctx, number)
+func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.Job, error) {
+	comments, err := in.Tracker.Comments(ctx, subject.Number)
 	if err != nil {
 		return nil, err
 	}
-	subject := store.Subject{Type: store.SubjectPR, Number: number}
 
 	var made []store.Job
 	for _, c := range comments {
-		cmd, ok := in.command(c)
+		cmd, ok := in.command(c, subject.Type)
 		if !ok {
 			continue
 		}
@@ -144,11 +156,11 @@ func (in *Intake) pullRequest(ctx context.Context, number int) ([]store.Job, err
 }
 
 // command reports whether a comment is a command this intake answers: written
-// by an account with write access that is not the agent's, and starting with a
-// registered word.
-func (in *Intake) command(c github.Comment) (Command, bool) {
+// by an account with write access that is not the agent's, on the kind of
+// subject a registered command is issued on, and starting with its word.
+func (in *Intake) command(c github.Comment, on store.SubjectType) (Command, bool) {
 	for _, cmd := range in.Commands {
-		if IsCommand(c, in.Login, cmd.Word) {
+		if cmd.On == on && IsCommand(c, in.Login, cmd.Word) {
 			return cmd, true
 		}
 	}
@@ -241,6 +253,8 @@ func (in *Intake) validate() error {
 		switch {
 		case !strings.HasPrefix(cmd.Word, "/") || strings.ContainsAny(cmd.Word, " \t\n"):
 			return fmt.Errorf("command %q is not a single word starting with /", cmd.Word)
+		case !cmd.On.Valid():
+			return fmt.Errorf("command %s: unknown subject type %q", cmd.Word, cmd.On)
 		case !cmd.Kind.Valid():
 			return fmt.Errorf("command %s: unknown job kind %q", cmd.Word, cmd.Kind)
 		case cmd.Start == "":

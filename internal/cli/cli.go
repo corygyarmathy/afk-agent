@@ -201,6 +201,7 @@ func runCmd(args []string, stdout io.Writer) error {
 	p.bindTracker(fs)
 	p.bindModel(fs)
 	p.bindBudget(fs)
+	p.bindImplement(fs)
 
 	// The transition name is positional and comes first, so that the flags
 	// after it read as arguments to it rather than to the binary.
@@ -248,7 +249,7 @@ func runCmd(args []string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	deps, err := reviewDeps(ctx, p, st, tr)
+	deps, err := kindDeps(ctx, t.Kind, p, st, tr)
 	if err != nil {
 		return err
 	}
@@ -284,6 +285,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindNotify(fs)
 	p.bindModel(fs)
 	p.bindTracker(fs)
+	p.bindImplement(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return errUsage{err}
@@ -339,11 +341,16 @@ func workCmd(args []string, stderr io.Writer) error {
 		Log:       func(msg string) { fmt.Fprintln(stderr, msg) },
 	}
 
-	deps, err := reviewDeps(ctx, p, st, tr)
-	if err != nil {
+	kinds := &deps{}
+	if kinds.review, err = reviewDeps(ctx, p, st, tr); err != nil {
 		return err
 	}
-	d.Registry = catalogue(deps)
+	if optional(p.branchPrefix, "AFK_BRANCH_PREFIX") == "" {
+		fmt.Fprintln(stderr, "afk work: no --branch-prefix, so implement jobs park rather than run")
+	} else if kinds.implement, err = implementDeps(ctx, p, tr); err != nil {
+		return err
+	}
+	d.Registry = catalogue(kinds)
 
 	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL)
 	if err != nil {

@@ -72,6 +72,12 @@ Model choice, for afk run and afk work:
   --tier-wait <dur>     AFK_TIER_WAIT       how long an exhausted tier defers  (required)
   --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
 
+Implementing an issue, for afk run and afk work:
+
+  --branch-prefix <p>   AFK_BRANCH_PREFIX  begins every branch the agent pushes
+                                           (required to implement; without it
+                                           afk work parks implement jobs)
+
 The tracker, for afk intake, afk run and afk work:
 
   --repo <owner/name>   AFK_REPO          repository commands are read from
@@ -115,6 +121,8 @@ type params struct {
 	repo   string
 	appID  string
 	appKey string
+
+	branchPrefix string
 
 	opencode      string
 	enrolment     string
@@ -560,6 +568,11 @@ func (p *params) bindModel(fs *flag.FlagSet) {
 	fs.StringVar(&p.reviewNeeds, "review-needs", "", "capabilities a review requires, comma-separated (AFK_REVIEW_NEEDS)")
 	fs.StringVar(&p.modelAttempts, "model-attempts", "", "candidates tried before a tier is exhausted (AFK_MODEL_ATTEMPTS)")
 	fs.StringVar(&p.tierWait, "tier-wait", "", "how long an exhausted tier defers (AFK_TIER_WAIT)")
+}
+
+// bindImplement binds what implementing an issue needs beyond the tracker.
+func (p *params) bindImplement(fs *flag.FlagSet) {
+	fs.StringVar(&p.branchPrefix, "branch-prefix", "", "begins every branch the agent pushes (AFK_BRANCH_PREFIX)")
 }
 
 // modelParams is model choice, resolved.
