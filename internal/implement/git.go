@@ -17,7 +17,8 @@ import (
 // The branch is `<prefix><n>-<k>`, where k is the first number with no branch
 // of that name on the remote. A branch the agent has already pushed is never
 // reused: the push that made it is on the remote, so its k is taken, and the
-// work goes on a new one instead of over it (dotfiles ADR 0007 §4).
+// work goes on a new one instead of over it. A lease lets the agent rewrite
+// a push it saw land in this run, not one a run before it made.
 //
 // The clone sends no credentials. Pushing is the only thing that needs them,
 // and it is not done here.
@@ -96,13 +97,22 @@ func touched(ctx context.Context, dir, base, head string) ([]string, error) {
 	return paths, nil
 }
 
-// push sends head to the remote's branch from the relay: a plain push, never a
-// force-push (dotfiles ADR 0007 §4). The token travels in the environment of
-// this one process, as an HTTP header scoped to the remote's URL, and is never
-// written to a file.
-func push(ctx context.Context, relayDir, remote, head, branch, token string) error {
+// push sends head to the remote's branch from the relay, leased on lease: the
+// commit the agent last saw its own push land at, or empty for a branch that
+// must not exist yet (ADR 0001, the amendment of 2026-09-25).
+//
+// A session may amend or rebase commits the agent already pushed, and a plain
+// push would then be refused as not a fast-forward - a job stalled on how a
+// model chose to fix something. The lease lets the agent rewrite its own
+// push and nothing else: if anyone else has pushed to the branch since, the
+// remote is not at lease, and the push is refused.
+//
+// The token travels in the environment of this one process, as an HTTP header
+// scoped to the remote's URL, and is never written to a file.
+func push(ctx context.Context, relayDir, remote, head, branch, lease, token string) error {
+	ref := "refs/heads/" + branch
 	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null",
-		"push", "--quiet", "--no-verify", remote, head+":refs/heads/"+branch)
+		"push", "--quiet", "--no-verify", "--force-with-lease="+ref+":"+lease, remote, head+":"+ref)
 	cmd.Dir = relayDir
 	cmd.Env = append(cmd.Environ(), pushEnv(remote, token)...)
 	out, err := cmd.CombinedOutput()

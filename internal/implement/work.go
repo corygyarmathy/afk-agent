@@ -73,6 +73,11 @@ type progress struct {
 	// denylist, and what the remote's branch must be at once it lands.
 	Head string `json:"head,omitempty"`
 
+	// Pushed is the commit the agent last saw its own push land at on the
+	// remote's branch, and the lease every later push is pinned to. Empty
+	// until the first push is seen, when the branch must not exist yet.
+	Pushed string `json:"pushed,omitempty"`
+
 	// Session is the opencode session that wrote the branch's commits, to
 	// continue with a failure. Empty until a run succeeds.
 	Session string `json:"session,omitempty"`

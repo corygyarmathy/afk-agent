@@ -57,7 +57,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		if err != nil {
 			return err
 		}
-		return push(ctx, relayDir, d.Remote, head, p.Branch, token)
+		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed, token)
 	}}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
@@ -75,8 +75,9 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		// The state directory lost it. The tracker still says whether the
 		// pull request was opened, and if it was, the work goes on from
 		// there. If it was not, the work starts over on the next free
-		// branch: one the push may have made is left where it is, never
-		// pushed over (dotfiles ADR 0007 §4).
+		// branch. One the push may have made is left where it is: with
+		// the progress went the lease, and without it the agent cannot
+		// tell its own push from anyone else's.
 		if _, ok, err := d.open(ctx, n); err != nil {
 			return transition.Result{}, err
 		} else if ok {
@@ -93,6 +94,13 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	}
 	if at != p.Head {
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
+	}
+	if p.Pushed != at {
+		// Seen on the remote: the lease the next push is pinned to.
+		p.Pushed = at
+		if err := d.save(in.Job.ID, p); err != nil {
+			return transition.Result{}, err
+		}
 	}
 
 	if _, ok, err := d.pullRequestFrom(ctx, p.Branch); err != nil {
