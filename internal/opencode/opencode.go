@@ -5,8 +5,10 @@
 //
 // It is the seam between a resolved model and the work it does (ADR 0001 §9,
 // §10). The resolver chooses a candidate; this runs it, as `opencode run` in a
-// process of its own. A new process is a new session, which is how a review
-// gets a fresh context by construction rather than by care.
+// process of its own. A run with no session is a new session, which is how a
+// review gets a fresh context by construction rather than by care. A run that
+// names one continues it, which is how a retry sees what it is retrying
+// against (dotfiles ADR 0004 §6).
 //
 // It does not choose, retry or make a workspace. Which model to try next is
 // model.Candidates.Attempt's decision, and the directory is the caller's. What
@@ -19,6 +21,8 @@
 //     all arrive that way and are not distinguishable through the harness -
 //     an unknown model's event reads "Unexpected server error" - so they are
 //     not distinguished. The caller retries at the next enrolled model.
+//   - A SessionGoneError is a run that named a session opencode does not have
+//   - deleted, or lost with its data directory. The caller starts a new one.
 //   - A FatalError is a failure this process can see for itself: the binary
 //     cannot be run, the workspace is not a directory, or what came back is
 //     not an event stream at all. Another model would fail the same way.
@@ -66,6 +70,9 @@ type Request struct {
 	// Prompt is the message. It may not begin with "-", which the command
 	// line would read as a flag.
 	Prompt string
+
+	// Session is the session to continue, or empty for a new one.
+	Session string
 }
 
 // Reply is what a run that succeeded wrote, and what it cost.
@@ -78,6 +85,9 @@ type Reply struct {
 	// Cost is the run's cost in dollars, as opencode reports it. It informs;
 	// it decides nothing (ADR 0001 §11).
 	Cost float64
+
+	// Session is the session the run was in, to continue it later.
+	Session string
 
 	Tokens Tokens
 }
@@ -97,6 +107,21 @@ type TransientError struct {
 func (e *TransientError) Error() string { return fmt.Sprintf("%s: %v", e.Model, e.Err) }
 func (e *TransientError) Unwrap() error { return e.Err }
 
+// SessionGoneError is a run that asked to continue a session opencode does not
+// have. Nothing ran.
+type SessionGoneError struct{ Session string }
+
+func (e *SessionGoneError) Error() string {
+	return fmt.Sprintf("opencode has no session %s", e.Session)
+}
+
+// sessionGone is what opencode writes to stderr for a session it does not
+// have, exiting 1 with nothing on stdout. Seen from opencode 1.18.31. A
+// release that words it differently turns this into a TransientError, which
+// retries the session at each candidate and then defers: slower, and loud,
+// rather than wrong.
+const sessionGone = "Session not found"
+
 // FatalError is a run that could not have succeeded on any model.
 type FatalError struct{ Err error }
 
@@ -114,8 +139,11 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		return Reply{}, &FatalError{err}
 	}
 
-	cmd := exec.CommandContext(ctx, c.Path,
-		"run", "--model", req.Model.String(), "--dir", req.Dir, "--format", "json", req.Prompt)
+	args := []string{"run", "--model", req.Model.String(), "--dir", req.Dir, "--format", "json"}
+	if req.Session != "" {
+		args = append(args, "--session", req.Session)
+	}
+	cmd := exec.CommandContext(ctx, c.Path, append(args, req.Prompt)...)
 	cmd.Dir = req.Dir
 
 	// Stdin is the null device, and must be. opencode reads a stdin that is
@@ -160,6 +188,8 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		return Reply{}, &FatalError{fmt.Errorf("%s did not write an event stream: %w", c.Path, decodeErr)}
 	case reported != nil:
 		return Reply{}, c.transient(req, reported, &stderr)
+	case waitErr != nil && req.Session != "" && reply.Session == "" && strings.Contains(stderr.String(), sessionGone):
+		return Reply{}, &SessionGoneError{Session: req.Session}
 	case waitErr != nil:
 		return Reply{}, c.transient(req, waitErr, &stderr)
 	case strings.TrimSpace(reply.Text) == "":
@@ -200,8 +230,9 @@ func (c Command) transient(req Request, err error, stderr *tail) error {
 // package reads; testdata/ holds streams recorded from real runs, so a change
 // upstream shows up as a failing test rather than as a silently empty reply.
 type event struct {
-	Type string `json:"type"`
-	Part struct {
+	Type    string `json:"type"`
+	Session string `json:"sessionID"`
+	Part    struct {
 		Text   string  `json:"text"`
 		Cost   float64 `json:"cost"`
 		Tokens *struct {
@@ -248,6 +279,9 @@ func decode(r io.Reader) (Reply, error, error) {
 		}
 		if ev.Type == "" {
 			return reply, reported, fmt.Errorf("line %q has no event type", truncate(line))
+		}
+		if reply.Session == "" {
+			reply.Session = ev.Session
 		}
 		switch ev.Type {
 		case "step_start":

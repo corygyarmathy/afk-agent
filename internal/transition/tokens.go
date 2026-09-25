@@ -6,6 +6,11 @@ import (
 	"sort"
 )
 
+// HeavyBuild is the resource token a transition that builds or tests holds
+// (CONTEXT.md: resource token). The name is vocabulary, and the capacity is a
+// parameter: `--token heavy-build=<n>`.
+const HeavyBuild = "heavy-build"
+
 // Pool issues resource tokens: named, capacity-limited permits a transition
 // must hold to run (CONTEXT.md: resource token).
 //
