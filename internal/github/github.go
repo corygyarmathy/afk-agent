@@ -274,6 +274,17 @@ func (c *Client) React(ctx context.Context, commentID int64, content string) err
 	return c.postJSON(ctx, u, map[string]string{"content": content}, nil)
 }
 
+// Label adds a label to an issue or a pull request. Adding a label it already
+// has is not an error, and a label the repository does not have yet is
+// created.
+func (c *Client) Label(ctx context.Context, number int, label string) error {
+	u, err := c.repoURL("/issues/%d/labels", number)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, u, map[string][]string{"labels": {label}}, nil)
+}
+
 type wirePR struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`

@@ -257,6 +257,22 @@ func TestReactAcceptsAReactionThatAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestLabelAddsTheLabel(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "POST", "/repos/o/n/issues/7/labels", "application/vnd.github+json") {
+			return
+		}
+		var in map[string][]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || fmt.Sprint(in["labels"]) != "[needs-decision]" {
+			t.Errorf("posted %v (%v), want labels [needs-decision]", in, err)
+		}
+		fmt.Fprint(w, `[{"name":"needs-decision"}]`)
+	})
+	if err := c.Label(context.Background(), 7, "needs-decision"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A failure names the endpoint and the status, and never the token: errors end
 // up in the journal, and a 401 must say the token is wrong without saying what
 // it is.

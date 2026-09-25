@@ -1,0 +1,447 @@
+package implement
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	_ "embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/model"
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
+	"github.com/corygyarmathy/afk-agent/internal/transition"
+)
+
+//go:embed prompt.md
+var promptText string
+
+//go:embed retry.md
+var retryText string
+
+var (
+	prompt = template.Must(template.New("implement").Parse(promptText))
+	retry  = template.Must(template.New("retry").Parse(retryText))
+)
+
+// gateTail is how much of the gate's output is kept for the session that has
+// to fix it. The end is the part that says what failed. Not a parameter: it
+// bounds a file the model reads, and nothing about the work depends on it.
+const gateTail = 64 << 10
+
+// handBackTail is how much of the gate's output a hand-back quotes. A comment
+// is for a human skimming it, and the workspace is gone by then.
+const handBackTail = 4 << 10
+
+// progress is how far the work in a workspace has got. It lives beside the
+// workspace in the state directory and not in the store, so the two are lost
+// together: a progress file without its workspace describes nothing, and a
+// workspace without its progress cannot be trusted (ADR 0001 §5, §6).
+type progress struct {
+	// Run names this run of the work, from the workspace being made to the
+	// job coming to rest. The branch does not: nothing pushed means its
+	// name is free again, and the next run takes it.
+	Run string `json:"run"`
+
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+
+	// Session is the opencode session that wrote the branch's commits, to
+	// continue with a failure. Empty until a run succeeds.
+	Session string `json:"session,omitempty"`
+
+	// Attempts is how many times the gate has failed on this branch.
+	Attempts int `json:"attempts"`
+
+	// Failure is what the gate said the last time it failed, and Why is
+	// its one-line summary. Both empty while the branch has not failed.
+	Failure string `json:"failure,omitempty"`
+	Why     string `json:"why,omitempty"`
+}
+
+// run is `implement-run`: one candidate model does the work in the workspace,
+// or fixes what the gate said about the work already there.
+func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
+	candidates, err := d.Resolve(ctx)
+	var limited *model.LimitedError
+	if errors.As(err, &limited) {
+		at := limited.ResetsAt
+		if at.IsZero() {
+			at = in.Now.Add(d.TierWait)
+		}
+		return transition.Result{State: Deferred, RunAt: at}, nil
+	}
+	if err != nil {
+		// A capability no enrolled model has, or a tier nobody enrolled: a
+		// configuration mistake, and a human's (ADR 0001 §10).
+		return transition.Result{}, err
+	}
+	ref, err := candidates.Attempt(in.Job.Attempts, d.Bound)
+	var exhausted *model.ExhaustedError
+	if errors.As(err, &exhausted) {
+		return transition.Result{State: Deferred, RunAt: in.Now.Add(d.TierWait)}, nil
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+
+	n := in.Job.Subject.Number
+	p, err := d.workspace(ctx, in.Job.ID, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	ws := d.workspacePath(in.Job.ID)
+	if err := d.spec(ctx, ws, n); err != nil {
+		return transition.Result{}, err
+	}
+	if p.Failure != "" {
+		if err := os.WriteFile(filepath.Join(ws, ".git", "afk-gate.log"), []byte(p.Failure), 0o644); err != nil {
+			return transition.Result{}, err
+		}
+	}
+
+	req := opencode.Request{Model: ref, Dir: ws, Session: p.Session}
+	if p.Failure == "" || p.Session == "" {
+		// Only a failure is worth continuing a session for. The first run
+		// is a new session, and so is a retry whose session was never
+		// recorded.
+		req.Session = ""
+		req.Prompt, err = d.render(prompt, n, p)
+	} else {
+		req.Prompt, err = d.render(retry, n, p)
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+
+	reply, err := d.Model.Run(ctx, req)
+	var gone *opencode.SessionGoneError
+	if errors.As(err, &gone) {
+		// The session went with opencode's data - a rebuilt host, say.
+		// The retry is weaker without it, but the job carries on, in a
+		// new session given the failure (ADR 0001 §6).
+		p.Session = ""
+		if err := d.save(in.Job.ID, p); err != nil {
+			return transition.Result{}, err
+		}
+		if req.Prompt, err = d.render(prompt, n, p); err != nil {
+			return transition.Result{}, err
+		}
+		req.Session = ""
+		reply, err = d.Model.Run(ctx, req)
+	}
+	var transient *opencode.TransientError
+	if errors.As(err, &transient) {
+		// Stay, and the attempt count moves the next run to the next
+		// candidate (ADR 0001 §10).
+		return transition.Result{State: Implementing, RunAt: in.Now}, nil
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+
+	p.Session = reply.Session
+	if err := d.save(in.Job.ID, p); err != nil {
+		return transition.Result{}, err
+	}
+	return transition.Result{State: Gating, RunAt: in.Now}, nil
+}
+
+// gate is `implement-gate`: the agent's own reading of the work, which the
+// session's word does not replace.
+func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, error) {
+	p, err := d.load(in.Job.ID)
+	ws := d.workspacePath(in.Job.ID)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !isDir(filepath.Join(ws, ".git"))) {
+		// Nothing has been pushed, so nothing is lost but a model run:
+		// the work starts over.
+		return transition.Result{State: Implementing, RunAt: in.Now}, d.clear(in.Job.ID)
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+
+	made, err := commits(ctx, ws, p.Base)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if made == 0 {
+		return d.handBack(in, p, "The session finished without committing anything, so there is nothing to push.", "")
+	}
+
+	var failure, why string
+	if dirty, err := uncommitted(ctx, ws); err != nil {
+		return transition.Result{}, err
+	} else if dirty != "" {
+		why = "The session left changes uncommitted, and the gate reads commits."
+		failure = "git status --porcelain:\n" + dirty + "\n"
+	} else {
+		passed, output, err := runGate(ctx, ws, d.Gate)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		if passed {
+			p.Failure, p.Why = "", ""
+			if err := d.save(in.Job.ID, p); err != nil {
+				return transition.Result{}, err
+			}
+			return transition.Result{State: Pushing, RunAt: in.Now}, nil
+		}
+		why, failure = "It exited non-zero.", output
+	}
+
+	p.Attempts++
+	p.Failure, p.Why = failure, why
+	if p.Attempts >= d.Attempts {
+		return d.handBack(in, p, fmt.Sprintf("The local gate, `%s`, still failed after %d attempts. %s", d.Gate, p.Attempts, why), failure)
+	}
+	if err := d.save(in.Job.ID, p); err != nil {
+		return transition.Result{}, err
+	}
+	return transition.Result{State: Implementing, RunAt: in.Now}, nil
+}
+
+// resume is `implement-resume`: the wait is over, and the tier is tried again
+// from its first model. Moving state is what clears the attempt count.
+func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, error) {
+	return transition.Result{State: Implementing, RunAt: in.Now}, nil
+}
+
+// handBack returns the issue to a human, before anything was pushed: a
+// comment saying what was tried, and the hand-back label, on the issue
+// (dotfiles ADR 0007 §2). The job comes to rest, and its workspace goes with
+// it.
+//
+// Keyed by the run, so a replay says it once and a later run that fails again
+// says so again.
+func (d *Deps) handBack(in transition.In, p progress, reason, output string) (transition.Result, error) {
+	n := in.Job.Subject.Number
+	var b strings.Builder
+	fmt.Fprintf(&b, "<!-- afk:hand-back issue=%d branch=%s -->\n", n, p.Branch)
+	fmt.Fprintf(&b, "I stopped without opening a pull request. %s\n", reason)
+	if output = strings.TrimSpace(tail(output, handBackTail)); output != "" {
+		fmt.Fprintf(&b, "\nThe end of the last output:\n\n````\n%s\n````\n", output)
+	}
+	fmt.Fprintf(&b, "\nNothing was pushed. Reshape the issue and `%s` again, or take it by hand.\n", Word)
+	body := b.String()
+
+	effects := []transition.Effect{
+		{
+			Key: fmt.Sprintf("hand-back-issue-%d-%s", n, p.Run),
+			Do: func(ctx context.Context) error {
+				_, err := d.Tracker.Comment(ctx, n, body)
+				return err
+			},
+		},
+		{
+			Key: fmt.Sprintf("hand-back-label-issue-%d-%s", n, p.Run),
+			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandBackLabel) },
+		},
+	}
+	// Before the commit rather than after it. A commit that then fails
+	// leaves the job where it was with its workspace gone, and the gate
+	// starts the work over: a model run spent, and nothing said twice.
+	if err := d.clear(in.Job.ID); err != nil {
+		return transition.Result{}, err
+	}
+	return transition.Result{State: Start, Effects: effects}, nil
+}
+
+// workspace is the job's workspace and its progress, made afresh unless both
+// are there and agree with each other.
+func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, error) {
+	ws := d.workspacePath(jobID)
+	p, err := d.load(jobID)
+	if err == nil && isDir(filepath.Join(ws, ".git")) {
+		if branch, err := branchOf(ctx, ws); err == nil && branch == p.Branch {
+			return p, nil
+		}
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return progress{}, err
+	}
+
+	// Anything else left here is from a run that did not finish, and
+	// describes nothing that was pushed.
+	if err := d.clear(jobID); err != nil {
+		return progress{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
+		return progress{}, err
+	}
+	branch, base, err := prepare(ctx, d.Remote, ws, d.BranchPrefix, n)
+	if err != nil {
+		return progress{}, err
+	}
+	run := make([]byte, 8)
+	if _, err := rand.Read(run); err != nil {
+		return progress{}, err
+	}
+	p = progress{Run: hex.EncodeToString(run), Branch: branch, Base: base}
+	return p, d.save(jobID, p)
+}
+
+// spec writes the issue, and the instructions of the command that asked for
+// it, where the prompt says they are.
+func (d *Deps) spec(ctx context.Context, ws string, n int) error {
+	is, err := d.Tracker.Issue(ctx, n)
+	if err != nil {
+		return err
+	}
+	instructions, err := d.instructions(ctx, n)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Issue #%d: %s\n\n", is.Number, is.Title)
+	if strings.TrimSpace(is.Body) == "" {
+		b.WriteString("(no description)\n")
+	} else {
+		fmt.Fprintf(&b, "%s\n", is.Body)
+	}
+	if instructions != "" {
+		fmt.Fprintf(&b, "\n# Instructions from the person who asked\n\n%s\n", instructions)
+	}
+	return os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
+}
+
+// instructions is the text after the word in the most recent `/implement` the
+// agent claimed on the issue, or empty. Read from the tracker each time rather
+// than kept in the store (ADR 0001 §5).
+func (d *Deps) instructions(ctx context.Context, n int) (string, error) {
+	comments, err := d.Tracker.Comments(ctx, n)
+	if err != nil {
+		return "", err
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		c := comments[i]
+		if !intake.IsCommand(c, d.Login, Word) {
+			continue
+		}
+		reactions, err := d.Tracker.Reactions(ctx, c.ID)
+		if err != nil {
+			return "", err
+		}
+		if intake.Claimed(reactions, d.Login) {
+			return Instructions(c), nil
+		}
+	}
+	return "", nil
+}
+
+// Instructions is what a command says after its word.
+func Instructions(c github.Comment) string {
+	body := strings.TrimSpace(c.Body)
+	_, rest, _ := strings.Cut(body, Word)
+	return strings.TrimSpace(rest)
+}
+
+func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
+	var b strings.Builder
+	err := t.Execute(&b, struct {
+		Number int
+		Branch string
+		Gate   string
+		Failed bool
+		Why    string
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why})
+	return b.String(), err
+}
+
+// runGate runs the gate command in the workspace. It reports whether the gate
+// passed, and the end of what it wrote. An error is a gate that could not be
+// run at all, which is not the work's fault.
+func runGate(ctx context.Context, dir, gate string) (bool, string, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", gate)
+	cmd.Dir = dir
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return false, "", ctx.Err()
+	case errors.As(err, &exit):
+		return false, tail(out.String(), gateTail), nil
+	case err != nil:
+		return false, "", fmt.Errorf("running the gate: %w", err)
+	}
+	return true, "", nil
+}
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
+}
+
+func (d *Deps) workspacePath(jobID string) string {
+	return filepath.Join(d.StateDir, "workspaces", jobID)
+}
+
+func (d *Deps) progressPath(jobID string) string {
+	return filepath.Join(d.StateDir, "progress", jobID+".json")
+}
+
+// clear removes a job's workspace and its progress. It refuses with no state
+// directory, where the paths would be relative to wherever the process is.
+func (d *Deps) clear(jobID string) error {
+	if d.StateDir == "" {
+		return errors.New("implement has no state directory")
+	}
+	if err := os.RemoveAll(d.workspacePath(jobID)); err != nil {
+		return err
+	}
+	if err := os.Remove(d.progressPath(jobID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// save writes the progress atomically, so a crash leaves the old file or the
+// new one and never half of one.
+func (d *Deps) save(jobID string, p progress) error {
+	path := d.progressPath(jobID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (d *Deps) load(jobID string) (progress, error) {
+	b, err := os.ReadFile(d.progressPath(jobID))
+	if err != nil {
+		return progress{}, err
+	}
+	var p progress
+	if err := json.Unmarshal(b, &p); err != nil {
+		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
+	}
+	if p.Run == "" || p.Branch == "" || p.Base == "" {
+		return progress{}, fmt.Errorf("progress of %s is incomplete", jobID)
+	}
+	return p, nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}

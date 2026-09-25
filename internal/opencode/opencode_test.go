@@ -83,9 +83,10 @@ func TestAReplyIsReadFromARecordedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := opencode.Reply{
-		Text:   "ok",
-		Cost:   0.000644486,
-		Tokens: opencode.Tokens{Input: 6367, Output: 11, Reasoning: 14, CacheRead: 1393},
+		Text:    "ok",
+		Cost:    0.000644486,
+		Session: "ses_f65d00bbeffecf7REGDTBMqK4o",
+		Tokens:  opencode.Tokens{Input: 6367, Output: 11, Reasoning: 14, CacheRead: 1393},
 	}
 	if got != want {
 		t.Errorf("got %+v\nwant %+v", got, want)
@@ -268,6 +269,54 @@ func TestTheRunIsInTheWorkspaceWithNothingOnStdin(t *testing.T) {
 	}
 	if got.Stdin != "" {
 		t.Errorf("stdin carried %q, want nothing", got.Stdin)
+	}
+}
+
+// A run that continues a session names it, before the prompt.
+func TestASessionIsContinued(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "record.json")
+	c := fake(t, "record", map[string]string{envRecord: record, envStream: fixture(t, "ok.jsonl")})
+	req := request(t)
+	req.Session = "ses_earlier"
+
+	if _, err := c.Run(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var got recorded
+	b, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{"run", "--model", ref.String(), "--dir", req.Dir, "--format", "json", "--session", "ses_earlier", req.Prompt}
+	if fmt.Sprint(got.Args) != fmt.Sprint(wantArgs) {
+		t.Errorf("args %q\nwant %q", got.Args, wantArgs)
+	}
+}
+
+// A session opencode does not have is not a model failing: another model
+// would not find it either, and the caller starts a new session instead.
+// What opencode 1.18.31 did for an unknown session: exit 1, nothing on
+// stdout, and this on stderr.
+func TestASessionThatIsGoneSaysSo(t *testing.T) {
+	env := map[string]string{envExit: "1", envStderr: "\x1b[91m\x1b[1mError: \x1b[0mSession not found\n", envStream: stream(t)}
+	c := fake(t, "replay", env)
+	req := request(t)
+	req.Session = "ses_gone"
+
+	_, err := c.Run(context.Background(), req)
+	var gone *opencode.SessionGoneError
+	if !errors.As(err, &gone) || gone.Session != "ses_gone" {
+		t.Fatalf("got %v, want a SessionGoneError naming ses_gone", err)
+	}
+
+	// Without a session asked for, the same failure is a model's.
+	_, err = c.Run(context.Background(), request(t))
+	var te *opencode.TransientError
+	if !errors.As(err, &te) {
+		t.Errorf("got %v, want a TransientError for a run that asked for no session", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -28,6 +29,8 @@ var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 type tracker struct {
 	mu          sync.Mutex
 	state       string
+	body        string
+	labels      []string
 	pullRequest bool
 	prs         []github.PullRequest
 	comments    []github.Comment
@@ -42,7 +45,7 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", PullRequest: tr.pullRequest}, nil
+	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest}, nil
 }
 
 func (tr *tracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
@@ -84,6 +87,13 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	return nil
 }
 
+func (tr *tracker) Label(_ context.Context, _ int, label string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.labels = append(tr.labels, label)
+	return nil
+}
+
 // byAgent is the comments the agent wrote.
 func (tr *tracker) byAgent() []github.Comment {
 	tr.mu.Lock()
@@ -111,24 +121,46 @@ func (tr *tracker) claims(id int64) int {
 }
 
 type fixture struct {
-	t     *testing.T
-	store store.Store
-	tr    *tracker
-	run   *transition.Runner
-	job   store.Job
+	t      *testing.T
+	store  store.Store
+	tr     *tracker
+	model  *coder
+	deps   *implement.Deps
+	remote string
+	reg    *transition.Registry
+	run    *transition.Runner
+	job    store.Job
 }
 
+// setup is an issue on a fixture tracker, a repository with one commit on a
+// local bare remote, a model that does nothing until a test says what, and a
+// gate that passes while the workspace has a file called `ok`.
 func setup(t *testing.T, tr *tracker) *fixture {
 	t.Helper()
 	s := storetest.Open(t)
-	d := &implement.Deps{Tracker: tr, Login: agent, BranchPrefix: prefix}
+	remote := bareRemote(t)
+	m := &coder{}
+	d := &implement.Deps{
+		Tracker:       tr,
+		Model:         m,
+		Login:         agent,
+		BranchPrefix:  prefix,
+		Remote:        remote,
+		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+		Bound:         2,
+		TierWait:      time.Hour,
+		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+		Attempts:      3,
+		HandBackLabel: "needs-decision",
+		StateDir:      t.TempDir(),
+	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
 	job, err := s.Ensure(context.Background(), store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: issue}, implement.Start, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &fixture{
-		t: t, store: s, tr: tr, job: job,
+		t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job,
 		run: &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return now }},
 	}
 }
