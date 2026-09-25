@@ -131,6 +131,6 @@ afk run implement-hand-off --issue 7   # -> start, not scheduled: done
 
 - A claim or a hand-back lost to a kill between its commit and its effect
   stays lost, as review's claim does. The hand-off is read back; the others
-  are not yet.
+  are not yet: [#58](https://github.com/corygyarmathy/afk-agent/issues/58).
 - What CI catches that the local gate did not is not recorded (`dotfiles`
   ADR 0007 §8).
