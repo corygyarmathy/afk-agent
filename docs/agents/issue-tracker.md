@@ -48,7 +48,8 @@ say.
 **No.** Pull requests here are the agent's output and the human's review
 surface, not a channel for incoming feature requests. A comment command on a
 pull request (`/review`, `/revise`) is an instruction about that pull request,
-which `CONTEXT.md` calls a **command**; it is not a ticket.
+which `CONTEXT.md` calls a **command**; it is not a ticket. The work itself is
+asked for on the issue that describes it (`/implement`).
 
 ## When a skill says "publish to the issue tracker"
 
