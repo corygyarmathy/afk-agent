@@ -228,6 +228,10 @@ func (ft *fileTracker) PullRequest(_ context.Context, n int) (github.PullRequest
 	return github.PullRequest{Number: n, State: "open", HeadSHA: head}, nil
 }
 
+func (ft *fileTracker) Issue(_ context.Context, n int) (github.Issue, error) {
+	return github.Issue{Number: n}, nil
+}
+
 func (ft *fileTracker) Diff(context.Context, int) (string, error) { return diff, nil }
 
 func (ft *fileTracker) Comments(context.Context, int) ([]github.Comment, error) {

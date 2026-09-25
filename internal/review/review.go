@@ -65,6 +65,7 @@ var prompt = template.Must(template.New("review").Parse(promptText))
 // Tracker is what the review reads and writes. *github.Client is one.
 type Tracker interface {
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
+	Issue(ctx context.Context, number int) (github.Issue, error)
 	Diff(ctx context.Context, number int) (string, error)
 	Comments(ctx context.Context, number int) ([]github.Comment, error)
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
@@ -217,6 +218,17 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	if err := os.WriteFile(filepath.Join(ws, ".git", "afk-pr.diff"), []byte(diff), 0o644); err != nil {
+		return transition.Result{}, err
+	}
+	pr, err := d.Tracker.PullRequest(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	spec, err := d.spec(ctx, pr)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".git", "afk-pr-spec.md"), []byte(spec), 0o644); err != nil {
 		return transition.Result{}, err
 	}
 
