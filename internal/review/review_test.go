@@ -38,6 +38,8 @@ var (
 type tracker struct {
 	mu        sync.Mutex
 	state     string
+	desc      string
+	issues    map[int]github.Issue
 	comments  []github.Comment
 	reactions map[int64][]github.Reaction
 	nextID    int64
@@ -60,7 +62,17 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head}, nil
+	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head, Title: "Reserve a job", Body: tr.desc}, nil
+}
+
+func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	is, ok := tr.issues[n]
+	if !ok {
+		return github.Issue{}, &github.StatusError{Method: "GET", URL: fmt.Sprintf("/issues/%d", n), Code: 404, Status: "404 Not Found"}
+	}
+	return is, nil
 }
 
 func (tr *tracker) Diff(context.Context, int) (string, error) { return diff, nil }
@@ -136,12 +148,15 @@ type reviewer struct {
 	answers []error
 	asked   []opencode.Request
 	diffs   []string
+	specs   []string
 }
 
 func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
 	m.asked = append(m.asked, req)
 	b, _ := os.ReadFile(filepath.Join(req.Dir, ".git", "afk-pr.diff"))
 	m.diffs = append(m.diffs, string(b))
+	b, _ = os.ReadFile(filepath.Join(req.Dir, ".git", "afk-pr-spec.md"))
+	m.specs = append(m.specs, string(b))
 	var err error
 	if i := len(m.asked) - 1; i < len(m.answers) {
 		err = m.answers[i]
@@ -275,6 +290,68 @@ func TestAReviewCommandProducesOneAdvisoryReview(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(f.deps.StateDir, "replies")); len(entries) != 0 {
 		t.Errorf("a posted reply was left in the state directory: %v", entries)
+	}
+}
+
+// The review is the reviewing-changes skill's, run in a workspace it was not
+// written for: a shallow checkout, and no credentials for the tracker. So the
+// agent reads what the skill would have fetched - the issues the pull request
+// closes - and leaves it beside the diff, verbatim.
+func TestTheModelRunsTheSkillWithTheLinkedIssueAsTheSpec(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.desc = "Reserve before running. Closes #7, fixes: #9.\n\nSee #8, and closes other/repo#5."
+	tr.issues = map[int]github.Issue{
+		7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."},
+		8: {Number: 8, Title: "Unrelated", Body: "Only mentioned in passing."},
+		9: {Number: 9, Title: "Reservations expire", Body: "A reservation lapses after its lease."},
+	}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+
+	prompt := f.model.asked[0].Prompt
+	for _, want := range []string{"reviewing-changes", ".git/afk-pr.diff", ".git/afk-pr-spec.md"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt does not name %q:\n%s", want, prompt)
+		}
+	}
+	spec := f.model.specs[0]
+	for _, want := range []string{
+		"Reserve a job", tr.desc,
+		"#7", "Jobs are reserved", "A job is reserved before it runs.",
+		"#9", "Reservations expire", "A reservation lapses after its lease.",
+	} {
+		if !strings.Contains(spec, want) {
+			t.Errorf("the spec does not contain %q:\n%s", want, spec)
+		}
+	}
+	for _, unwanted := range []string{"Only mentioned in passing.", "#5"} {
+		if strings.Contains(strings.ReplaceAll(spec, tr.desc, ""), unwanted) {
+			t.Errorf("the spec contains %q, which the pull request does not close:\n%s", unwanted, spec)
+		}
+	}
+	if i, j := strings.Index(spec, "Jobs are reserved"), strings.Index(spec, "Reservations expire"); i > j {
+		t.Errorf("the issues are not in the order the description names them:\n%s", spec)
+	}
+}
+
+// An issue the description closes that the tracker cannot find - a typo, or
+// one since deleted - is a gap in the spec, not a reason to write no review.
+func TestAClosedIssueThatIsNotThereIsNotedAndTheReviewGoesOn(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.desc = "Closes #404."
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.tr.byAgent()) != 1 {
+		t.Fatal("no review was posted")
+	}
+	if spec := f.model.specs[0]; !strings.Contains(spec, "#404") || !strings.Contains(spec, "could not be read") {
+		t.Errorf("the spec does not say #404 could not be read:\n%s", spec)
 	}
 }
 

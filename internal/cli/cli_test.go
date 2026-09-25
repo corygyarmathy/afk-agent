@@ -733,6 +733,9 @@ type closedTracker struct{}
 func (closedTracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	return github.PullRequest{Number: n, State: "closed", HeadSHA: "abc"}, nil
 }
+func (closedTracker) Issue(_ context.Context, n int) (github.Issue, error) {
+	return github.Issue{Number: n}, nil
+}
 func (closedTracker) Diff(context.Context, int) (string, error)               { return "", nil }
 func (closedTracker) Comments(context.Context, int) ([]github.Comment, error) { return nil, nil }
 func (closedTracker) Reactions(context.Context, int64) ([]github.Reaction, error) {

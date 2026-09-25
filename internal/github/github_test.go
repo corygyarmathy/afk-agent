@@ -56,10 +56,10 @@ func expect(t *testing.T, w http.ResponseWriter, r *http.Request, method, path, 
 	return ok
 }
 
-func TestPullRequestReadsItsHead(t *testing.T) {
+func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":12,"state":"open","head":{"sha":"abc123","ref":"feature"}}`)
+			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"}}`)
 		}
 	})
 
@@ -67,8 +67,40 @@ func TestPullRequestReadsItsHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123"}); pr != want {
+	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", Title: "Reserve a job", Body: "Closes #7."}
+	if pr != want {
 		t.Errorf("got %+v, want %+v", pr, want)
+	}
+}
+
+// A description nobody wrote is null on the wire, and empty here.
+func TestAPullRequestWithNoDescriptionHasAnEmptyBody(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"number":12,"state":"open","title":"t","body":null,"head":{"sha":"abc123"}}`)
+	})
+
+	pr, err := c.PullRequest(context.Background(), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Body != "" {
+		t.Errorf("body %q, want empty", pr.Body)
+	}
+}
+
+func TestIssueReadsItsTitleAndBody(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if expect(t, w, r, "GET", "/repos/o/n/issues/7", "application/vnd.github+json") {
+			fmt.Fprint(w, `{"number":7,"title":"Jobs are reserved","body":"A job is reserved before it runs.","state":"open"}`)
+		}
+	})
+
+	is, err := c.Issue(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (github.Issue{Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}); is != want {
+		t.Errorf("got %+v, want %+v", is, want)
 	}
 }
 
@@ -139,7 +171,7 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []github.PullRequest{{1, "open", "a"}, {2, "open", "b"}}
+		want := []github.PullRequest{{Number: 1, State: "open", HeadSHA: "a"}, {Number: 2, State: "open", HeadSHA: "b"}}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("got %+v, want %+v", got, want)
 		}

@@ -79,6 +79,18 @@ type PullRequest struct {
 	// HeadSHA is the commit the pull request currently points at. It is what
 	// "reviewed at that head" means.
 	HeadSHA string
+
+	// Title and Body are the pull request's description, as its author wrote
+	// it. Body is empty when there is none.
+	Title string
+	Body  string
+}
+
+// Issue is the part of an issue a review reads: what it asks for.
+type Issue struct {
+	Number int
+	Title  string
+	Body   string
 }
 
 // Comment is one comment on a pull request's conversation.
@@ -120,6 +132,22 @@ func (c *Client) PullRequest(ctx context.Context, number int) (PullRequest, erro
 		return PullRequest{}, err
 	}
 	return w.pullRequest(), nil
+}
+
+// Issue reads one issue.
+//
+// A pull request is also an issue to the API, so a number that is a pull
+// request reads as one rather than failing.
+func (c *Client) Issue(ctx context.Context, number int) (Issue, error) {
+	u, err := c.repoURL("/issues/%d", number)
+	if err != nil {
+		return Issue{}, err
+	}
+	var w wireIssue
+	if _, err := c.getJSON(ctx, u, &w); err != nil {
+		return Issue{}, err
+	}
+	return Issue{Number: w.Number, Title: w.Title, Body: w.Body}, nil
 }
 
 // OpenPullRequests lists every open pull request, to the last page.
@@ -213,13 +241,21 @@ func (c *Client) React(ctx context.Context, commentID int64, content string) err
 type wirePR struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 	Head   struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
 }
 
 func (w wirePR) pullRequest() PullRequest {
-	return PullRequest{Number: w.Number, State: w.State, HeadSHA: w.Head.SHA}
+	return PullRequest{Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, Title: w.Title, Body: w.Body}
+}
+
+type wireIssue struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 }
 
 type wireComment struct {

@@ -5,8 +5,9 @@ decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md
 §2, §5, §7, §10 and §14, and
 [ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) for how the
 agent authenticates; the spec is
-[#3](https://github.com/corygyarmathy/afk-agent/issues/3) and
-[#29](https://github.com/corygyarmathy/afk-agent/issues/29); the code is
+[#3](https://github.com/corygyarmathy/afk-agent/issues/3),
+[#29](https://github.com/corygyarmathy/afk-agent/issues/29) and
+[#44](https://github.com/corygyarmathy/afk-agent/issues/44); the code is
 [`internal/intake`](../../internal/intake) and
 [`internal/review`](../../internal/review).
 
@@ -20,10 +21,20 @@ no label.
 | transition | from | does |
 | --- | --- | --- |
 | `review` | `start` | reacts 👀 to every unanswered `/review` (the claim), then either moves to `reviewing` or, if the head already has a review, replies "Already reviewed" and rests |
-| `review-run` | `reviewing` | checks the head out into a fresh workspace and runs one enrolled model on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
+| `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
 | `review-post` | `posting` | posts the reply, under a key numbered by posting round |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
 | `review-resume` | `deferred` | tries the tier again from its first model |
+
+The review is the `reviewing-changes` skill's four-axis report. The workspace
+is not what the skill expects - a shallow checkout, and no credentials for the
+tracker - so `review-run` fetches what the skill would have: the diff into
+`.git/afk-pr.diff`, and the pull request's description and every issue it
+closes (by GitHub's closing keywords, `Closes #7`) into `.git/afk-pr-spec.md`.
+An issue it cannot find is noted there as a gap, not a failure. The prompt,
+[`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
+where those are. A pull request that closes no issue is reviewed against its
+description, and the report says so.
 
 A review is recognised on the tracker by a hidden `<!-- afk:review head=<sha> -->`
 line in the agent's comment, and a command as answered by the agent's 👀
@@ -39,9 +50,13 @@ history and never a second review of a head already reviewed.
   the review tier.
 - **The GitHub App**, `--app-id`, with its private key in the file at
   `--app-key`. It must be installed on `--repo` with permission to read pull
-  requests and write issue comments and reactions. The agent mints its own
-  installation tokens, scoped to `--repo`, and its login is the App's
+  requests and issues, and write issue comments and reactions. The agent mints
+  its own installation tokens, scoped to `--repo`, and its login is the App's
   `<slug>[bot]` account, read from GitHub at startup.
+- **The `reviewing-changes` skill**, where opencode discovers it from the
+  workspace: in the reviewed repository's own `.agents/skills/`, or in the
+  per-user skills directory under the agent's `$HOME`. The model is told to
+  reply that the skill is missing rather than review without it.
 - **The enrolment file**, at `--enrolment`: [`model-enrolment.md`](model-enrolment.md).
 
 The state directory is the directory holding `--store`. Beside the store it
