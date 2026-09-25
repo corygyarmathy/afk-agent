@@ -49,6 +49,14 @@ Parameters are excluded here by convention - counts, thresholds, intervals, tier
 
 **14. A comment command is the only imperative channel.** Commands map to job kinds through a registry, so adding one is an entry and a kind rather than a change to a pipeline. Labels are status the agent writes, with a single exception: the eligibility label on an issue, which is how work enters the queue and is a filter rather than an instruction. One imperative channel means one place where "have I already acted on this?" is answered.
 
+> **Amended 2026-09-25 (commands on issues, and the label as an opt-in; #40).** Two changes, each extending this decision rather than reversing it.
+>
+> First, a command may be a comment on an issue as well as a pull request. `/implement` is issued on the issue it implements. Every command has one shape: a verb, a subject, an author with write access, and optional instructions. It becomes a job through the registry, is claimed with a 👀 reaction on the comment, and is answered at most once. One imperative channel is still one place where "have I already acted on this?" is answered. The channel is now as wide as the tracker.
+>
+> Second, the eligibility label stops being how work enters. It becomes an opt-in to *unattended* work: something other than a human produces the same job a command would, for an issue that carries it. The label is still a filter rather than an instruction, and still the one label the agent reads. What changes is that a human can always get work started by asking, with or without it. The reason for the change: a command is the smallest thing that exercises a job kind end to end. Tying `implement` to a queue would mean `implement` could not be used until unattended running is ready, and whether it is ready is a separate question with its own risks (#24).
+>
+> A job may also be made due by another job. `implement` and `revise` make a `review` job due for the head they pushed. That job is not a command. It never comes from a comment the agent wrote, because a comment the agent wrote must never be able to instruct the agent. Its claim is a 👀 on what the job that asked for it posted.
+
 **15. Merge stays a human act, including in this repository.** Inherited from `dotfiles` ADR 0004 §9 and restated because this agent will eventually open pull requests against its own tracker. An agent that can merge to itself can break its own delivery path and then be unable to ship the fix.
 
 ## Consequences

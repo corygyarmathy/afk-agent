@@ -20,7 +20,7 @@ Two things interrupt the operator, and nothing else does (ADR 0001 §13): a job 
 
 GitHub owns what is to be done. A local store owns how it is being done - leases, attempts, scheduling, idempotency (ADR 0001 §5). Neither duplicates the other, and every outbound side-effect carries an idempotency key, which is what makes crash-anywhere-and-resume safe rather than merely survivable.
 
-Work arrives two ways: an eligibility label on an issue puts it in the queue, and a comment command (`/review`, `/revise`) asks for something specific. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
+Work starts with a command: a comment on an issue or pull request (`/implement`, `/review`, `/revise`) from an account with write access. An eligibility label on an issue opts it in to being taken unattended, with nobody asking. Labels are otherwise status the agent writes. Nothing merges on the agent's say-so.
 
 ## Building
 
