@@ -4,14 +4,14 @@
     "repo": "corygyarmathy/skills",
     "url": "https://github.com/corygyarmathy/skills.git",
     "prefix": "skills",
-    "rev": "2c304bfeac191ea7d350a74f3e12af9f95b790b1"
+    "rev": "f502ff4324a9f24612ed657ac1cc1e6f48cc7b1f"
   },
   "vendorPath": ".agents/skills",
   "linkPath": ".claude/skills",
   "skills": {
-    "code-review": {
-      "path": "skills/code-review",
-      "hash": "1d908b4c2ccf0fdfabb8ded834dc710a7c3ea5d84ae38e0d6c921ca18b913f1b"
+    "ask-cory": {
+      "path": "skills/ask-cory",
+      "hash": "06316298aa0ddc0135cf1a072dd5a9db8c1c3322a90e03c0d2401acf546850b4"
     },
     "codebase-design": {
       "path": "skills/codebase-design",
@@ -25,13 +25,89 @@
       "path": "skills/domain-modeling",
       "hash": "4f19c80e5354b4ff247d7082ea82686136a316ced34098f466ab63f04a35d28d"
     },
+    "grill-me": {
+      "path": "skills/grill-me",
+      "hash": "b776b1bb3969a1533ce01ee3cadc6d3030737596e51eb4efb1f01f60f252a237"
+    },
+    "grill-with-docs": {
+      "path": "skills/grill-with-docs",
+      "hash": "f2d15f27e05357b65ce395b0c0be1bcb76a6284490f6faa0eff429049a702cbc"
+    },
+    "grilling": {
+      "path": "skills/grilling",
+      "hash": "34a8f82bacc12e9cacfc5d95ccd06cfad88a5bd4a6f85958b5f62e05d289d11d"
+    },
+    "handoff": {
+      "path": "skills/handoff",
+      "hash": "60a12bfa0a77577d71b5bce7d56ceb61eff31b0d0b334556a7ed5ec684d3d03a"
+    },
     "implement": {
       "path": "skills/implement",
-      "hash": "e3ee162e817c7f68d4097637434f38dbb5c23051025a2545773bedd5f9aa4674"
+      "hash": "f899e170d302edb1e2760291c722e3cabccf790663162a7a7138c2a053ee2ec0"
+    },
+    "improve-codebase-architecture": {
+      "path": "skills/improve-codebase-architecture",
+      "hash": "1b23d8622f942d56f608fbcda1d7d3b9433f49211a3c6da79a672b6617600997"
+    },
+    "prototype": {
+      "path": "skills/prototype",
+      "hash": "18f15e7db495373f08e17230781edd2b110d62d3407a5dcc598af2c16c774a6b"
+    },
+    "research": {
+      "path": "skills/research",
+      "hash": "1737d1fed95cd4816674a1be78100ebfddbe6b27f6f5eb1164dfd5bfdeacf194"
+    },
+    "resolving-merge-conflicts": {
+      "path": "skills/resolving-merge-conflicts",
+      "hash": "1d85d1991edce6f4308e3bcebd0083a88400b36e214e72a78d65ce5e4f7134e1"
+    },
+    "reviewing-changes": {
+      "path": "skills/reviewing-changes",
+      "hash": "05bcb050bc0c915132fcea78566503c7678ac6c8013a86c61f419ec59b1eb1cf"
+    },
+    "setup-cory-gyarmathy-skills": {
+      "path": "skills/setup-cory-gyarmathy-skills",
+      "hash": "4d8b393ae0597252b9c4612e62c22176faad493656c308763e21a0788789bb42"
     },
     "tdd": {
       "path": "skills/tdd",
-      "hash": "26c550c905c3a0566f4bb51c171fdd3bea2cd28329fc4a6b7e2a5db4dc1afeb4"
+      "hash": "696fad52d99d59fd9bf025e9d9edf02b80b47b4b32c0f46d3c8b4522e652a7ce"
+    },
+    "teach": {
+      "path": "skills/teach",
+      "hash": "18b58ce84235aca57833214badd98447ac17e181f4afc927a329baf2a6790988"
+    },
+    "to-questionnaire": {
+      "path": "skills/to-questionnaire",
+      "hash": "60a7324aa03f56c7365dbba2e08cfba8195c3f9de434b30ec15d58c24d10adeb"
+    },
+    "to-spec": {
+      "path": "skills/to-spec",
+      "hash": "92e0120dacd961560750481046434c94b2910bb49d336fab5b5de1eeb18f6968"
+    },
+    "to-tickets": {
+      "path": "skills/to-tickets",
+      "hash": "ca2638759098e5882f5fa660142e5c570d1570a649a3ebefc5b6746039922a70"
+    },
+    "triage": {
+      "path": "skills/triage",
+      "hash": "506f662d693aef193379ec811789363f6f33b21e15376044d7ba139a1e7b2338"
+    },
+    "wait-what": {
+      "path": "skills/wait-what",
+      "hash": "885d0b4d35ab2976e173886989a9338b57f0314de827ce54ad32e7c69e642924"
+    },
+    "wayfinder": {
+      "path": "skills/wayfinder",
+      "hash": "887cfd94753f0e21ef7478291eeb336e29a63c69df0ea2969d41491a0f43f948"
+    },
+    "wizard": {
+      "path": "skills/wizard",
+      "hash": "89b177f68dd997a5d87e53b6179f02eb80ee0c2cec5c67e7d3f3248799112914"
+    },
+    "writing-for-agents": {
+      "path": "skills/writing-for-agents",
+      "hash": "ab24b43e39724a5665f582bd0d2e974c42e6d5719d92f8c7a1e5920dfd8d3646"
     }
   }
 }

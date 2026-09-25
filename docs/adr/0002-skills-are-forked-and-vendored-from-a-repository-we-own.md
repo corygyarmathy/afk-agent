@@ -83,6 +83,16 @@ the wrong thing is caught by the next `verify` rather than trusted.
 `tdd` invokes by name for the seam vocabulary) and `diagnosing-bugs`. The
 fleet-specific skills in `dotfiles` are not brought across.
 
+> **Amended 2026-09-25.** This repository now vendors every skill in
+> `corygyarmathy/skills`, not a chosen subset. Its copy has stopped being only
+> its own: `dotfiles` drops its vendored skills and links this repository's
+> into opencode's per-user skills directory on the agent's host, so what is
+> vendored here is what the agent has in every repository it works. A subset
+> chosen for this repository would be a subset chosen for all of them. The
+> choice in the first sentence of §6 stands for other consumers. `code-review`
+> is now `reviewing-changes`, renamed upstream in
+> [`corygyarmathy/skills#6`](https://github.com/corygyarmathy/skills/pull/6).
+
 ## Consequences
 
 **Positive**
