@@ -62,6 +62,17 @@ type progress struct {
 	Branch string `json:"branch"`
 	Base   string `json:"base"`
 
+	// Into is the default branch the work started from, and the one the
+	// pull request asks to merge into.
+	Into string `json:"into"`
+
+	// Summary is what the session said it did, for the pull request.
+	Summary string `json:"summary,omitempty"`
+
+	// Head is the commit the push was decided for: checked against the
+	// denylist, and what the remote's branch must be at once it lands.
+	Head string `json:"head,omitempty"`
+
 	// Session is the opencode session that wrote the branch's commits, to
 	// continue with a failure. Empty until a run succeeds.
 	Session string `json:"session,omitempty"`
@@ -170,6 +181,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	p.Session = reply.Session
+	p.Summary = strings.TrimSpace(reply.Text)
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
@@ -315,7 +327,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, er
 	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
 		return progress{}, err
 	}
-	branch, base, err := prepare(ctx, d.Remote, ws, d.BranchPrefix, n)
+	branch, base, into, err := prepare(ctx, d.Remote, ws, d.BranchPrefix, n)
 	if err != nil {
 		return progress{}, err
 	}
@@ -323,7 +335,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, er
 	if _, err := rand.Read(nonce); err != nil {
 		return progress{}, err
 	}
-	p = progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base}
+	p = progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base, Into: into}
 	return p, d.save(jobID, p)
 }
 
@@ -449,13 +461,20 @@ func (d *Deps) progressPath(jobID string) string {
 	return filepath.Join(d.StateDir, "progress", jobID+".json")
 }
 
-// clear removes a job's workspace and its progress. It refuses with no state
+func (d *Deps) relayPath(jobID string) string {
+	return filepath.Join(d.StateDir, "relays", jobID+".git")
+}
+
+// clear removes a job's workspace, its relay and its progress. It refuses with no state
 // directory, where the paths would be relative to wherever the process is.
 func (d *Deps) clear(jobID string) error {
 	if d.StateDir == "" {
 		return errors.New("implement has no state directory")
 	}
 	if err := os.RemoveAll(d.workspacePath(jobID)); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(d.relayPath(jobID)); err != nil {
 		return err
 	}
 	if err := os.Remove(d.progressPath(jobID)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -491,7 +510,7 @@ func (d *Deps) load(jobID string) (progress, error) {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
 	}
-	if p.Nonce == "" || p.Branch == "" || p.Base == "" {
+	if p.Nonce == "" || p.Branch == "" || p.Base == "" || p.Into == "" {
 		return progress{}, fmt.Errorf("progress of %s is incomplete", jobID)
 	}
 	return p, nil

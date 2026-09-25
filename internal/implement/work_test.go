@@ -173,7 +173,7 @@ func (f *fixture) remoteBranches() string {
 	return out
 }
 
-// A session that commits work the gate passes reaches the push, on a new
+// A session that commits work the gate passes goes on to the push, from a new
 // branch, with its commits in the workspace - and has been told what to do.
 func TestWorkThatPassesTheGateIsReadyToPush(t *testing.T) {
 	tr := newTracker(github.Comment{ID: 1, Login: "alice", Association: "OWNER", Body: "/implement keep it small\nand test it"})
@@ -185,8 +185,8 @@ func TestWorkThatPassesTheGateIsReadyToPush(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
 
 	ws := f.workspace()
@@ -195,9 +195,6 @@ func TestWorkThatPassesTheGateIsReadyToPush(t *testing.T) {
 	}
 	if n, _ := run(ws, "git", "rev-list", "--count", "origin/main..HEAD"); n != "1" {
 		t.Errorf("%s commits on the branch, want 1", n)
-	}
-	if b := f.remoteBranches(); b != "main" {
-		t.Errorf("the remote has %q, want only main: nothing is pushed here", b)
 	}
 
 	if len(f.model.asked) != 1 {
@@ -228,8 +225,8 @@ func TestAFailingGateGoesBackToTheSameSession(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
 	if len(f.model.asked) != 2 {
 		t.Fatalf("the model was asked %d times, want 2", len(f.model.asked))
@@ -335,8 +332,8 @@ func TestUncommittedChangesGoBackToTheSession(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
 	if !strings.Contains(f.model.asked[1].Prompt, "uncommitted") || !strings.Contains(f.model.logs[1], "M a") {
 		t.Errorf("the session was not told what was uncommitted:\n%s\n%s", f.model.asked[1].Prompt, f.model.logs[1])
@@ -357,8 +354,8 @@ func TestUntrackedLeftoversDoNotFailTheWork(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing || len(f.model.asked) != 1 {
-		t.Fatalf("job in %q after %d runs, want %q after 1", j.State, len(f.model.asked), implement.Pushing)
+	if j := f.now(); j.State != implement.Watching || len(f.model.asked) != 1 {
+		t.Fatalf("job in %q after %d runs, want %q after 1", j.State, len(f.model.asked), implement.Watching)
 	}
 	if _, err := os.Stat(filepath.Join(f.workspace(), "coverage.out")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the leftover is still in the workspace: %v", err)
@@ -379,8 +376,8 @@ func TestAnUnaddedFileFailsTheGate(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing || len(f.model.asked) != 2 {
-		t.Fatalf("job in %q after %d runs, want %q after 2", j.State, len(f.model.asked), implement.Pushing)
+	if j := f.now(); j.State != implement.Watching || len(f.model.asked) != 2 {
+		t.Fatalf("job in %q after %d runs, want %q after 2", j.State, len(f.model.asked), implement.Watching)
 	}
 	if !strings.Contains(f.model.logs[1], "FAIL: no ok") {
 		t.Errorf("the gate's output was not left for the session: %q", f.model.logs[1])
@@ -428,8 +425,8 @@ func TestAMissingSessionFallsBackToANewOneGivenTheFailure(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
 	if len(f.model.asked) != 3 {
 		t.Fatalf("the model was asked %d times, want a first run, a resume that found no session, and a new one", len(f.model.asked))
@@ -454,8 +451,8 @@ func TestALostWorkspaceStartsTheWorkOver(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing || len(f.model.asked) != 2 {
-		t.Fatalf("job in %q after %d runs, want %q after 2", j.State, len(f.model.asked), implement.Pushing)
+	if j := f.now(); j.State != implement.Watching || len(f.model.asked) != 2 {
+		t.Fatalf("job in %q after %d runs, want %q after 2", j.State, len(f.model.asked), implement.Watching)
 	}
 	if f.model.asked[1].Session != "" {
 		t.Errorf("the second run continued session %q, want a new one", f.model.asked[1].Session)
@@ -473,8 +470,8 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 	if got := []model.Ref{f.model.asked[0].Model, f.model.asked[1].Model}; got[0] != first || got[1] != second {
 		t.Errorf("tried %v, want first then second", got)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Errorf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Errorf("job in %q, want %q", j.State, implement.Watching)
 	}
 
 	g := setup(t, newTracker())
@@ -510,8 +507,8 @@ func TestATransientFailureLeavesNothingForTheNextModel(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
 	ws := f.workspace()
 	if n, _ := run(ws, "git", "rev-list", "--count", "origin/main..HEAD"); n != "1" {

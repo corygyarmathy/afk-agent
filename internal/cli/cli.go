@@ -351,7 +351,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	}
 	if optional(p.branchPrefix, "AFK_BRANCH_PREFIX") == "" {
 		fmt.Fprintln(stderr, "afk work: no --branch-prefix, so implement jobs park rather than run")
-	} else if kinds.implement, err = implementDeps(ctx, p, tr); err != nil {
+	} else if kinds.implement, err = implementDeps(ctx, p, st, tr); err != nil {
 		return err
 	}
 	d.Registry = catalogue(kinds)

@@ -51,7 +51,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 // parameters and the command's tracker.
 //
 // A variable for the reason reviewDeps is.
-var implementDeps = func(ctx context.Context, p params, tr *tracker) (*implement.Deps, error) {
+var implementDeps = func(ctx context.Context, p params, st store.Store, tr *tracker) (*implement.Deps, error) {
 	if tr == nil {
 		return nil, usagef("implement needs --repo (or set AFK_REPO)")
 	}
@@ -83,7 +83,13 @@ var implementDeps = func(ctx context.Context, p params, tr *tracker) (*implement
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
 		HandBackLabel: ip.handBackLabel,
-		StateDir:      stateDir,
+		Denylist:      ip.denylist,
+		// The installation token, minted and cached by the App the tracker
+		// uses: the push is the agent on the tracker like any other request
+		// (ADR 0005).
+		Token:    tr.app.Token,
+		Store:    st,
+		StateDir: stateDir,
 	}, nil
 }
 
@@ -148,7 +154,7 @@ func kindDeps(ctx context.Context, kind store.Kind, p params, st store.Store, tr
 	case store.KindReview:
 		d.review, err = reviewDeps(ctx, p, st, tr)
 	case store.KindImplement:
-		d.implement, err = implementDeps(ctx, p, tr)
+		d.implement, err = implementDeps(ctx, p, st, tr)
 	}
 	if err != nil {
 		return nil, err

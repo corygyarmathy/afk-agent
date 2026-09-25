@@ -27,10 +27,16 @@ var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 // tracker is one issue on a fixture tracker, and the pull requests open beside
 // it.
 type tracker struct {
-	mu          sync.Mutex
-	state       string
-	body        string
-	labels      []string
+	mu     sync.Mutex
+	state  string
+	body   string
+	labels []string
+	opened []github.NewPullRequest
+
+	// open decides what happens to a pull request the agent opens: whether
+	// it is opened, and what the call reports.
+	open        func(call int) (opens bool, err error)
+	opens       int
 	pullRequest bool
 	prs         []github.PullRequest
 	comments    []github.Comment
@@ -94,6 +100,22 @@ func (tr *tracker) Label(_ context.Context, _ int, label string) error {
 	return nil
 }
 
+func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.opens++
+	opens, err := true, error(nil)
+	if tr.open != nil {
+		opens, err = tr.open(tr.opens)
+	}
+	pr := github.PullRequest{Number: 100 + tr.opens, State: "open", HeadRef: req.Head, Login: agent, Title: req.Title, Body: req.Body}
+	if opens {
+		tr.opened = append(tr.opened, req)
+		tr.prs = append(tr.prs, pr)
+	}
+	return pr, err
+}
+
 // byAgent is the comments the agent wrote.
 func (tr *tracker) byAgent() []github.Comment {
 	tr.mu.Lock()
@@ -152,6 +174,8 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
 		HandBackLabel: "needs-decision",
+		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
+		Store:         s,
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
@@ -178,6 +202,19 @@ func (f *fixture) now() store.Job {
 		f.t.Fatal(err)
 	}
 	return job
+}
+
+// setState puts the job in state, due now, the fixture state a transition is
+// tested from.
+func (f *fixture) setState(state string) {
+	f.t.Helper()
+	ctx := context.Background()
+	if _, ok, err := f.store.Acquire(ctx, f.job.ID, "fixture", now, time.Minute); err != nil || !ok {
+		f.t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: f.job.ID, Holder: "fixture", State: state, NextRunAt: now, Release: true}); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 // restart puts the job back in start and due, the way intake re-arms it for a

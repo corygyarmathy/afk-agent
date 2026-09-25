@@ -13,6 +13,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
@@ -81,6 +82,8 @@ Implementing an issue, for afk run and afk work:
   --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
   --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
   --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies
+  --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
+                                             ** spans directories, * stays in one
 
 All but --implement-needs are required to implement, with the model choice
 parameters above; implementing also needs the heavy-build token's capacity.
@@ -135,6 +138,7 @@ type params struct {
 	implementNeeds string
 	gateAttempts   string
 	handBackLabel  string
+	denylist       string
 
 	opencode      string
 	enrolment     string
@@ -590,6 +594,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.implementTier, "implement-tier", "", "the tier implementing draws from (AFK_IMPLEMENT_TIER)")
 	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
 	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
+	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
 }
 
 // implementParams is implementing an issue, resolved, beyond model choice.
@@ -598,6 +603,7 @@ type implementParams struct {
 	gate          string
 	attempts      int
 	handBackLabel string
+	denylist      []string
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -620,6 +626,18 @@ func (p *params) implement() (implementParams, error) {
 	}
 	if ip.handBackLabel, err = required(p.handBackLabel, "hand-back-label", "AFK_HAND_BACK_LABEL"); err != nil {
 		return implementParams{}, err
+	}
+	list, err := required(p.denylist, "denylist", "AFK_DENYLIST")
+	if err != nil {
+		return implementParams{}, err
+	}
+	for _, pattern := range strings.Split(list, ",") {
+		if pattern = strings.TrimSpace(pattern); pattern != "" {
+			ip.denylist = append(ip.denylist, pattern)
+		}
+	}
+	if err := implement.ValidDenylist(ip.denylist); err != nil {
+		return implementParams{}, usagef("--denylist: %v", err)
 	}
 	return ip, nil
 }

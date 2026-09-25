@@ -1,14 +1,19 @@
 // Package implement is the implement job kind's transitions: an issue becomes a
 // pull request, for a human to review and merge (#40).
 //
-// The claim (#49) and the work (#50) are here. The push, the CI watch and the
-// review follow as their own transitions (#51-#53):
+// The claim (#49), the work (#50) and the push (#51) are here. The CI watch and
+// the review follow as their own transitions (#52, #53):
 //
 //	start        --implement-------->  implementing  claim every unanswered command
 //	implementing --implement-run---->  gating        one candidate model, in the workspace
 //	gating       --implement-gate--->  pushing       the local gate passed
 //	                                   implementing  it failed: back to the session that wrote it
 //	                                   start         hand-back on the issue, at rest
+//	pushing      --implement-push--->  opening       the denylist, then the push
+//	                                   start         a denied path: hand-back on the issue
+//	opening      --implement-open--->  watching      the push is on the remote, and so is the pull request
+//	                                   opening       the pull request, under the next key
+//	                                   pushing       the push is not on the remote: again
 //	deferred     --implement-resume->  implementing  the tier again, from its first model
 //
 // The claim is its own transition for the reason review's is: it is committed
@@ -51,9 +56,12 @@ const (
 	Gating       = "gating"
 	Deferred     = "deferred"
 
-	// Pushing is where the push starts. No transition runs from it until
-	// #51, so a job that reaches it parks.
 	Pushing = "pushing"
+	Opening = "opening"
+
+	// Watching is where CI is watched. No transition runs from it until
+	// #52, so a job that reaches it parks.
+	Watching = "watching"
 )
 
 // Word is the command that asks for an issue to be implemented.
@@ -68,6 +76,7 @@ type Tracker interface {
 	Comment(ctx context.Context, number int, body string) (github.Comment, error)
 	React(ctx context.Context, commentID int64, content string) error
 	Label(ctx context.Context, number int, label string) error
+	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
 }
 
 // Model runs one model. opencode.Command is one.
@@ -113,6 +122,18 @@ type Deps struct {
 	// HandBackLabel is the label a hand-back applies. A parameter.
 	HandBackLabel string
 
+	// Denylist is the paths the agent may never push, as globs (see
+	// denied). A parameter.
+	Denylist []string
+
+	// Token is the credential a push carries: the App's installation
+	// token. Nil pushes with none, which is a local remote in a test.
+	Token func(ctx context.Context) (string, error)
+
+	// Store is read, never written: the push and the pull request ask it
+	// which round is next. Writing is the runner's.
+	Store store.Store
+
 	// StateDir is where workspaces and their progress live - beside the
 	// store, never in it (ADR 0001 §5).
 	StateDir string
@@ -124,6 +145,8 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "implement", Kind: store.KindImplement, From: Start, Run: d.claim},
 		{Name: "implement-run", Kind: store.KindImplement, From: Implementing, Tokens: []string{transition.HeavyBuild}, Run: d.run},
 		{Name: "implement-gate", Kind: store.KindImplement, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
+		{Name: "implement-push", Kind: store.KindImplement, From: Pushing, Run: d.pushTransition},
+		{Name: "implement-open", Kind: store.KindImplement, From: Opening, Run: d.openPR},
 		{Name: "implement-resume", Kind: store.KindImplement, From: Deferred, Run: d.resume},
 	}
 }

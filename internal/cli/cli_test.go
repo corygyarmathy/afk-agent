@@ -34,7 +34,7 @@ func withCatalogue(t *testing.T, ts ...transition.Transition) {
 	catalogue = func(*deps) *transition.Registry { return reg }
 	wasReview, wasImplement := reviewDeps, implementDeps
 	reviewDeps = func(context.Context, params, store.Store, *tracker) (*review.Deps, error) { return nil, nil }
-	implementDeps = func(context.Context, params, *tracker) (*implement.Deps, error) { return nil, nil }
+	implementDeps = func(context.Context, params, store.Store, *tracker) (*implement.Deps, error) { return nil, nil }
 	t.Cleanup(func() { catalogue, reviewDeps, implementDeps = was, wasReview, wasImplement })
 }
 
@@ -689,7 +689,7 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_DENYLIST",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
 		t.Setenv(env, "")
 	}
@@ -705,9 +705,10 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		gateAttempts:  "2",
 		implementTier: "build",
 		handBackLabel: "needs-decision",
+		denylist:      ".github/**, flake.lock",
 	}
 
-	d, err := implementDeps(context.Background(), full, tr)
+	d, err := implementDeps(context.Background(), full, nil, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,11 +716,12 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		t.Errorf("deps = %+v, want the command's client and login", d)
 	}
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
+		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
 		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
 	}
 
-	if _, err := implementDeps(context.Background(), full, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
+	if _, err := implementDeps(context.Background(), full, nil, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
 		t.Errorf("err = %v, want it to name --repo", err)
 	}
 	for _, tc := range []struct {
@@ -732,10 +734,12 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.gateAttempts = "none" }, "--gate-attempts"},
 		{func(p *params) { p.implementTier = "" }, "--implement-tier is required"},
 		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
+		{func(p *params) { p.denylist = "" }, "--denylist is required"},
+		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 	} {
 		p := full
 		tc.spoil(&p)
-		if _, err := implementDeps(context.Background(), p, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, err := implementDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("err = %v, want it to contain %q", err, tc.want)
 		}
 	}
@@ -828,6 +832,9 @@ func (closedTracker) Comment(context.Context, int, string) (github.Comment, erro
 }
 func (closedTracker) React(context.Context, int64, string) error { return nil }
 func (closedTracker) Label(context.Context, int, string) error   { return nil }
+func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
+	return github.PullRequest{}, nil
+}
 
 func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
 	full := params{opencode: "/bin/opencode", enrolment: "/etc/afk/enrolment.json", reviewTier: "review", modelAttempts: "3", tierWait: "30m"}
