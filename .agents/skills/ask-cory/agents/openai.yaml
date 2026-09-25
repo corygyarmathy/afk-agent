@@ -1,0 +1,5 @@
+interface:
+  display_name: "Ask Cory"
+  short_description: "Find the right skill or workflow"
+policy:
+  allow_implicit_invocation: false
