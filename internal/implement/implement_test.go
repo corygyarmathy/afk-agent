@@ -33,6 +33,16 @@ type tracker struct {
 	labels []string
 	opened []github.NewPullRequest
 
+	// commentedOn and labelledOn are the numbers each comment and label
+	// went on, in order.
+	commentedOn []int
+	labelledOn  []int
+
+	// checks is the check runs on a commit, by the time they are asked
+	// for: none, unless a test says otherwise.
+	checks func(sha string, call int) []github.CheckRun
+	asks   int
+
 	// open decides what happens to a pull request the agent opens: whether
 	// it is opened, and what the call reports.
 	open        func(call int) (opens bool, err error)
@@ -72,9 +82,10 @@ func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, er
 	return append([]github.Reaction(nil), tr.reactions[id]...), nil
 }
 
-func (tr *tracker) Comment(_ context.Context, _ int, body string) (github.Comment, error) {
+func (tr *tracker) Comment(_ context.Context, n int, body string) (github.Comment, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.commentedOn = append(tr.commentedOn, n)
 	tr.nextID++
 	c := github.Comment{ID: tr.nextID, Login: agent, Association: "NONE", Body: body}
 	tr.comments = append(tr.comments, c)
@@ -93,11 +104,22 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	return nil
 }
 
-func (tr *tracker) Label(_ context.Context, _ int, label string) error {
+func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.labelledOn = append(tr.labelledOn, n)
 	tr.labels = append(tr.labels, label)
 	return nil
+}
+
+func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.asks++
+	if tr.checks == nil {
+		return nil, nil
+	}
+	return tr.checks(sha, tr.asks), nil
 }
 
 func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
@@ -152,6 +174,9 @@ type fixture struct {
 	reg    *transition.Registry
 	run    *transition.Runner
 	job    store.Job
+
+	// at is the time the runner sees: now, until a test moves it on.
+	at time.Time
 }
 
 // setup is an issue on a fixture tracker, a repository with one commit on a
@@ -175,6 +200,9 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Attempts:      3,
 		HandBackLabel: "needs-decision",
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
+		CIWait:        10 * time.Minute,
+		CICeiling:     2 * time.Hour,
+		CIRounds:      2,
 		Store:         s,
 		StateDir:      t.TempDir(),
 	}
@@ -183,10 +211,9 @@ func setup(t *testing.T, tr *tracker) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{
-		t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job,
-		run: &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return now }},
-	}
+	f := &fixture{t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job, at: now}
+	f.run = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
+	return f
 }
 
 // claim runs `implement` once, from start.

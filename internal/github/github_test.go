@@ -257,6 +257,35 @@ func TestReactAcceptsAReactionThatAlreadyExists(t *testing.T) {
 	}
 }
 
+// The Checks API wraps its listing in an object, and pages it like any other.
+func TestCheckRunsAreReadToTheLastPage(t *testing.T) {
+	var srvURL string
+	c, srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/commits/abc/check-runs", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `{"total_count":2,"check_runs":[{"name":"test","status":"in_progress","conclusion":null}]}`)
+			return
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/commits/abc/check-runs?page=2>; rel="next"`, srvURL))
+		fmt.Fprint(w, `{"total_count":2,"check_runs":[{"name":"build","status":"completed","conclusion":"failure","html_url":"https://github.com/o/n/runs/1","output":{"title":"1 error","summary":"compile failed","text":"x.go:1: undefined"}}]}`)
+	})
+	srvURL = srv.URL
+
+	got, err := c.CheckRuns(context.Background(), "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []github.CheckRun{
+		{Name: "build", Status: "completed", Conclusion: "failure", URL: "https://github.com/o/n/runs/1", Title: "1 error", Summary: "compile failed", Text: "x.go:1: undefined"},
+		{Name: "test", Status: "in_progress"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
 func TestCreatePullRequestSendsItsFields(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if !expect(t, w, r, "POST", "/repos/o/n/pulls", "application/vnd.github+json") {

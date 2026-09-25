@@ -84,6 +84,9 @@ Implementing an issue, for afk run and afk work:
   --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies
   --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
                                              ** spans directories, * stays in one
+  --ci-wait <dur>       AFK_CI_WAIT          wait before an unfinished CI run is read again
+  --ci-ceiling <dur>    AFK_CI_CEILING       time after a push CI may take, then a hand-back
+  --ci-rounds <n>       AFK_CI_ROUNDS        red runs sent back to the session, then a hand-back
 
 All but --implement-needs are required to implement, with the model choice
 parameters above; implementing also needs the heavy-build token's capacity.
@@ -139,6 +142,9 @@ type params struct {
 	gateAttempts   string
 	handBackLabel  string
 	denylist       string
+	ciWait         string
+	ciCeiling      string
+	ciRounds       string
 
 	opencode      string
 	enrolment     string
@@ -595,6 +601,9 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
 	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
 	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
+	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
+	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
+	fs.StringVar(&p.ciRounds, "ci-rounds", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_ROUNDS)")
 }
 
 // implementParams is implementing an issue, resolved, beyond model choice.
@@ -604,6 +613,9 @@ type implementParams struct {
 	attempts      int
 	handBackLabel string
 	denylist      []string
+	ciWait        time.Duration
+	ciCeiling     time.Duration
+	ciRounds      int
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -638,6 +650,25 @@ func (p *params) implement() (implementParams, error) {
 	}
 	if err := implement.ValidDenylist(ip.denylist); err != nil {
 		return implementParams{}, usagef("--denylist: %v", err)
+	}
+	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
+	if err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciWait, err = duration(v, "ci-wait"); err != nil {
+		return implementParams{}, err
+	}
+	if v, err = required(p.ciCeiling, "ci-ceiling", "AFK_CI_CEILING"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciCeiling, err = duration(v, "ci-ceiling"); err != nil {
+		return implementParams{}, err
+	}
+	if v, err = required(p.ciRounds, "ci-rounds", "AFK_CI_ROUNDS"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciRounds, err = count(v, "ci-rounds"); err != nil {
+		return implementParams{}, err
 	}
 	return ip, nil
 }

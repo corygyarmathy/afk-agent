@@ -84,6 +84,9 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Attempts:      ip.attempts,
 		HandBackLabel: ip.handBackLabel,
 		Denylist:      ip.denylist,
+		CIWait:        ip.ciWait,
+		CICeiling:     ip.ciCeiling,
+		CIRounds:      ip.ciRounds,
 		// The installation token, minted and cached by the App the tracker
 		// uses: the push is the agent on the tracker like any other request
 		// (ADR 0005).

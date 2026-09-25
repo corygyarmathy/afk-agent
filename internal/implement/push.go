@@ -96,8 +96,9 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	}
 	if p.Pushed != at {
-		// Seen on the remote: the lease the next push is pinned to.
-		p.Pushed = at
+		// Seen on the remote: the lease the next push is pinned to, and
+		// the head CI is watched on from now.
+		p.Pushed, p.PushedAt = at, in.Now
 		if err := d.save(in.Job.ID, p); err != nil {
 			return transition.Result{}, err
 		}
