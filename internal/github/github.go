@@ -274,6 +274,32 @@ func (c *Client) React(ctx context.Context, commentID int64, content string) err
 	return c.postJSON(ctx, u, map[string]string{"content": content}, nil)
 }
 
+// NewPullRequest is a pull request to open: from the branch Head into Base.
+type NewPullRequest struct {
+	Title string
+	Head  string
+	Base  string
+	Body  string
+}
+
+// CreatePullRequest opens a pull request and returns it as created.
+//
+// Not idempotent: a second call opens a second pull request, or fails if one
+// from the same branch is open. Which is why a transition returns it as an
+// effect, under a key.
+func (c *Client) CreatePullRequest(ctx context.Context, pr NewPullRequest) (PullRequest, error) {
+	u, err := c.repoURL("/pulls")
+	if err != nil {
+		return PullRequest{}, err
+	}
+	var w wirePR
+	payload := map[string]string{"title": pr.Title, "head": pr.Head, "base": pr.Base, "body": pr.Body}
+	if err := c.postJSON(ctx, u, payload, &w); err != nil {
+		return PullRequest{}, err
+	}
+	return w.pullRequest(), nil
+}
+
 // Label adds a label to an issue or a pull request. Adding a label it already
 // has is not an error, and a label the repository does not have yet is
 // created.

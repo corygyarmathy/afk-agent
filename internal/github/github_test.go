@@ -257,6 +257,31 @@ func TestReactAcceptsAReactionThatAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestCreatePullRequestSendsItsFields(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "POST", "/repos/o/n/pulls", "application/vnd.github+json") {
+			return
+		}
+		var in map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"title": "Reserve a job", "head": "afk/7-1", "base": "main", "body": "Closes #7."}
+		if fmt.Sprint(in) != fmt.Sprint(want) {
+			t.Errorf("posted %v, want %v", in, want)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"number":40,"state":"open","head":{"sha":"abc","ref":"afk/7-1"},"user":{"login":"afk-agent[bot]"}}`)
+	})
+	pr, err := c.CreatePullRequest(context.Background(), github.NewPullRequest{Title: "Reserve a job", Head: "afk/7-1", Base: "main", Body: "Closes #7."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 40 || pr.HeadRef != "afk/7-1" {
+		t.Errorf("got %+v, want #40 from afk/7-1", pr)
+	}
+}
+
 func TestLabelAddsTheLabel(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if !expect(t, w, r, "POST", "/repos/o/n/issues/7/labels", "application/vnd.github+json") {
