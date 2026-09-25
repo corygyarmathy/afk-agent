@@ -689,7 +689,7 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
 		t.Setenv(env, "")
 	}
@@ -705,6 +705,8 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		gateAttempts:  "2",
 		implementTier: "build",
 		handBackLabel: "needs-decision",
+		handOffLabel:  "needs-review",
+		lease:         "10m",
 		denylist:      ".github/**, flake.lock",
 		ciWait:        "5m",
 		ciCeiling:     "2h",
@@ -720,6 +722,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
+		d.HandOffLabel != "needs-review" || d.LeaseTTL != 10*time.Minute || d.Holder == "" ||
 		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIRounds != 2 ||
 		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
@@ -739,6 +742,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.implementTier = "" }, "--implement-tier is required"},
 		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
 		{func(p *params) { p.denylist = "" }, "--denylist is required"},
+		{func(p *params) { p.handOffLabel = "" }, "--hand-off-label is required"},
 		{func(p *params) { p.ciWait = "" }, "--ci-wait is required"},
 		{func(p *params) { p.ciCeiling = "soon" }, "--ci-ceiling"},
 		{func(p *params) { p.ciRounds = "0" }, "--ci-rounds"},
@@ -780,6 +784,21 @@ func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
 		if want := subjectOf(cmd.Kind); cmd.On != want {
 			t.Errorf("%s is read on a %s, and makes %s jobs, which are on a %s", cmd.Word, cmd.On, cmd.Kind, want)
 		}
+	}
+}
+
+// A pool with no implement configured does not answer /implement.
+func TestAPoolAnswersOnlyTheCommandsItCanRun(t *testing.T) {
+	reviewOnly := catalogue(&deps{review: standaloneDeps(t).review})
+	var words []string
+	for _, c := range runnable(commands(), reviewOnly) {
+		words = append(words, c.Word)
+	}
+	if strings.Join(words, " ") != "/review" {
+		t.Errorf("commands %v, want only /review", words)
+	}
+	if got := runnable(commands(), catalogue(standaloneDeps(t))); len(got) != len(commands()) {
+		t.Errorf("a pool with every kind answers %d of %d commands", len(got), len(commands()))
 	}
 }
 
@@ -839,6 +858,10 @@ func (closedTracker) Comment(context.Context, int, string) (github.Comment, erro
 }
 func (closedTracker) React(context.Context, int64, string) error { return nil }
 func (closedTracker) Label(context.Context, int, string) error   { return nil }
+func (closedTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	return nil, nil
+}
+func (closedTracker) ReactToIssue(context.Context, int, string) error { return nil }
 func (closedTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
 	return nil, nil
 }

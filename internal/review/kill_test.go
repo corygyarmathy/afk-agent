@@ -275,6 +275,14 @@ func (ft *fileTracker) React(_ context.Context, id int64, content string) error 
 	return nil
 }
 
+// The pull request is a human's here, so it is never the implement job's
+// request, and nothing reacts to it.
+func (ft *fileTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	return nil, nil
+}
+
+func (ft *fileTracker) ReactToIssue(context.Context, int, string) error { return nil }
+
 // killModel is a model that answers, unless this is the process to be killed
 // in the middle of a model run.
 type killModel struct{ ft *fileTracker }

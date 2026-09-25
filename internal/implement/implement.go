@@ -1,8 +1,7 @@
 // Package implement is the implement job kind's transitions: an issue becomes a
 // pull request, for a human to review and merge (#40).
 //
-// The claim (#49), the work (#50), the push (#51) and the CI watch (#52) are
-// here. The review follows as its own transitions (#53):
+// An issue's whole way to a pull request handed off for review (#49-#53):
 //
 //	start        --implement-------->  implementing  claim every unanswered command
 //	implementing --implement-run---->  gating        one candidate model, in the workspace
@@ -18,6 +17,10 @@
 //	                                   watching      not finished: again after the CI wait
 //	                                   implementing  red: back to the session, with what CI said
 //	                                   start         out of rounds, or past the ceiling: hand-back on the pull request
+//	reviewing    --implement-review->  handing-off   the review is on the pull request
+//	                                   reviewing     the review job made due, or still on its way
+//	handing-off  --implement-hand-off> start         the hand-off label is on the pull request: at rest
+//	                                   handing-off   applied under the next key
 //	deferred     --implement-resume->  implementing  the tier again, from its first model
 //
 // The claim is its own transition for the reason review's is: it is committed
@@ -54,20 +57,15 @@ import (
 
 // The implement kind's states.
 const (
-	Start = "start"
-
+	Start        = "start"
 	Implementing = "implementing"
 	Gating       = "gating"
 	Deferred     = "deferred"
-
-	Pushing = "pushing"
-	Opening = "opening"
-
-	Watching = "watching"
-
-	// Reviewing is where the review is asked for and waited on. No
-	// transition runs from it until #53, so a job that reaches it parks.
-	Reviewing = "reviewing"
+	Pushing      = "pushing"
+	Opening      = "opening"
+	Watching     = "watching"
+	Reviewing    = "reviewing"
+	HandingOff   = "handing-off"
 )
 
 // Word is the command that asks for an issue to be implemented.
@@ -126,8 +124,10 @@ type Deps struct {
 	// handed back. A parameter.
 	Attempts int
 
-	// HandBackLabel is the label a hand-back applies. A parameter.
+	// HandBackLabel is the label a hand-back applies, and HandOffLabel the
+	// one the hand-off does. Parameters.
 	HandBackLabel string
+	HandOffLabel  string
 
 	// CIWait is how long a head whose checks are not finished waits before
 	// it is looked at again, CICeiling how long after its push they may
@@ -145,9 +145,13 @@ type Deps struct {
 	// token. Nil pushes with none, which is a local remote in a test.
 	Token func(ctx context.Context) (string, error)
 
-	// Store is read, never written: the push and the pull request ask it
-	// which round is next. Writing is the runner's.
-	Store store.Store
+	// Store is read to learn which round of an effect is next, and written
+	// only by the effect that makes the pull request's review job due -
+	// another job, under Holder's lease for LeaseTTL. This job's own state
+	// is the runner's to write.
+	Store    store.Store
+	Holder   string
+	LeaseTTL time.Duration
 
 	// StateDir is where workspaces and their progress live - beside the
 	// store, never in it (ADR 0001 §5).
@@ -163,6 +167,8 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "implement-push", Kind: store.KindImplement, From: Pushing, Run: d.pushTransition},
 		{Name: "implement-open", Kind: store.KindImplement, From: Opening, Run: d.openPR},
 		{Name: "implement-watch", Kind: store.KindImplement, From: Watching, Run: d.watch},
+		{Name: "implement-review", Kind: store.KindImplement, From: Reviewing, Run: d.awaitReview},
+		{Name: "implement-hand-off", Kind: store.KindImplement, From: HandingOff, Run: d.handOff},
 		{Name: "implement-resume", Kind: store.KindImplement, From: Deferred, Run: d.resume},
 	}
 }

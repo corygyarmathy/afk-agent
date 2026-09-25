@@ -82,9 +82,11 @@ Implementing an issue, for afk run and afk work:
   --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
   --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
   --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies
+  --hand-off-label <l>  AFK_HAND_OFF_LABEL   the label the hand-off applies
   --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
                                              ** spans directories, * stays in one
-  --ci-wait <dur>       AFK_CI_WAIT          wait before an unfinished CI run is read again
+  --ci-wait <dur>       AFK_CI_WAIT          wait before unfinished CI, or a review not yet
+                                             posted, is read again
   --ci-ceiling <dur>    AFK_CI_CEILING       time after a push CI may take, then a hand-back
   --ci-rounds <n>       AFK_CI_ROUNDS        red runs sent back to the session, then a hand-back
 
@@ -141,6 +143,7 @@ type params struct {
 	implementNeeds string
 	gateAttempts   string
 	handBackLabel  string
+	handOffLabel   string
 	denylist       string
 	ciWait         string
 	ciCeiling      string
@@ -600,6 +603,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.implementTier, "implement-tier", "", "the tier implementing draws from (AFK_IMPLEMENT_TIER)")
 	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
 	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
+	fs.StringVar(&p.handOffLabel, "hand-off-label", "", "the label the hand-off applies (AFK_HAND_OFF_LABEL)")
 	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
 	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
@@ -612,6 +616,7 @@ type implementParams struct {
 	gate          string
 	attempts      int
 	handBackLabel string
+	handOffLabel  string
 	denylist      []string
 	ciWait        time.Duration
 	ciCeiling     time.Duration
@@ -637,6 +642,9 @@ func (p *params) implement() (implementParams, error) {
 		return implementParams{}, err
 	}
 	if ip.handBackLabel, err = required(p.handBackLabel, "hand-back-label", "AFK_HAND_BACK_LABEL"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.handOffLabel, err = required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL"); err != nil {
 		return implementParams{}, err
 	}
 	list, err := required(p.denylist, "denylist", "AFK_DENYLIST")

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/dispatch"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -273,6 +274,19 @@ func runCmd(args []string, stdout io.Writer) error {
 	return err
 }
 
+// runnable is the commands whose job kind this registry can start. A pool that
+// cannot run a kind does not answer its command: a job armed for it would
+// park with the command unclaimed, and intake arms a command only once.
+func runnable(cmds []intake.Command, reg *transition.Registry) []intake.Command {
+	var out []intake.Command
+	for _, c := range cmds {
+		if _, ok := reg.Next(c.Kind, c.Start); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // workCmd implements `afk work`, the worker pool. Everything a transition can
 // do it can do without this command (ADR 0001 §4); what this adds is several
 // of them at once, under the resource tokens that stop the heavy ones from
@@ -363,6 +377,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	if in == nil {
 		fmt.Fprintln(stderr, "afk work: no --repo, so no commands are read; only jobs already in the store run")
 	} else {
+		in.Commands = runnable(in.Commands, d.Registry)
 		d.Intake = func(ctx context.Context) error {
 			made, err := in.Pass(ctx)
 			for _, job := range made {

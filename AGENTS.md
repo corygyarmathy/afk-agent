@@ -22,6 +22,8 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
   decide whether new work may start, and what it does about the answer.
 - [`docs/agents/review.md`](docs/agents/review.md) - what `/review` does, what
   it needs on the host, and how to run one by hand.
+- [`docs/agents/implement.md`](docs/agents/implement.md) - what `/implement`
+  does, what it needs on the host, and how to run one by hand.
 - [`docs/agents/notification.md`](docs/agents/notification.md) - the two
   conditions that reach the operator, and everything that deliberately does not.
 - [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what

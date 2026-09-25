@@ -108,6 +108,11 @@ func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.labelledOn = append(tr.labelledOn, n)
+	for i := range tr.prs {
+		if tr.prs[i].Number == n {
+			tr.prs[i].Labels = append(tr.prs[i].Labels, label)
+		}
+	}
 	tr.labels = append(tr.labels, label)
 	return nil
 }
@@ -199,6 +204,9 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
 		HandBackLabel: "needs-decision",
+		HandOffLabel:  "needs-review",
+		Holder:        "implement-test",
+		LeaseTTL:      time.Minute,
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,

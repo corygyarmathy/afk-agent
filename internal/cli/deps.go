@@ -67,6 +67,10 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 	if err != nil {
 		return nil, err
 	}
+	lease, err := p.leaseTTL()
+	if err != nil {
+		return nil, err
+	}
 	login, err := tr.Login(ctx)
 	if err != nil {
 		return nil, err
@@ -83,6 +87,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
 		HandBackLabel: ip.handBackLabel,
+		HandOffLabel:  ip.handOffLabel,
 		Denylist:      ip.denylist,
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
@@ -90,8 +95,11 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		// The installation token, minted and cached by the App the tracker
 		// uses: the push is the agent on the tracker like any other request
 		// (ADR 0005).
-		Token:    tr.app.Token,
-		Store:    st,
+		Token: tr.app.Token,
+		Store: st,
+		// A holder of its own: it leases the review job, never this one.
+		Holder:   holder() + "/ask-review",
+		LeaseTTL: lease,
 		StateDir: stateDir,
 	}, nil
 }

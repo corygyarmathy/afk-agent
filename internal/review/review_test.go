@@ -39,6 +39,8 @@ type tracker struct {
 	mu        sync.Mutex
 	state     string
 	desc      string
+	author    string
+	prEyes    []github.Reaction
 	issues    map[int]github.Issue
 	comments  []github.Comment
 	reactions map[int64][]github.Reaction
@@ -62,7 +64,7 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head, Title: "Reserve a job", Body: tr.desc}, nil
+	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head, Title: "Reserve a job", Body: tr.desc, Login: tr.author}, nil
 }
 
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
@@ -121,6 +123,24 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 		}
 	}
 	tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
+	return nil
+}
+
+func (tr *tracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return append([]github.Reaction(nil), tr.prEyes...), nil
+}
+
+func (tr *tracker) ReactToIssue(_ context.Context, _ int, content string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, r := range tr.prEyes {
+		if r.Login == agent && r.Content == content {
+			return nil
+		}
+	}
+	tr.prEyes = append(tr.prEyes, github.Reaction{Login: agent, Content: content})
 	return nil
 }
 
@@ -234,6 +254,19 @@ func (f *fixture) drive() []error {
 	}
 	f.t.Fatalf("the job never came to rest; it is in %q", f.now().State)
 	return errs
+}
+
+// restart puts the job back in start and due, the way intake re-arms it for a
+// new request.
+func (f *fixture) restart() {
+	f.t.Helper()
+	ctx := context.Background()
+	if _, ok, err := f.store.Acquire(ctx, f.job.ID, "intake", now, time.Minute); err != nil || !ok {
+		f.t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: f.job.ID, Holder: "intake", State: review.Start, NextRunAt: now, Release: true}); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func (f *fixture) now() store.Job {
@@ -596,5 +629,55 @@ func TestAPostThatLandsLateIsNotPostedAgain(t *testing.T) {
 	}
 	if tr.posts != 1 {
 		t.Errorf("posted %d times, want 1: the second round should have found the first", tr.posts)
+	}
+}
+
+// The implement job asks for a review by making the job due, with no command:
+// its pull request is the request, claimed with a 👀 on the description, and
+// the review says which job asked.
+func TestTheImplementJobsPullRequestIsARequest(t *testing.T) {
+	tr := newTracker()
+	tr.author = agent
+	tr.desc = "<!-- afk:implement issue=7 -->\nCloses #7."
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if !intake.Claimed(tr.prEyes, agent) {
+		t.Error("the pull request was not claimed")
+	}
+	posted := tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "Asked for by the implement job for #7") {
+		t.Fatalf("agent comments = %+v, want one review saying the implement job asked", posted)
+	}
+
+	// Claimed once: a later run of the job - a /review, say - does not
+	// claim the description again.
+	tr.comments = append(tr.comments, command(9))
+	f.restart()
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if n := len(tr.prEyes); n != 1 {
+		t.Errorf("%d reactions on the pull request, want 1", n)
+	}
+}
+
+// Only the agent's own pull request can ask: a human's that carries the
+// marker is not a request, and the job reviews it only if a command asks.
+func TestAMarkerFromAnyoneElseIsNotARequest(t *testing.T) {
+	tr := newTracker()
+	tr.author = "mallory"
+	tr.desc = "<!-- afk:implement issue=7 -->"
+	f := setup(t, tr, &reviewer{})
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(tr.prEyes) != 0 {
+		t.Error("a human's pull request was claimed as the implement job's request")
+	}
+	if posted := tr.byAgent(); len(posted) == 1 && strings.Contains(posted[0].Body, "implement job") {
+		t.Error("the review says the implement job asked for it")
 	}
 }

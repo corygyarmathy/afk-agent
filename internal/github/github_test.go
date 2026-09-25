@@ -59,7 +59,7 @@ func expect(t *testing.T, w http.ResponseWriter, r *http.Request, method, path, 
 func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"user":{"login":"alice"}}`)
+			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"user":{"login":"alice"},"labels":[{"name":"needs-review"}]}`)
 		}
 	})
 
@@ -67,8 +67,8 @@ func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", Login: "alice", Title: "Reserve a job", Body: "Closes #7."}
-	if pr != want {
+	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", Login: "alice", Labels: []string{"needs-review"}, Title: "Reserve a job", Body: "Closes #7."}
+	if fmt.Sprint(pr) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", pr, want)
 	}
 }
@@ -308,6 +308,34 @@ func TestCreatePullRequestSendsItsFields(t *testing.T) {
 	}
 	if pr.Number != 40 || pr.HeadRef != "afk/7-1" {
 		t.Errorf("got %+v, want #40 from afk/7-1", pr)
+	}
+}
+
+func TestReactionsOnAPullRequestItself(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			if expect(t, w, r, "GET", "/repos/o/n/issues/12/reactions", "application/vnd.github+json") {
+				fmt.Fprint(w, `[{"content":"eyes","user":{"login":"afk-agent[bot]"}}]`)
+			}
+		default:
+			if !expect(t, w, r, "POST", "/repos/o/n/issues/12/reactions", "application/vnd.github+json") {
+				return
+			}
+			var in map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in["content"] != "eyes" {
+				t.Errorf("posted %v (%v), want content eyes", in, err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id":1,"content":"eyes"}`)
+		}
+	})
+	got, err := c.IssueReactions(context.Background(), 12)
+	if err != nil || fmt.Sprint(got) != fmt.Sprint([]github.Reaction{{Login: "afk-agent[bot]", Content: "eyes"}}) {
+		t.Errorf("IssueReactions = %v, %v", got, err)
+	}
+	if err := c.ReactToIssue(context.Background(), 12, "eyes"); err != nil {
+		t.Fatal(err)
 	}
 }
 

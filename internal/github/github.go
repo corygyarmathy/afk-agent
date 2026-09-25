@@ -87,6 +87,9 @@ type PullRequest struct {
 	// Login is the author's account.
 	Login string
 
+	// Labels is the names of the labels on it.
+	Labels []string
+
 	// Title and Body are the pull request's description, as its author wrote
 	// it. Body is empty when there is none.
 	Title string
@@ -380,13 +383,20 @@ type wirePR struct {
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 }
 
 func (w wirePR) pullRequest() PullRequest {
-	return PullRequest{
+	pr := PullRequest{
 		Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, HeadRef: w.Head.Ref,
 		Login: w.User.Login, Title: w.Title, Body: w.Body,
 	}
+	for _, l := range w.Labels {
+		pr.Labels = append(pr.Labels, l.Name)
+	}
+	return pr
 }
 
 type wireIssue struct {
@@ -607,6 +617,34 @@ func (c *Client) Reactions(ctx context.Context, commentID int64) ([]Reaction, er
 		rs[i] = Reaction{Login: w.User.Login, Content: w.Content}
 	}
 	return rs, nil
+}
+
+// IssueReactions lists every reaction to an issue or a pull request itself -
+// its description, not a comment on it - to the last page.
+func (c *Client) IssueReactions(ctx context.Context, number int) ([]Reaction, error) {
+	u, err := c.repoURL("/issues/%d/reactions?per_page=%d", number, perPage)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := all[wireReaction](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	rs := make([]Reaction, len(ws))
+	for i, w := range ws {
+		rs[i] = Reaction{Login: w.User.Login, Content: w.Content}
+	}
+	return rs, nil
+}
+
+// ReactToIssue adds a reaction to an issue or a pull request itself. Reacting
+// twice with the same content is not an error.
+func (c *Client) ReactToIssue(ctx context.Context, number int, content string) error {
+	u, err := c.repoURL("/issues/%d/reactions", number)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, u, map[string]string{"content": content}, nil)
 }
 
 type wireReaction struct {
