@@ -220,3 +220,69 @@ func TestLostProgressAfterThePushIsReadFromTheTracker(t *testing.T) {
 		})
 	}
 }
+
+// amend is a turn that rewrites the branch's last commit.
+func amend(dir string) error {
+	if err := os.WriteFile(filepath.Join(dir, "ok"), []byte("amended\n"), 0o644); err != nil {
+		return err
+	}
+	if _, err := run(dir, "git", "commit", "--quiet", "--all", "--amend", "-m", "amended"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// A session that rewrites a commit the agent already pushed is not a stalled
+// job: the push is leased on the agent's own last push, and replaces it.
+func TestTheAgentMayRewriteItsOwnPush(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+
+	f.model.then(amend)
+	f.setState(implement.Implementing)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors after the amend: %v", errs)
+	}
+	head, _ := run(f.workspace(), "git", "rev-parse", "HEAD")
+	if at, _ := run(f.remote, "git", "rev-parse", "refs/heads/afk/7-1"); at != head {
+		t.Errorf("the remote's afk/7-1 is at %q, want the amended head %q", at, head)
+	}
+	if j := f.now(); j.State != implement.Watching || len(f.tr.opened) != 1 {
+		t.Errorf("job in %q with %d pull requests, want %q with 1", j.State, len(f.tr.opened), implement.Watching)
+	}
+}
+
+// Anyone else's push to the branch is never rewritten: the remote is not
+// where the agent left it, so the lease refuses the push.
+func TestAPushByAnyoneElseIsNeverRewritten(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+
+	human := filepath.Join(t.TempDir(), "human")
+	if _, err := run("", "git", "clone", "--quiet", "--branch", "afk/7-1", f.remote, human); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit("review-fix")(human); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(human, "git", "push", "--quiet", "origin", "afk/7-1"); err != nil {
+		t.Fatal(err)
+	}
+	theirs, _ := run(human, "git", "rev-parse", "HEAD")
+
+	f.model.then(amend)
+	f.setState(implement.Implementing)
+	errs := f.drive()
+	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "stale info") {
+		t.Errorf("errors %v, want the push refused by its lease", errs)
+	}
+	if at, _ := run(f.remote, "git", "rev-parse", "refs/heads/afk/7-1"); at != theirs {
+		t.Errorf("the remote's afk/7-1 is at %q, want the other push, %q, left alone", at, theirs)
+	}
+}
