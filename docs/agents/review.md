@@ -49,9 +49,9 @@ history and never a second review of a head already reviewed.
 - **opencode**, at `--opencode`, with credentials for every provider enrolled in
   the review tier.
 - **The GitHub App**, `--app-id`, with its private key in the file at
-  `--app-key`. It must be installed on `--repo` with permission to read pull
-  requests and issues, and write issue comments and reactions. The agent mints
-  its own installation tokens, scoped to `--repo`, and its login is the App's
+  `--app-key`. It must be installed on `--repo` with the permissions in
+  [The App's permissions](#the-apps-permissions). The agent mints its own
+  installation tokens, scoped to `--repo`, and its login is the App's
   `<slug>[bot]` account, read from GitHub at startup.
 - **The `reviewing-changes` skill**, where opencode discovers it from the
   workspace: in the reviewed repository's own `.agents/skills/`, or in the
@@ -63,6 +63,49 @@ The state directory is the directory holding `--store`. Beside the store it
 holds the catalogue cache (`models.json`), a workspace per review while it runs
 (`workspaces/`), and replies written and not yet seen on the pull request
 (`replies/`). All of it is disposable.
+
+## The App's permissions
+
+The smallest set, by the names and levels on the App's settings page:
+
+| permission | level |
+| --- | --- |
+| Metadata | read |
+| Pull requests | write |
+| Issues | read |
+
+What each request accepts, by the `X-Accepted-GitHub-Permissions` header
+GitHub returned on 2026-09-25 (the review comment's is from GitHub's
+[permissions table](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps)),
+and what was observed on `corygyarmathy/dotfiles` with tokens minted below the
+installation's grants:
+
+| request | accepts | observed |
+| --- | --- | --- |
+| the 👀 claim, on a command on a pull request | Issues: write | refused (403) with Metadata only; accepted with Pull requests: write and no Issues grant |
+| the review comment | Issues: write, or Pull requests: write | not verified |
+| listing open pull requests | Pull requests: read | not verified: served with Metadata only |
+| reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
+| reading the issues a pull request closes | Issues: read | not verified: served with Metadata only |
+| reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
+| reading reactions | Issues: read | not verified: served with Metadata only |
+
+Metadata is granted to every App and cannot be withheld. The App's own
+requests (`GET /app`, finding the installation, minting a token) use its JWT
+and need no installation permission. The review's `git` fetch sends no
+credentials.
+
+Pull requests: read with Issues: write also covers every row, by the header
+and the table, but Issues: write was not observed on the claim without Pull
+requests: write.
+
+Two things GitHub's documentation does not say:
+
+- The claim's header, and GitHub's permissions table, name Issues: write only.
+  GitHub accepted Pull requests: write for it.
+- A public repository serves every read without its grant, so a missing read
+  grant shows up only on a private one - which the review's credential-less
+  `git` fetch cannot review yet.
 
 ## Parameters
 
