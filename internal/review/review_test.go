@@ -683,6 +683,53 @@ func TestAReviewOutOfRoundsIsHandedBack(t *testing.T) {
 	}
 }
 
+// A hand-back whose commit is lost is decided again from the reply it kept:
+// no second model run, and no fresh rounds of posts.
+func TestAReviewHandBackWhoseCommitIsLostIsMadeAgain(t *testing.T) {
+	tr := newTracker(command(1))
+	rounds := 2
+	tr.post = func(call int) (bool, error) {
+		if call <= rounds {
+			return false, errors.New("POST comment: 422 Unprocessable Entity: body is too long")
+		}
+		return true, nil
+	}
+	m := &reviewer{}
+	f := setup(t, tr, m)
+	f.deps.Rounds = rounds
+	f.run.Store = &losesCommit{Store: f.store, state: review.HandingBack}
+
+	f.drive()
+	if len(m.asked) != 1 {
+		t.Errorf("the model ran %d times, want once", len(m.asked))
+	}
+	if tr.posts != rounds+1 {
+		t.Errorf("posted %d times, want the %d rounds and the hand-back", tr.posts, rounds)
+	}
+	if posted := tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, review.HandBackMarker(head)) {
+		t.Fatalf("the agent said %+v, want one hand-back", posted)
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// losesCommit is a store that loses the first commit into state, the way a
+// kill or a lost lease would.
+type losesCommit struct {
+	store.Store
+	state string
+	lost  bool
+}
+
+func (s *losesCommit) Commit(ctx context.Context, c store.Commit) error {
+	if !s.lost && c.State == s.state {
+		s.lost = true
+		return store.ErrNotHeld
+	}
+	return s.Store.Commit(ctx, c)
+}
+
 func TestAClosedPullRequestIsClaimedAndNotReviewed(t *testing.T) {
 	tr := newTracker(command(1))
 	tr.state = "closed"
