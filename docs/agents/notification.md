@@ -59,13 +59,14 @@ on the way, or a run that errored and was rescheduled, is inside the episode.
 The operator is told once, on the `--tier-notify-after`th exhaustion of an
 episode; a later episode of the same job is told again.
 
-The episode is kept in the store, so a restart carries on counting it
+The episode is kept in the store, with whether it has been told, so a restart
+carries on counting it and does not tell it again
 ([ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md), amended
-for #91). What a restart forgets is having told, like the rest of the
-suppression below: an episode already told is told again the next time its
-tier runs out. Only a move the pool makes ends an episode: a job moved on by a
-hand-run `afk run`, or by an edit to the store, keeps its episode, so a later
-exhaustion of that job is counted into it.
+for #91). A command that arms the job - `/review` asking for it afresh, or
+another job asking for the work - ends its episode too, since the tier is tried
+from the top. Otherwise only a move the pool makes ends an episode: a job moved
+on by a hand-run `afk run`, or by an edit to the store, keeps its episode, so a
+later exhaustion of that job is counted into it.
 
 ## Repeats
 
@@ -84,7 +85,8 @@ not divide: its key is the same every time, so a later exhaustion of that window
 is silent for the life of the process. The pool waits and re-asks on its own
 poll there rather than deferring, so the condition itself is not lost.
 
-Suppression is in memory. A restart re-publishes a condition that is still true.
+Suppression is in memory. A restart re-publishes a condition that is still
+true, except an exhausted tier's episode, which the store records as told.
 
 ## Parameters
 
