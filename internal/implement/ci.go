@@ -97,9 +97,9 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	// lost to a kill, or to the lease - does not count the same red run
 	// twice. A fix always pushes a new head: the gate hands back one
 	// that adds nothing.
-	if p.Counted != p.Pushed {
+	if p.FixedHead != p.Pushed {
 		p.Fixes++
-		p.Counted = p.Pushed
+		p.FixedHead = p.Pushed
 	}
 	if p.Fixes > d.CIFixes {
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d fixes.", d.CIFixes), output)
