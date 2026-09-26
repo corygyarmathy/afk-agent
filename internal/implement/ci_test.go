@@ -73,6 +73,7 @@ func TestCIIsWaitedOnAndAGreenHeadGoesOn(t *testing.T) {
 	if j := f.now(); j.State != implement.Reviewing {
 		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
 	}
+	f.caught()
 }
 
 // A red run goes back to the session that wrote the commit, with what CI
@@ -109,6 +110,29 @@ func TestARedRunGoesBackToTheSessionThatWroteIt(t *testing.T) {
 	}
 	if len(f.tr.opened) != 1 {
 		t.Errorf("%d pull requests, want 1", len(f.tr.opened))
+	}
+	f.caught("fixes so far 0:")
+}
+
+// caught fails the test unless the log has one line of what CI caught per
+// want, in order, each naming the failing check and saying want.
+func (f *fixture) caught(want ...string) {
+	f.t.Helper()
+	var lines []string
+	for _, l := range f.logged {
+		if strings.Contains(l, "CI caught") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != len(want) {
+		f.t.Fatalf("logged %d catches, want %d:\n%s", len(lines), len(want), strings.Join(f.logged, "\n"))
+	}
+	for i, l := range lines {
+		for _, w := range []string{"implement-issue-7:", "pull request #101", "`test` failure", want[i]} {
+			if !strings.Contains(l, w) {
+				f.t.Errorf("catch %d does not say %q: %s", i, w, l)
+			}
+		}
 	}
 }
 
@@ -176,6 +200,8 @@ func TestRunningOutOfFixesHandsBackOnThePullRequest(t *testing.T) {
 	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
 		t.Errorf("job = %+v, want it at rest", j)
 	}
+	// Every red reading is a catch, the one that ran out of fixes too.
+	f.caught("fixes so far 0:", "fixes so far 1:", "fixes so far 2:")
 }
 
 // A head whose checks never finish is handed back once the ceiling passes.
@@ -199,6 +225,7 @@ func TestCIThatNeverFinishesHandsBackAtTheCeiling(t *testing.T) {
 	if f.at.Before(now.Add(f.deps.CICeiling)) {
 		t.Errorf("handed back at %s, before the ceiling", f.at.Sub(now))
 	}
+	f.caught()
 }
 
 // A pull request a human closed while CI ran is their decision: the job rests
@@ -371,6 +398,27 @@ func TestARunWaitingForApprovalHandsBack(t *testing.T) {
 		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
 	}
 	f.handedBackOnThePR("waiting for approval", "`deploy`")
+	// Nothing the gate could have caught: the run never ran.
+	f.caught()
+}
+
+// A run that failed beside one waiting for approval is still a catch, though
+// the approval is what hands the work back.
+func TestAFailureBesideAnApprovalWaitIsStillACatch(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{
+			{Name: "test", Status: "completed", Conclusion: "failure"},
+			{Name: "deploy", Status: "completed", Conclusion: "action_required"},
+		}
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackOnThePR("waiting for approval", "`deploy`")
+	f.caught("fixes so far 0:")
 }
 
 // A head with a failed run and another that never finishes waits out the
@@ -398,6 +446,8 @@ func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {
 		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
 	}
 	f.handedBackOnThePR("had not finished", "--- FAIL: TestReserve")
+	// The failure is a catch, though CI never finished around it.
+	f.caught("fixes so far 0:")
 }
 
 // A workspace lost during a fix is not a new start: the branch is

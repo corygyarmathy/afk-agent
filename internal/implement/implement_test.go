@@ -223,6 +223,9 @@ type fixture struct {
 	// at is the time the runner sees: now, until a test moves it on.
 	at time.Time
 
+	// logged is every line the deps logged.
+	logged []string
+
 	// last and lastErr are what drive's last run returned: an error with
 	// Parked is the outcome dispatch tells the operator about.
 	last    transition.Outcome
@@ -265,6 +268,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job, at: now}
+	d.Log = func(msg string) { f.logged = append(f.logged, msg) }
 	f.run = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
 	return f
 }

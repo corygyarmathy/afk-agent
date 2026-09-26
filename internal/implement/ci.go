@@ -82,6 +82,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
 			}
+			d.caught(in, pr.Number, p, failed)
 			return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, reason, output)
 		}
 		return transition.Result{State: Watching, RunAt: in.Now.Add(d.CIWait)}, nil
@@ -89,6 +90,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if len(failed) == 0 {
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
+	d.caught(in, pr.Number, p, failed)
 	if len(waiting) > 0 {
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix cannot give.", names(waiting)), output)
 	}
@@ -128,6 +130,37 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 	}
 	return d.handBackPR(ctx, in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
+}
+
+// caught logs what CI caught that the local gate did not: every failed run on
+// a head the gate passed before the push (dotfiles ADR 0007 §8). Whether it
+// goes back for a fix or is handed back - out of fixes, or at the
+// ceiling with other runs unfinished - the catch is the same one. A run
+// waiting for approval is not one: it never ran.
+//
+// Logged as it is decided, before the runner commits: a run that fails to
+// commit is run again, and logs the catch again.
+func (d *Deps) caught(in transition.In, pr int, p progress, failed []github.CheckRun) {
+	var ran []github.CheckRun
+	for _, r := range failed {
+		if r.Conclusion != approval {
+			ran = append(ran, r)
+		}
+	}
+	if d.Log == nil || len(ran) == 0 {
+		return
+	}
+	d.Log(fmt.Sprintf("%s: CI caught what the local gate passed, on pull request #%d at %s, fixes so far %d: %s",
+		in.Job.ID, pr, git.Short(p.Pushed), p.Fixes, conclusions(ran)))
+}
+
+// conclusions is each failing run's name and how it failed.
+func conclusions(runs []github.CheckRun) string {
+	c := make([]string, len(runs))
+	for i, r := range runs {
+		c[i] = "`" + r.Name + "` " + r.Conclusion
+	}
+	return strings.Join(c, ", ")
 }
 
 // ciOutput is what the failing check runs said, for the session that has to
