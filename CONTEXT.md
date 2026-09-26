@@ -37,7 +37,7 @@ A transition that ran and decided to leave its job in the same state, scheduled 
 _Avoid_: Retry, skip, candidate index
 
 **Episode**:
-One stretch of a job's model tier staying exhausted: from the first time every candidate in the tier fails transiently until the job next gets past the model or parks. Deferring and resuming to try the tier again are inside it. What the operator is told about once, when it has gone on long enough, rather than once per deferral. Counted by the pool and kept in the store, so a restart carries on counting it.
+One stretch of a job's model tier staying exhausted: from the first time every candidate in the tier fails transiently until the job next gets past the model or parks. Deferring and resuming to try the tier again are inside it. What the operator is told about once, when it has gone on long enough, rather than once per deferral. Counted by the pool and kept in the store, with whether it has been told, so a restart carries on counting it and does not tell it again.
 _Avoid_: Outage, incident, streak
 
 **Budget observation**:
