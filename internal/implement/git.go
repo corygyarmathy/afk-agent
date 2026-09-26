@@ -58,15 +58,26 @@ func commits(ctx context.Context, dir, base string) (int, error) {
 	return strconv.Atoi(out)
 }
 
-// uncommitted is what `git status` says is not committed in the workspace:
-// empty for a clean tree.
+// uncommitted is what `git status` says is changed in the workspace's tracked
+// files and not committed: empty for a clean tree. Untracked files are not
+// counted; the gate cleans them away before it runs.
 func uncommitted(ctx context.Context, dir string) (string, error) {
-	return git(ctx, dir, "status", "--porcelain")
+	return git(ctx, dir, "status", "--porcelain", "--untracked-files=no")
 }
 
-// branchOf is the branch the workspace has checked out.
+// reset puts the workspace back at base, on the branch it has checked out,
+// with nothing untracked.
+func reset(ctx context.Context, dir, base string) error {
+	if _, err := git(ctx, dir, "reset", "--quiet", "--hard", base); err != nil {
+		return err
+	}
+	_, err := git(ctx, dir, "clean", "--quiet", "--force", "-d")
+	return err
+}
+
+// branchOf is the branch the workspace has checked out, or HEAD if none is.
 func branchOf(ctx context.Context, dir string) (string, error) {
-	return git(ctx, dir, "symbolic-ref", "--short", "HEAD")
+	return git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
 }
 
 // git runs one git command in dir, or in the process's own directory if dir is
