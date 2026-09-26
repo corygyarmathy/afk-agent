@@ -92,7 +92,7 @@ Implementing an issue, for afk run and afk work:
   --ci-wait <dur>       AFK_CI_WAIT          wait before unfinished CI, or a review not yet
                                              posted, is read again
   --ci-ceiling <dur>    AFK_CI_CEILING       time after a push CI may take, then a hand-back
-  --ci-rounds <n>       AFK_CI_ROUNDS        red runs sent back to the session, then a hand-back
+  --ci-fixes <n>        AFK_CI_FIXES         red runs sent back to the session, then a hand-back
 
 All but --implement-needs are required to implement, with the model choice
 parameters and the two above; implementing also needs the heavy-build token's capacity.
@@ -150,7 +150,7 @@ type params struct {
 	denylist       string
 	ciWait         string
 	ciCeiling      string
-	ciRounds       string
+	ciFixes        string
 
 	opencode      string
 	enrolment     string
@@ -612,7 +612,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
 	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
-	fs.StringVar(&p.ciRounds, "ci-rounds", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_ROUNDS)")
+	fs.StringVar(&p.ciFixes, "ci-fixes", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_FIXES)")
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how
@@ -659,7 +659,7 @@ type implementParams struct {
 	denylist     []string
 	ciWait       time.Duration
 	ciCeiling    time.Duration
-	ciRounds     int
+	ciFixes      int
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -708,10 +708,10 @@ func (p *params) implement() (implementParams, error) {
 	if ip.ciCeiling, err = duration(v, "ci-ceiling"); err != nil {
 		return implementParams{}, err
 	}
-	if v, err = required(p.ciRounds, "ci-rounds", "AFK_CI_ROUNDS"); err != nil {
+	if v, err = required(p.ciFixes, "ci-fixes", "AFK_CI_FIXES"); err != nil {
 		return implementParams{}, err
 	}
-	if ip.ciRounds, err = count(v, "ci-rounds"); err != nil {
+	if ip.ciFixes, err = count(v, "ci-fixes"); err != nil {
 		return implementParams{}, err
 	}
 	return ip, nil

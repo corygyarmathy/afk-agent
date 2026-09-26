@@ -83,9 +83,9 @@ type progress struct {
 	// PushedAt is when that push was seen, which the CI ceiling runs from.
 	PushedAt time.Time `json:"pushed_at,omitzero"`
 
-	// Rounds is how many times CI has sent the work back to the session,
+	// Fixes is how many times CI has sent the work back to the session,
 	// and Counted the head the last of them was counted for.
-	Rounds  int    `json:"rounds,omitempty"`
+	Fixes   int    `json:"fixes,omitempty"`
 	Counted string `json:"counted,omitempty"`
 
 	// Session is the opencode session that wrote the branch's commits, to
@@ -221,7 +221,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, branch), "")
 	}
 
-	// A fix round's work is what it adds to the agent's last push. An amend
+	// A fix's work is what it adds to the agent's last push. An amend
 	// or a rebase of that push counts; the same head again would push nothing,
 	// and CI would read the same red run.
 	since, nothing := p.Base, "The session finished without committing anything, so there is nothing to push."

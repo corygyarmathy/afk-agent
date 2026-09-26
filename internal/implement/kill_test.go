@@ -234,7 +234,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		},
 		CIWait:    time.Minute,
 		CICeiling: 48 * time.Hour,
-		CIRounds:  1,
+		CIFixes:   1,
 		Store:     askStore{s, ft},
 		AskReview: implement.ReviewAsker(intake.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:  filepath.Join(dir, "state"),
