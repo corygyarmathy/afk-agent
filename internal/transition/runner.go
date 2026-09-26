@@ -205,9 +205,11 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 
 	// A transition that stays where it is is retrying, and its attempts carry
 	// over; one that moves has got somewhere, and the count starts again.
-	attempts := 0
+	// Stays count the same way, and only here: a run that failed did not
+	// decide anything, and fail leaves them where they were.
+	attempts, stays := 0, 0
 	if res.State == job.State {
-		attempts = job.Attempts + 1
+		attempts, stays = job.Attempts+1, job.Stays+1
 	}
 
 	c := store.Commit{
@@ -215,6 +217,7 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Holder:    r.Holder,
 		State:     res.State,
 		Attempts:  attempts,
+		Stays:     stays,
 		NextRunAt: res.RunAt,
 		Keys:      Result{Effects: todo}.keys(),
 		Release:   true,
@@ -292,6 +295,7 @@ func (r *Runner) fail(ctx context.Context, t Transition, job store.Job, now time
 		Holder:    r.Holder,
 		State:     job.State,
 		Attempts:  attempts,
+		Stays:     job.Stays,
 		NextRunAt: runAt,
 		Release:   true,
 	}

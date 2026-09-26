@@ -294,6 +294,54 @@ func TestAttemptsCarryOnARetryAndResetOnAMove(t *testing.T) {
 	}
 }
 
+// A run that decided to stay is a stay and an attempt; a run that failed is an
+// attempt and not a stay. The candidate model is chosen by the stays, so this
+// is what keeps an error that is not the model's from moving a job on to the
+// next candidate (#62).
+func TestStaysCountOnlyRunsThatDecidedToStay(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 2, "reviewing")
+
+	var fail bool
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review-run", Kind: store.KindReview, From: "reviewing",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			if fail {
+				return transition.Result{}, errors.New("502 Bad Gateway")
+			}
+			if in.Job.Stays == 2 {
+				return transition.Result{State: "posting", RunAt: in.Now}, nil
+			}
+			return transition.Result{State: "reviewing", RunAt: in.Now}, nil
+		},
+	})
+	r := runner(s, reg)
+	r.Backoff = func(int) (time.Time, bool) { return time.Now(), true }
+
+	for i, step := range []struct {
+		fail            bool
+		state           string
+		attempts, stays int
+	}{
+		{false, "reviewing", 1, 1},
+		{true, "reviewing", 2, 1},
+		{true, "reviewing", 3, 1},
+		{false, "reviewing", 4, 2},
+		{false, "posting", 0, 0},
+	} {
+		fail = step.fail
+		if _, err := r.Run(ctx, "review-run", job.ID); (err != nil) != step.fail {
+			t.Fatalf("run %d: error = %v, want one: %v", i+1, err, step.fail)
+		}
+		got, _ := s.Job(ctx, job.ID)
+		if got.State != step.state || got.Attempts != step.attempts || got.Stays != step.stays {
+			t.Fatalf("after run %d: %s, attempts %d, stays %d; want %s, %d, %d",
+				i+1, got.State, got.Attempts, got.Stays, step.state, step.attempts, step.stays)
+		}
+	}
+}
+
 // Cancellation must not reach the commit or the release. A SIGTERM that did
 // would throw away a transition that had already finished, and leave a lease
 // standing on a process that had exited, so the next worker waits out a full

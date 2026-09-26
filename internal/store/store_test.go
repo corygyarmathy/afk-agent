@@ -270,7 +270,7 @@ func TestCommitReleasesAndSchedules(t *testing.T) {
 	next := now.Add(15 * time.Minute).Truncate(time.Nanosecond)
 	err := s.Commit(ctx, store.Commit{
 		JobID: j.ID, Holder: "worker",
-		State: "awaiting-ci", Attempts: 3, NextRunAt: next, Release: true,
+		State: "awaiting-ci", Attempts: 3, Stays: 2, NextRunAt: next, Release: true,
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -280,8 +280,8 @@ func TestCommitReleasesAndSchedules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "awaiting-ci" || got.Attempts != 3 {
-		t.Errorf("got state %q attempts %d; want awaiting-ci, 3", got.State, got.Attempts)
+	if got.State != "awaiting-ci" || got.Attempts != 3 || got.Stays != 2 {
+		t.Errorf("got state %q attempts %d stays %d; want awaiting-ci, 3, 2", got.State, got.Attempts, got.Stays)
 	}
 	if !got.NextRunAt.Equal(next) {
 		t.Errorf("NextRunAt = %v; want %v", got.NextRunAt, next)

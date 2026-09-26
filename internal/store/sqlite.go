@@ -84,7 +84,7 @@ func fromNanos(n sql.NullInt64) time.Time {
 	return time.Unix(0, n.Int64).UTC()
 }
 
-const jobColumns = `id, kind, subject_type, subject_num, state, attempts, next_run_at, lease_holder, lease_expires_at`
+const jobColumns = `id, kind, subject_type, subject_num, state, attempts, stays, next_run_at, lease_holder, lease_expires_at`
 
 // scanJob reads one row of jobColumns.
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
@@ -94,7 +94,7 @@ func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 		holder  sql.NullString
 		expires sql.NullInt64
 	)
-	err := row.Scan(&j.ID, &j.Kind, &j.Subject.Type, &j.Subject.Number, &j.State, &j.Attempts, &next, &holder, &expires)
+	err := row.Scan(&j.ID, &j.Kind, &j.Subject.Type, &j.Subject.Number, &j.State, &j.Attempts, &j.Stays, &next, &holder, &expires)
 	if err != nil {
 		return Job{}, err
 	}
@@ -253,9 +253,9 @@ func (s *sqliteStore) Commit(ctx context.Context, c Commit) error {
 		holder, expires = nil, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE jobs SET state = ?, attempts = ?, next_run_at = ?, lease_holder = ?, lease_expires_at = ?
+		UPDATE jobs SET state = ?, attempts = ?, stays = ?, next_run_at = ?, lease_holder = ?, lease_expires_at = ?
 		WHERE id = ?`,
-		c.State, c.Attempts, nullNanos(c.NextRunAt), holder, expires, c.JobID); err != nil {
+		c.State, c.Attempts, c.Stays, nullNanos(c.NextRunAt), holder, expires, c.JobID); err != nil {
 		return fmt.Errorf("commit %s: %w", c.JobID, err)
 	}
 

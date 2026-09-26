@@ -302,6 +302,7 @@ func (a Armer) arm(ctx context.Context, job store.Job, start string, now time.Ti
 
 	job.State = start
 	job.Attempts = 0
+	job.Stays = 0
 	job.NextRunAt = now
 	// Without the cancellation, for the reason the runner's commit is: a stop
 	// arriving here must not leave the lease standing.
@@ -310,6 +311,7 @@ func (a Armer) arm(ctx context.Context, job store.Job, start string, now time.Ti
 		Holder:    a.Holder,
 		State:     job.State,
 		Attempts:  job.Attempts,
+		Stays:     job.Stays,
 		NextRunAt: job.NextRunAt,
 		Keys:      keys,
 		Release:   true,
