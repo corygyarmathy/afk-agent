@@ -163,19 +163,6 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	return n.send(ctx, key, "afk-agent: the "+w.Name+" budget is spent", tagExhausted, body)
 }
 
-// Episode is one run of a job's model tier staying exhausted: from the first
-// time the tier ran out until the job next gets past the model or parks.
-// Resuming and trying the tier again is inside it; so is a candidate failing
-// transiently on the way. The pool keeps it, because the pool is what sees every run.
-type Episode struct {
-	// Since is when the tier first ran out in this episode. With the job, it
-	// is what identifies the episode.
-	Since time.Time
-
-	// Times is how many times the tier has run out in it, this one included.
-	Times int
-}
-
 // TierExhausted reports a job whose model tier has run out and keeps running
 // out (ADR 0001 §10: exhausting a tier is a human-facing event). cause is what
 // the tier said the last time, and job is as committed, deferred.
@@ -188,14 +175,16 @@ type Episode struct {
 // without somebody looking. Each resume tries the whole tier again, so without
 // this the job defers and resumes indefinitely and the only sign is a job in
 // the store that is always deferred.
-func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep Episode, cause error) error {
+func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Episode, cause error) error {
 	if ep.Times < n.TierAfter {
 		return nil
 	}
 	// The episode's start is in the key, so a job that got past the model and
 	// later ran out again is a new occurrence, and one whose tier stays out is
-	// told once rather than once every tier wait.
-	key := fmt.Sprintf("tier:%s:%s", job.ID, ep.Since.Format(time.RFC3339Nano))
+	// told once rather than once every tier wait. As an instant rather than a
+	// formatted time: the same start read back from the store is in another
+	// location, and must not be another occurrence.
+	key := fmt.Sprintf("tier:%s:%d", job.ID, ep.Since.UnixNano())
 
 	body := fmt.Sprintf("%s, on %s #%d, has run out of models %d times since %s.",
 		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.Format(time.RFC3339))

@@ -945,7 +945,8 @@ func TestAHandBackWhoseEffectFailedReachesTheOperator(t *testing.T) {
 // the job moves past it - to a state that leads back to the model, the way a
 // gate that failed does - p the job parks where it is, for runTier to
 // reschedule the way an operator would, and d a model answered and the job is
-// done.
+// done. X is x with a tier wait longer than the test, so the job rests
+// deferred until runTierAcrossRestarts reschedules it.
 //
 // It has the shape review and implement have: a state the model runs from, a
 // state an exhausted tier waits in, and a resume from one to the other that
@@ -979,6 +980,8 @@ func tier(script string) *transition.Registry {
 				switch c {
 				case 'x':
 					return transition.Result{State: "deferred", RunAt: now(), Exhausted: errors.New("tier exhausted: all 2 enrolled models tried")}, nil
+				case 'X':
+					return transition.Result{State: "deferred", RunAt: time.Now().Add(time.Hour), Exhausted: errors.New("tier exhausted: all 2 enrolled models tried")}, nil
 				case 's':
 					return transition.Result{State: "running", RunAt: now()}, nil
 				case 'g':
@@ -1020,6 +1023,47 @@ func runTier(t *testing.T, script string) []string {
 	}()
 	runUntil(t, d, done)
 	return p.all()
+}
+
+// runTierAcrossRestarts is runTier with a restart of the pool wherever the
+// job waits out a tier (X): each process has a notifier of its own, as a
+// restarted `afk work` does, and the store is all they share. The job is
+// rescheduled between them, as the tier wait running out would, and after a
+// park, as runTier does. It returns what each process published.
+func runTierAcrossRestarts(t *testing.T, script string) [][]string {
+	t.Helper()
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	reg := tier(script)
+
+	var told [][]string
+	for {
+		p := &published{}
+		d := dispatcher(t, s, reg, pool(t, nil), 1)
+		d.Notify = notifier(p)
+		d.Notify.TierAfter = 2
+
+		var job store.Job
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				job = until(t, s, ids[0], "finish, park or wait out the tier", func(j store.Job) bool {
+					return j.State == "done" || (j.Lease == nil && (j.NextRunAt.IsZero() || j.NextRunAt.After(time.Now().Add(time.Minute))))
+				})
+				if !job.NextRunAt.IsZero() || job.State == "done" {
+					return
+				}
+				requeue(t, s, job)
+			}
+		}()
+		runUntil(t, d, done)
+		told = append(told, p.all())
+		if job.State == "done" {
+			return told
+		}
+		requeue(t, s, job)
+	}
 }
 
 // requeue schedules a parked job where it rests.
@@ -1085,6 +1129,49 @@ func TestAParkEndsAnEpisode(t *testing.T) {
 	}
 	if got := runTier(t, "xxpxxd"); len(got) != 2 {
 		t.Fatalf("%d notifications for two long episodes either side of a park, want 2:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+}
+
+// The acceptance criterion of #91: an episode is kept in the store, so a
+// restart carries on counting it. A tier that ran out once before the restart
+// and once after is told by the process that saw the second, where a count
+// kept in memory would start again and a pool that restarts more often than
+// the tier recovers would never tell anyone.
+func TestAnEpisodeSurvivesARestart(t *testing.T) {
+	got := runTierAcrossRestarts(t, "XXd")
+	if n := len(got); n != 3 {
+		t.Fatalf("%d processes, want 3", n)
+	}
+	if len(got[0]) != 0 || len(got[1]) != 1 || len(got[2]) != 0 {
+		t.Fatalf("notifications by process = %d, %d, %d; want 0, 1, 0: the second exhaustion is the episode's second, whichever process sees it", len(got[0]), len(got[1]), len(got[2]))
+	}
+}
+
+// What a restart does not carry is the notifier's memory of having told, which
+// is in memory for every condition alike (notification.md): an episode already
+// told is told again by the next process to see it run out, because the
+// operator may not have seen the first. It is not counted again from nothing
+// first.
+func TestAToldEpisodeIsToldAgainAfterARestart(t *testing.T) {
+	got := runTierAcrossRestarts(t, "xXXd")
+	if n := len(got); n != 3 {
+		t.Fatalf("%d processes, want 3", n)
+	}
+	if len(got[0]) != 1 || len(got[1]) != 1 || len(got[2]) != 0 {
+		t.Fatalf("notifications by process = %d, %d, %d; want 1, 1, 0", len(got[0]), len(got[1]), len(got[2]))
+	}
+}
+
+// A park still ends an episode that a restart carried over: exhaustions after
+// the requeue are counted from nothing.
+func TestAParkEndsAnEpisodeCarriedOverARestart(t *testing.T) {
+	got := runTierAcrossRestarts(t, "XpXd")
+	var n int
+	for _, told := range got {
+		n += len(told)
+	}
+	if n != 0 {
+		t.Fatalf("%d notifications for two short episodes either side of a park, want none: %q", n, got)
 	}
 }
 

@@ -197,7 +197,7 @@ func TestEachConditionCarriesItsOwnTag(t *testing.T) {
 	if err := n.Exhausted(ctx, window("rolling", "rate-limited", 100, "2026-09-11T18:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.TierExhausted(ctx, parked("deferred", 0), notify.Episode{Since: time.Now(), Times: 1}, errors.New("tier exhausted")); err != nil {
+	if err := n.TierExhausted(ctx, parked("deferred", 0), store.Episode{Since: time.Now(), Times: 1}, errors.New("tier exhausted")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,7 +231,7 @@ func TestAnExhaustedTierIsToldOncePerEpisodeAfterTheCount(t *testing.T) {
 	since := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 	cause := errors.New("tier exhausted: all 2 enrolled models tried")
 	for times := 1; times <= 5; times++ {
-		if err := n.TierExhausted(ctx, job, notify.Episode{Since: since, Times: times}, cause); err != nil {
+		if err := n.TierExhausted(ctx, job, store.Episode{Since: since, Times: times}, cause); err != nil {
 			t.Fatal(err)
 		}
 		want := 0
@@ -245,12 +245,33 @@ func TestAnExhaustedTierIsToldOncePerEpisodeAfterTheCount(t *testing.T) {
 
 	// A later episode of the same job is a new occurrence: the job got past
 	// the model in between, and its tier running out again is news.
-	later := notify.Episode{Since: since.Add(24 * time.Hour), Times: 3}
+	later := store.Episode{Since: since.Add(24 * time.Hour), Times: 3}
 	if err := n.TierExhausted(ctx, job, later, cause); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.all(); len(got) != 2 {
 		t.Fatalf("%d notifications after a second episode, want 2: %+v", len(got), got)
+	}
+}
+
+// An episode is the same occurrence whichever location its start is read in:
+// the pool counts it from its clock and reads it back from the store in UTC,
+// and one episode is told once across the two.
+func TestAnEpisodeIsOneOccurrenceInAnyLocation(t *testing.T) {
+	ctx := context.Background()
+	r := &recorder{}
+	n := notifier(r)
+	n.TierAfter = 1
+
+	job := parked("deferred", 0)
+	since := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{since.In(time.FixedZone("AEST", 10*60*60)), since} {
+		if err := n.TierExhausted(ctx, job, store.Episode{Since: at, Times: 1}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := r.all(); len(got) != 1 {
+		t.Fatalf("%d notifications for one episode read in two locations, want 1: %+v", len(got), got)
 	}
 }
 
@@ -264,7 +285,7 @@ func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 
 	job := parked("deferred", 0)
 	job.NextRunAt = time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
-	ep := notify.Episode{Since: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC), Times: 2}
+	ep := store.Episode{Since: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC), Times: 2}
 	if err := n.TierExhausted(context.Background(), job, ep, errors.New("tier exhausted: all 2 enrolled models tried")); err != nil {
 		t.Fatal(err)
 	}

@@ -88,25 +88,11 @@ type Dispatcher struct {
 	// notification channel.
 	Log func(msg string)
 
-	// episodes is each job whose model tier is exhausted and has not yet got
-	// past the model, by job id: see exhausted.
-	//
-	// In memory, like the notifier's own suppression, and for the same
-	// reason: it decides only what is told, and the job's state is in the
-	// store either way. A restart starts every episode again, so a tier that
-	// is still out is told again once it has run out Notify.TierAfter more
-	// times - the operator may not have seen the first one.
-	mu       sync.Mutex
-	episodes map[string]*episode
-}
-
-// episode is one job's tier staying exhausted, and the two states it moves
-// between while it does. Any move outside those two is the job getting past
-// the model, which ends it.
-type episode struct {
-	notify.Episode
-	running  string // the state the model runs from
-	deferred string // the state an exhausted tier waits in
+	// mu serialises exhausted's read and write of a job's episode. A job's
+	// lease is released at its commit, before the episode is counted, so a
+	// deferral that is due at once can be run and counted by another worker
+	// while this one is still counting the last.
+	mu sync.Mutex
 }
 
 func (d *Dispatcher) now() time.Time {
@@ -305,19 +291,24 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 // exhausted follows a job's episodes of an exhausted model tier, and tells the
 // operator about one that has gone on long enough (ADR 0001 §10).
 //
-// The episode is here rather than in the store or the transition because what
-// ends it is not one run: an exhausted tier defers, the resume moves the job
-// back to the model with its stays cleared, and the tier is tried from the top
-// again. Every run in that loop is a move or a stay between the same two
-// states, so the episode is those two, and the first run to leave them - the
-// model answered, or something else moved the job on - is the end of it. That
-// needs no knowledge of which states a job kind has, and a failed run, which
-// leaves the job where it was, is inside the episode rather than an end to it.
+// The episode is here rather than in the transition because what ends it is
+// not one run: an exhausted tier defers, the resume moves the job back to the
+// model with its stays cleared, and the tier is tried from the top again.
+// Every run in that loop is a move or a stay between the same two states, so
+// the episode is those two, and the first run to leave them - the model
+// answered, or something else moved the job on - is the end of it. That needs
+// no knowledge of which states a job kind has, and a failed run, which leaves
+// the job where it was, is inside the episode rather than an end to it.
 //
 // So is a park, although it leaves the job in one of the two: the job is the
 // operator's now, and whatever requeues it starts the tier afresh. Carried
 // over, an episode already told would swallow every exhaustion after the
 // requeue, and one not yet told would count exhaustions from before it.
+//
+// The episode is kept in the store, so a restart carries on counting it
+// (#91): a pool restarted more often than the tier recovers would otherwise
+// never reach the count. It decides only what is told, so a store that cannot
+// be read or written here is a log line, and the next exhaustion tries again.
 //
 // Nothing is followed without a notifier: an episode exists only to be told.
 func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transition.Outcome) {
@@ -327,32 +318,44 @@ func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transitio
 		// job's tier either way.
 		return
 	}
+	// Without the caller's cancellation, as notify is: a SIGTERM between the
+	// commit and this must not lose the count the restart is to carry on.
+	ctx = context.WithoutCancel(ctx)
+	id := out.Job.ID
 
 	d.mu.Lock()
-	ep, ok := d.episodes[out.Job.ID]
+	ep, ok, err := d.Store.Episode(ctx, id)
+	if err != nil {
+		d.mu.Unlock()
+		d.logf("%s: %s: %v", holder, id, err)
+		return
+	}
 	if out.Exhausted == nil {
-		if ok && (out.Parked || (out.To != ep.running && out.To != ep.deferred)) {
-			delete(d.episodes, out.Job.ID)
+		if ok && (out.Parked || (out.To != ep.Running && out.To != ep.Deferred)) {
+			err = d.Store.EndEpisode(ctx, id)
 		}
 		d.mu.Unlock()
+		if err != nil {
+			d.logf("%s: %s: %v", holder, id, err)
+		}
 		return
 	}
 	if !ok {
-		ep = &episode{running: out.From, deferred: out.To}
-		ep.Since = d.now()
-		if d.episodes == nil {
-			d.episodes = map[string]*episode{}
-		}
-		d.episodes[out.Job.ID] = ep
+		ep = store.Episode{Running: out.From, Deferred: out.To, Since: d.now()}
 	}
 	ep.Times++
-	told := ep.Episode
+	err = d.Store.SetEpisode(ctx, id, ep)
 	d.mu.Unlock()
+	if err != nil {
+		// Still offered: the count is right for this run, and only the next
+		// one will be short of it.
+		d.logf("%s: %s: %v", holder, id, err)
+	}
 
 	// Every exhaustion is offered, not only the one that reaches the count:
 	// the notifier publishes an episode once, and a publish that failed is
 	// tried again on the next one rather than lost.
-	d.notify(ctx, holder, func(c context.Context) error { return d.Notify.TierExhausted(c, out.Job, told, out.Exhausted) })
+	d.notify(ctx, holder, func(c context.Context) error { return d.Notify.TierExhausted(c, out.Job, ep, out.Exhausted) })
 }
 
 // admit consults the budget before a job starts, and gives the job back if it
