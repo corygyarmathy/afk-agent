@@ -96,7 +96,7 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 			close(done)
 		}
 	}
-	track := func(now, peak *atomic.Int64) func() {
+	track := func(now, peak *atomic.Int64) int64 {
 		n := now.Add(1)
 		for {
 			p := peak.Load()
@@ -104,25 +104,47 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 				break
 			}
 		}
-		// Long enough that anything running alongside it is still running.
-		time.Sleep(20 * time.Millisecond)
-		now.Add(-1)
-		return finish
+		return n
 	}
+
+	// The reviews meet rather than sleep. Each one waits until a second is
+	// running alongside it, so that a pool which lets them overlap always gets
+	// the chance to, however the runner schedules the workers - and a pool which
+	// runs them one at a time fails at the deadline instead of passing by luck.
+	// The deadline is shared, so that pool fails once rather than once a review.
+	overlapped := make(chan struct{})
+	var overlap sync.Once
+	meet, gaveUp := context.WithTimeout(context.Background(), 10*time.Second)
+	defer gaveUp()
 
 	reg := transition.MustRegistry(
 		transition.Transition{
 			Name: "build", Kind: store.KindImplement, From: "start",
 			Tokens: []string{"heavy-build"},
 			Run: func(context.Context, transition.In) (transition.Result, error) {
-				defer track(&heavyNow, &heavyPeak)()
+				defer finish()
+				track(&heavyNow, &heavyPeak)
+				// Long enough that a second build let in beside it would still
+				// be running. The capacity is an upper bound, so a build that
+				// happens to run alone cannot make this test fail.
+				time.Sleep(20 * time.Millisecond)
+				heavyNow.Add(-1)
 				return transition.Result{State: "built"}, nil
 			},
 		},
 		transition.Transition{
 			Name: "review", Kind: store.KindReview, From: "start",
-			Run: func(context.Context, transition.In) (transition.Result, error) {
-				defer track(&lightNow, &lightPeak)()
+			Run: func(ctx context.Context, _ transition.In) (transition.Result, error) {
+				defer finish()
+				if track(&lightNow, &lightPeak) >= 2 {
+					overlap.Do(func() { close(overlapped) })
+				}
+				select {
+				case <-overlapped:
+				case <-meet.Done():
+				case <-ctx.Done():
+				}
+				lightNow.Add(-1)
 				return transition.Result{State: "reviewed"}, nil
 			},
 		},
