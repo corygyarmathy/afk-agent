@@ -61,11 +61,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
-		token, err := d.token(ctx)
-		if err != nil {
-			return err
-		}
-		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed, token)
+		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
 	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
@@ -182,13 +178,6 @@ func where(at, lease string) string {
 		return fmt.Sprintf("it is at `%s`, which the agent did not push", git.Short(at))
 	}
 	return fmt.Sprintf("it is at `%s`, not at `%s` where the agent left it", git.Short(at), git.Short(lease))
-}
-
-func (d *Deps) token(ctx context.Context) (string, error) {
-	if d.Token == nil {
-		return "", nil
-	}
-	return d.Token(ctx)
 }
 
 func quoted(paths []string) string {

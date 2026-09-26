@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -214,11 +215,18 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &implement.Deps{
-		Tracker:       ft,
-		Model:         killModel{ft},
-		Login:         agent,
-		BranchPrefix:  prefix,
-		Remote:        remote,
+		Tracker:      ft,
+		Model:        killModel{ft},
+		Login:        agent,
+		BranchPrefix: prefix,
+		Remote: git.Remote{URL: remote, Token: func(context.Context) (string, error) {
+			// Every read mints a token too. The first one minted once there
+			// is a relay is the push's.
+			if _, err := os.Stat(filepath.Join(dir, "state", "relays")); err == nil {
+				ft.die("before-push")
+			}
+			return "", nil
+		}},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         3,
 		Rounds:        3,
@@ -228,16 +236,12 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		HandBackLabel: "needs-decision",
 		HandOffLabel:  "needs-review",
 		Denylist:      []string{".github/**"},
-		Token: func(context.Context) (string, error) {
-			ft.die("before-push")
-			return "", nil
-		},
-		CIWait:    time.Minute,
-		CICeiling: 48 * time.Hour,
-		CIFixes:   1,
-		Store:     askStore{s, ft},
-		AskReview: implement.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
-		StateDir:  filepath.Join(dir, "state"),
+		CIWait:        time.Minute,
+		CICeiling:     48 * time.Hour,
+		CIFixes:       1,
+		Store:         askStore{s, ft},
+		AskReview:     implement.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		StateDir:      filepath.Join(dir, "state"),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
 

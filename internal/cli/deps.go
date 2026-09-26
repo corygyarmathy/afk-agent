@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -43,7 +44,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Tracker:       tr.client,
 		Model:         opencode.Command{Path: m.opencode},
 		Store:         st,
-		Checkout:      review.Git{Remote: cloneURL(tr)}.Checkout,
+		Checkout:      review.Git{Remote: remote(tr)}.Checkout,
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
@@ -91,7 +92,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Model:         opencode.Command{Path: m.opencode},
 		Login:         login,
 		BranchPrefix:  ip.branchPrefix,
-		Remote:        cloneURL(tr),
+		Remote:        remote(tr),
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
@@ -104,21 +105,19 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
 		CIFixes:       ip.ciFixes,
-		// The installation token, minted and cached by the App the tracker
-		// uses: the push is the agent on the tracker like any other request
-		// (ADR 0005).
-		Token: tr.app.Token,
-		Store: st,
+		Store:         st,
 		// A holder of its own: it leases the review job, never this one.
 		AskReview: implement.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		StateDir:  stateDir,
 	}, nil
 }
 
-// cloneURL is where the tracker's repository is fetched from. No credentials
-// travel with it: reading a public repository needs none.
-func cloneURL(tr *tracker) string {
-	return "https://github.com/" + tr.client.Repo + ".git"
+// remote is the tracker's repository as git reaches it, with the installation
+// token minted and cached by the App the tracker uses: a clone, a fetch or a
+// push is the agent on the tracker like any other request (ADR 0005), and a
+// private repository is read as a public one is.
+func remote(tr *tracker) git.Remote {
+	return git.Remote{URL: "https://github.com/" + tr.client.Repo + ".git", Token: tr.app.Token}
 }
 
 // resolver is the state directory, and the candidate list for one job kind's

@@ -61,7 +61,11 @@ description, and says the implement job asked for it
   into a bare repository only the agent writes, the denylist is checked there,
   and that exact commit is pushed from there.
 - **The token** reaches `git` only in that one process's environment, as an
-  HTTP header scoped to the remote's URL.
+  HTTP header scoped to the remote's URL, minted as the process starts. The
+  clone, the read of which branches are taken and the reads of where a push
+  landed carry it the same way, isolated from the agent user's global and
+  system `git` configuration, so a private repository is implemented as a
+  public one is, and nothing of the token is left in the workspace.
 - **Every push is `--force-with-lease`**, pinned to the commit the agent last
   saw its own push land at. A session that amends its own pushed commits does
   not stall the job, and anyone else's push to the branch is never rewritten
@@ -90,7 +94,7 @@ description, and says the implement job asked for it
 
   | permission | level | for | |
   | --- | --- | --- | --- |
-  | Contents | write | the push | confirmed on the App by the operator, 2026-09-25 |
+  | Contents | write | the push, and the clone and every read of the remote's branches (write includes read) | the grant confirmed on the App by the operator, 2026-09-25; a read of a private repository not observed |
   | Pull requests | write | opening the pull request, its labels | confirmed on the App by the operator, 2026-09-25 |
   | Issues | write | the claim, replies, hand-backs and labels on the issue | by GitHub's documentation; not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
