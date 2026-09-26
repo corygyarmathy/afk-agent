@@ -313,7 +313,9 @@ func TestAnEpisodeIsOneOccurrenceInAnyLocation(t *testing.T) {
 
 // What an exhausted tier's message has to carry: which job, on what, how long
 // it has been going on, what the tier said, and that nothing will stop it
-// on its own.
+// on its own. It names the bound on a run among the causes, because a bound
+// too short for the work fails every candidate the same way, and is the one
+// cause the operator set.
 func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 	r := &recorder{}
 	n := notifier(r)
@@ -334,7 +336,7 @@ func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("%d notifications, want 1", len(got))
 	}
-	for _, want := range []string{"review-pr-12", "pr #12", "2 times", "2026-09-26T12:00:00Z", "all 2 enrolled models tried", "2026-09-26T14:00:00Z"} {
+	for _, want := range []string{"review-pr-12", "pr #12", "2 times", "2026-09-26T12:00:00Z", "all 2 enrolled models tried", "2026-09-26T14:00:00Z", "--model-timeout"} {
 		if !strings.Contains(got[0].title+"\n"+got[0].body, want) {
 			t.Errorf("the notification does not mention %q:\n%s\n%s", want, got[0].title, got[0].body)
 		}
