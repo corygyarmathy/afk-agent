@@ -254,7 +254,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
-		CIRounds:      2,
+		CIFixes:       2,
 		Store:         s,
 		AskReview:     implement.ReviewAsker(intake.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),

@@ -20,7 +20,7 @@
 //	watching     --implement-watch-------->  reviewing     CI is green on the pushed head
 //	                                         watching      not finished: again after the CI wait
 //	                                         implementing  red: back to the session, with what CI said
-//	                                         handing-back  out of rounds, or past the ceiling: hand-back on the pull request
+//	                                         handing-back  out of fixes, or past the ceiling: hand-back on the pull request
 //	reviewing    --implement-review------->  handing-off   the review is on the pull request
 //	                                         reviewing     the review job made due, or still on its way
 //	                                         handing-back  someone else pushed, the review job failed, or out of rounds
@@ -149,11 +149,11 @@ type Deps struct {
 
 	// CIWait is how long a head whose checks are not finished waits before
 	// it is looked at again, CICeiling how long after its push they may
-	// take before the work is handed back, and CIRounds how many times a
+	// take before the work is handed back, and CIFixes how many times a
 	// red run is sent back to the session. Parameters.
 	CIWait    time.Duration
 	CICeiling time.Duration
-	CIRounds  int
+	CIFixes   int
 
 	// Denylist is the paths the agent may never push, as globs (see
 	// denied). A parameter.

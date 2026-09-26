@@ -121,12 +121,12 @@ func mustHead(t *testing.T, f *fixture) string {
 	return head
 }
 
-// A red run is one CI round however many times its decision is made. A
+// A red run is one fix however many times its decision is made. A
 // commit lost after the decision - a kill, or a lost lease - replays it, and
 // the replay counts nothing new.
 func TestARedRunReplayedIsCountedOnce(t *testing.T) {
 	f := watched(t)
-	f.deps.CIRounds = 1
+	f.deps.CIFixes = 1
 	f.tr.checks = red()
 
 	for i := range 2 {
@@ -145,9 +145,9 @@ func TestARedRunReplayedIsCountedOnce(t *testing.T) {
 	}
 }
 
-// Running out of CI rounds hands back on the pull request, and only there,
+// Running out of fixes hands back on the pull request, and only there,
 // with what CI said - and never hands off.
-func TestRunningOutOfCIRoundsHandsBackOnThePullRequest(t *testing.T) {
+func TestRunningOutOfFixesHandsBackOnThePullRequest(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(commit("ok"), commit("a"), commit("b"))
 	f.tr.checks = func(string, int) []github.CheckRun {
@@ -157,15 +157,15 @@ func TestRunningOutOfCIRoundsHandsBackOnThePullRequest(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if len(f.model.asked) != 1+f.deps.CIRounds {
-		t.Errorf("the model was asked %d times, want the first run and %d rounds", len(f.model.asked), f.deps.CIRounds)
+	if len(f.model.asked) != 1+f.deps.CIFixes {
+		t.Errorf("the model was asked %d times, want the first run and %d fixes", len(f.model.asked), f.deps.CIFixes)
 	}
 	pr := 101
 	posted := f.tr.byAgent()
 	if len(posted) != 1 || f.tr.commentedOn[0] != pr {
 		t.Fatalf("comments %+v on %v, want one hand-back on #%d", posted, f.tr.commentedOn, pr)
 	}
-	for _, want := range []string{"before handing this pull request off", "2 rounds", "--- FAIL: TestReserve", "stays open"} {
+	for _, want := range []string{"before handing this pull request off", "2 fixes", "--- FAIL: TestReserve", "stays open"} {
 		if !strings.Contains(posted[0].Body, want) {
 			t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
 		}
@@ -275,7 +275,7 @@ func (f *fixture) handedBackOnThePR(want ...string) {
 	}
 }
 
-// A fix round goes through the same gate and denylist as the first push, and
+// A fix goes through the same gate and denylist as the first push, and
 // what stops it there is handed back on the pull request, not on the issue:
 // by then the work is the pull request's. Nothing more reaches the remote.
 func TestAFixThatIsStoppedBeforeItsPushHandsBackOnThePullRequest(t *testing.T) {
@@ -400,10 +400,10 @@ func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {
 	f.handedBackOnThePR("had not finished", "--- FAIL: TestReserve")
 }
 
-// A workspace lost during a fix round is not a new start: the branch is
+// A workspace lost during a fix is not a new start: the branch is
 // pushed and the pull request open, so a new branch would be a second pull
 // request. It is handed back on the one there is.
-func TestAWorkspaceLostInAFixRoundHandsBackOnThePullRequest(t *testing.T) {
+func TestAWorkspaceLostInAFixHandsBackOnThePullRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		lose string
