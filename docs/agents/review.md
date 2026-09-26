@@ -134,13 +134,18 @@ Two things GitHub's documentation does not say:
 ([`domain.md`](domain.md)). Two interact with a review in ways worth knowing
 before choosing values:
 
-- `--lease` must be longer than a model run, and than posting the reply. A
+- `--model-timeout` bounds the model run. One still going when it runs out is
+  killed with everything it started, and is a transient failure: the job
+  stays, and its next run tries the next candidate.
+- `--lease` should be longer than a model run, and than posting the reply. A
   lease that lapses mid-run lets another worker take the job; the store refuses
   the first run's commit, so the work is wasted rather than duplicated, but it
-  is still wasted. The lease is renewed when a transition commits and bounds
-  its effects, so a post still going when it lapses is cancelled - but one that
-  had already reached GitHub can still land after a verify has looked for the
-  reply, and been posted again.
+  is still wasted. Nothing ties it to `--model-timeout`: a short lease takes a
+  dead holder's job back quickly, and a long bound lets a slow run finish. The
+  lease is renewed when a transition commits and bounds its effects, so a post
+  still going when it lapses is cancelled - but one that had already reached
+  GitHub can still land after a verify has looked for the reply, and been
+  posted again.
 - `--model-attempts` bounds the candidates tried before a tier is exhausted.
   Only a model run that failed transiently moves on to the next candidate. Any
   other error in a run - the tracker, the checkout - counts against

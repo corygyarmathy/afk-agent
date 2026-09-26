@@ -67,7 +67,8 @@ type Runner struct {
 	// so none outlives the lease it runs under (see leased). The transition's
 	// own run is not bounded by it; one that outlives its lease is refused at
 	// the commit if another worker has taken the job, and wastes work rather
-	// than duplicating it.
+	// than duplicating it. A model run has a bound of its own, which is the
+	// model's business rather than this package's (#93).
 	LeaseTTL time.Duration
 
 	// Backoff schedules re-entry after a failure. Nil parks a failed job,

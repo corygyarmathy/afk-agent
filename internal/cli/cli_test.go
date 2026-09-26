@@ -21,6 +21,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/model"
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -711,6 +712,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 		reviewTier:    "review",
 		modelAttempts: "3",
 		tierWait:      "30m",
+		modelTimeout:  "45m",
 		effectRounds:  "4",
 		handBackLabel: "needs-decision",
 	}
@@ -721,6 +723,9 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 	}
 	if deps.Bound != 3 || deps.Rounds != 4 || deps.HandBackLabel != "needs-decision" {
 		t.Errorf("deps = %+v, want the attempt bound, the rounds and the hand-back label read from the parameters", deps)
+	}
+	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); deps.Model != want {
+		t.Errorf("model = %+v, want %+v", deps.Model, want)
 	}
 	for _, tc := range []struct {
 		spoil func(*params)
@@ -752,7 +757,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
 	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_EFFECT_ROUNDS",
-		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
+		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT"} {
 		t.Setenv(env, "")
 	}
 	tr := &tracker{client: &github.Client{Repo: "o/n"}, login: "afk-agent[bot]"}
@@ -762,6 +767,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		enrolment:     "/etc/afk/enrolment.json",
 		modelAttempts: "3",
 		tierWait:      "30m",
+		modelTimeout:  "45m",
 		branchPrefix:  "afk/",
 		gate:          "go test ./...",
 		gateAttempts:  "2",
@@ -789,6 +795,9 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIFixes != 2 ||
 		d.Bound != 3 || d.Rounds != 4 || d.TierWait != 30*time.Minute || d.Remote.URL != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
+	}
+	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); d.Model != want {
+		t.Errorf("model = %+v, want %+v", d.Model, want)
 	}
 
 	if _, err := implementDeps(context.Background(), full, nil, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
@@ -1000,7 +1009,7 @@ func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (
 }
 
 func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
-	full := params{opencode: "/bin/opencode", enrolment: "/etc/afk/enrolment.json", reviewTier: "review", modelAttempts: "3", tierWait: "30m"}
+	full := params{opencode: "/bin/opencode", enrolment: "/etc/afk/enrolment.json", reviewTier: "review", modelAttempts: "3", tierWait: "30m", modelTimeout: "45m"}
 
 	t.Run("resolved", func(t *testing.T) {
 		p := full
@@ -1010,7 +1019,7 @@ func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if m.tier != "review" || m.attempts != 3 || m.tierWait != 30*time.Minute || m.catalogueAge != 24*time.Hour {
+		if m.tier != "review" || m.attempts != 3 || m.tierWait != 30*time.Minute || m.timeout != 45*time.Minute || m.catalogueAge != 24*time.Hour {
 			t.Errorf("model = %+v", m)
 		}
 		if fmt.Sprint(m.needs) != "[tool_call input:image]" {
@@ -1029,9 +1038,11 @@ func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
 		{"no attempt bound", func(p *params) { p.modelAttempts = "" }, "--model-attempts is required"},
 		{"an attempt bound that is not a count", func(p *params) { p.modelAttempts = "some" }, "--model-attempts"},
 		{"no tier wait", func(p *params) { p.tierWait = "" }, "--tier-wait is required"},
+		{"no bound on a run", func(p *params) { p.modelTimeout = "" }, "--model-timeout is required"},
+		{"a bound on a run that is not a duration", func(p *params) { p.modelTimeout = "long" }, "--model-timeout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, env := range []string{"AFK_OPENCODE", "AFK_ENROLMENT", "AFK_REVIEW_TIER", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS"} {
+			for _, env := range []string{"AFK_OPENCODE", "AFK_ENROLMENT", "AFK_REVIEW_TIER", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS"} {
 				t.Setenv(env, "")
 			}
 			p := full

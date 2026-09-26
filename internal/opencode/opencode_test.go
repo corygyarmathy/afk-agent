@@ -32,6 +32,10 @@ const (
 
 var ref = model.Ref{Provider: "opencode-go", Model: "muse-spark-1.3-contributor"}
 
+// bound is a run's bound in every test that is not about it: long enough that
+// no run here reaches it.
+const bound = time.Minute
+
 // fake returns a Command whose binary is this test binary, standing in for
 // opencode in the given mode. A shell script in between, because opencode's
 // arguments are `run --model ...` and the test binary needs `-test.run` first;
@@ -47,7 +51,7 @@ func fake(t *testing.T, mode string, env map[string]string) opencode.Command {
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
-	return opencode.Command{Path: path}
+	return opencode.Command{Path: path, Timeout: bound}
 }
 
 // fixture is a stream recorded from a real `opencode run --format json`.
@@ -164,12 +168,20 @@ func TestFailuresThisProcessCanSeeAreFatal(t *testing.T) {
 		{
 			name: "a binary that is not there",
 			cmd: func(t *testing.T) opencode.Command {
-				return opencode.Command{Path: filepath.Join(t.TempDir(), "no-opencode-here")}
+				return opencode.Command{Path: filepath.Join(t.TempDir(), "no-opencode-here"), Timeout: bound}
 			},
 		},
 		{
 			name: "no binary configured",
-			cmd:  func(t *testing.T) opencode.Command { return opencode.Command{} },
+			cmd:  func(t *testing.T) opencode.Command { return opencode.Command{Timeout: bound} },
+		},
+		{
+			name: "no bound configured",
+			cmd: func(t *testing.T) opencode.Command {
+				c := fake(t, "replay", map[string]string{envStream: fixture(t, "ok.jsonl"), envExit: "0"})
+				c.Timeout = 0
+				return c
+			},
 		},
 		{
 			name: "a workspace that is not a directory",
@@ -189,7 +201,7 @@ func TestFailuresThisProcessCanSeeAreFatal(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := opencode.Command{Path: "/nonexistent"}
+			c := opencode.Command{Path: "/nonexistent", Timeout: bound}
 			if tc.cmd != nil {
 				c = tc.cmd(t)
 			}
@@ -343,6 +355,42 @@ func TestCancellingKillsTheRunAndWhatItStarted(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Run did not return after its context was cancelled")
+	}
+	for _, pid := range started {
+		gone(t, pid)
+	}
+}
+
+// A run still going when its bound runs out is killed with what it started,
+// and is transient: it is the model, or its provider, that did not finish, and
+// the next candidate may. It is not the caller's context running out, which
+// would read as a stop.
+func TestARunPastItsBoundIsKilledAndTransient(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "pids")
+	c := fake(t, "hang", map[string]string{envPids: pids})
+	c.Timeout = 500 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(context.Background(), request(t))
+		done <- err
+	}()
+	started := waitForPids(t, pids)
+
+	select {
+	case err := <-done:
+		var te *opencode.TransientError
+		if !errors.As(err, &te) {
+			t.Fatalf("got %v, want a TransientError", err)
+		}
+		if te.Model != ref {
+			t.Errorf("the error names %s, want %s", te.Model, ref)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Errorf("%v reads as the caller's context ending, which is a stop rather than a failure", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return after its bound ran out")
 	}
 	for _, pid := range started {
 		gone(t, pid)

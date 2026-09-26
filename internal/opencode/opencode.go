@@ -16,7 +16,9 @@
 // caller's decision turns on:
 //
 //   - A TransientError is anything opencode reported: an error event, a
-//     non-zero exit, a run that said nothing. Throttles, provider hiccups, a
+//     non-zero exit, a run that said nothing. So is a run still going when
+//     its bound runs out, which is opencode stuck on a provider as often as
+//     anything. Throttles, provider hiccups, a
 //     spent pay-as-you-go balance and a model the provider does not recognise
 //     all arrive that way and are not distinguishable through the harness -
 //     an unknown model's event reads "Unexpected server error" - so they are
@@ -58,6 +60,12 @@ const stderrTail = 4 << 10
 type Command struct {
 	// Path is the binary to run. A parameter, from configuration.
 	Path string
+
+	// Timeout bounds one run: one still going when it runs out is killed, and
+	// fails transiently. A parameter, from configuration, and not the lease's
+	// TTL - that wants to be short, so a dead holder's job is taken back
+	// quickly, and this long enough for the slowest honest run (#93).
+	Timeout time.Duration
 }
 
 // Request is one run.
@@ -133,17 +141,23 @@ func (e *FatalError) Unwrap() error { return e.Err }
 // Cancelling ctx kills the run and everything it started - opencode starts
 // language servers of its own, and a run abandoned by its transition must not
 // leave them behind. The error is then ctx's, and is neither transient nor
-// fatal: nothing failed, the caller stopped.
+// fatal: nothing failed, the caller stopped. A run that outlives Timeout is
+// killed the same way, and that is a failure: the run did not finish.
 func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	if err := c.check(req); err != nil {
 		return Reply{}, &FatalError{err}
 	}
 
+	// The bound on a context of its own, so that its running out can be told
+	// apart from the caller's context ending.
+	bounded, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+
 	args := []string{"run", "--model", req.Model.String(), "--dir", req.Dir, "--format", "json"}
 	if req.Session != "" {
 		args = append(args, "--session", req.Session)
 	}
-	cmd := exec.CommandContext(ctx, c.Path, append(args, req.Prompt)...)
+	cmd := exec.CommandContext(bounded, c.Path, append(args, req.Prompt)...)
 	cmd.Dir = req.Dir
 
 	// Stdin is the null device, and must be. opencode reads a stdin that is
@@ -184,6 +198,11 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	switch {
 	case ctx.Err() != nil:
 		return Reply{}, ctx.Err()
+	case bounded.Err() != nil && waitErr != nil:
+		// Before the stream is judged: a run killed mid-line leaves half an
+		// event, which is the kill's doing rather than opencode's. A run that
+		// exited cleanly as the bound ran out finished, and is not thrown away.
+		return Reply{}, c.transient(req, fmt.Errorf("the run was still going after %s, and was killed", c.Timeout), &stderr)
 	case decodeErr != nil:
 		return Reply{}, &FatalError{fmt.Errorf("%s did not write an event stream: %w", c.Path, decodeErr)}
 	case reported != nil:
@@ -202,6 +221,8 @@ func (c Command) check(req Request) error {
 	switch {
 	case c.Path == "":
 		return errors.New("no opencode binary configured")
+	case c.Timeout <= 0:
+		return errors.New("no bound on a run configured")
 	case req.Model.Provider == "" || req.Model.Model == "":
 		return fmt.Errorf("model %q is not provider/model", req.Model)
 	case req.Prompt == "":
