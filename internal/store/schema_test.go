@@ -60,6 +60,7 @@ var allowed = map[string]map[string]string{
 		"subject_num":      "the other half of the pointer",
 		"state":            "where this job is in its own state machine; GitHub has no opinion about it",
 		"attempts":         "run state: how many times this has been tried locally",
+		"stays":            "run state: how many local runs in a row chose to stay, which picks the candidate model",
 		"next_run_at":      "scheduling; ADR 0001 §3 keeps waiting out of process, so it has to live somewhere",
 		"lease_holder":     "a lease is local and has no tracker equivalent (CONTEXT.md: lease vs claim)",
 		"lease_expires_at": "the expiry that makes a dead holder's job reclaimable",
@@ -186,6 +187,36 @@ func TestSchemaVersionIsRecorded(t *testing.T) {
 	}
 	if version < 1 {
 		t.Errorf("user_version = %d after opening a store; want the migrations to have recorded themselves", version)
+	}
+}
+
+// A store an older binary wrote is brought forward on open, and the jobs in it
+// keep their place: a job that was under way has no stays yet, and runs its
+// first candidate next.
+func TestAStoreFromAnOlderBinaryIsBroughtForward(t *testing.T) {
+	path := newStoreFile(t)
+	db := openRaw(t, path)
+	if _, err := db.Exec(`UPDATE jobs SET state = 'reviewing', attempts = 2`); err != nil {
+		t.Fatal(err)
+	}
+	// Schema version 1 is version 2 without the stays.
+	if _, err := db.Exec(`ALTER TABLE jobs DROP COLUMN stays; PRAGMA user_version = 1`); err != nil {
+		t.Fatalf("take the store back to version 1: %v", err)
+	}
+	db.Close()
+
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	id := store.ID(store.KindReview, store.Subject{Type: store.SubjectPR, Number: 1})
+	j, err := s.Job(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Job: %v", err)
+	}
+	if j.State != "reviewing" || j.Attempts != 2 || j.Stays != 0 {
+		t.Errorf("job = %s, attempts %d, stays %d; want reviewing, 2, 0", j.State, j.Attempts, j.Stays)
 	}
 }
 

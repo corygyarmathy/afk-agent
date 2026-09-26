@@ -32,6 +32,10 @@ _Avoid_: Backoff, sleep, snooze
 A job left in its persisted state with nothing scheduled - no lease, no next run - resting until something reschedules it. How a job waits for an operator rather than for time: a due job comes back on its own, a parked job does not. About the scheduling, not about holding: a parked job is one whose lease has been given back _and_ whose re-entry nothing scheduled.
 _Avoid_: Stuck, suspended, dropped
 
+**Stay**:
+A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a stay also counts as an attempt, but a run that returned an error is an attempt and not a stay - it decided nothing. A job counts its stays in a row, and a move to another state starts the count again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
+_Avoid_: Retry, skip, candidate index
+
 **Budget observation**:
 One reading of the account's usage, taken from the provider's own endpoint. Account-wide and dollar-denominated, across independent windows, and it sees interactive use as well as the agent's. Never a number this agent accumulated: the agent observes its budget and does not estimate it.
 _Avoid_: Ledger, estimate, quota, usage tracking

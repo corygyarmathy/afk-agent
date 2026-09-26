@@ -352,8 +352,8 @@ func (d *Dispatcher) park(ctx context.Context, holder string, job store.Job) boo
 	return d.reschedule(ctx, holder, job, time.Time{})
 }
 
-// reschedule moves when a job next becomes due, leaving its state and its
-// attempt count alone.
+// reschedule moves when a job next becomes due, leaving its state, its
+// attempt count and its stays alone.
 //
 // Attempts are untouched on purpose. Neither parking a job nothing can move nor
 // deferring one to a budget window is an attempt at the work, and counting
@@ -371,6 +371,7 @@ func (d *Dispatcher) reschedule(ctx context.Context, holder string, job store.Jo
 		Holder:    holder,
 		State:     job.State,
 		Attempts:  job.Attempts,
+		Stays:     job.Stays,
 		NextRunAt: at,
 		Release:   true,
 	})

@@ -44,6 +44,10 @@ var migrations = []string{
 		reserved_at INTEGER NOT NULL
 	);
 	`,
+	// 2: stays, apart from attempts (#62).
+	`
+	ALTER TABLE jobs ADD COLUMN stays INTEGER NOT NULL DEFAULT 0;
+	`,
 }
 
 // migrate brings db up to len(migrations), using SQLite's own user_version as
