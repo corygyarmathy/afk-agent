@@ -78,7 +78,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		// branch. One the push may have made is left where it is: with
 		// the progress went the lease, and without it the agent cannot
 		// tell its own push from anyone else's.
-		if _, ok, err := d.open(ctx, n); err != nil {
+		if _, ok, err := d.open(ctx, d.forIssue(n)); err != nil {
 			return transition.Result{}, err
 		} else if ok {
 			return transition.Result{State: Watching, RunAt: in.Now}, nil
@@ -104,7 +104,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		}
 	}
 
-	if _, ok, err := d.pullRequestFrom(ctx, p.Branch); err != nil {
+	if _, ok, err := d.open(ctx, from(p.Branch)); err != nil {
 		return transition.Result{}, err
 	} else if ok {
 		return transition.Result{State: Watching, RunAt: in.Now}, nil
@@ -122,7 +122,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
 		// The key stops this run opening two. The tracker is what stops a
 		// round that follows a slow success from opening another.
-		if _, ok, err := d.pullRequestFrom(ctx, p.Branch); err != nil || ok {
+		if _, ok, err := d.open(ctx, from(p.Branch)); err != nil || ok {
 			return err
 		}
 		_, err := d.Tracker.CreatePullRequest(ctx, req)
@@ -147,20 +147,6 @@ func description(n int, p progress) string {
 	}
 	b.WriteString("Written by the agent. CI decides whether it is correct; an advisory review will be posted here as a comment once CI is green. Merging is yours.\n")
 	return b.String()
-}
-
-// pullRequestFrom finds the agent's open pull request from branch.
-func (d *Deps) pullRequestFrom(ctx context.Context, branch string) (github.PullRequest, bool, error) {
-	prs, err := d.Tracker.OpenPullRequests(ctx)
-	if err != nil {
-		return github.PullRequest{}, false, err
-	}
-	for _, pr := range prs {
-		if pr.HeadRef == branch && strings.EqualFold(pr.Login, d.Login) {
-			return pr, true, nil
-		}
-	}
-	return github.PullRequest{}, false, nil
 }
 
 func (d *Deps) token(ctx context.Context) (string, error) {

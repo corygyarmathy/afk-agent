@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
@@ -51,7 +52,7 @@ func (f *fixture) postReview() {
 func (f *fixture) restReviewJob() {
 	f.t.Helper()
 	ctx := context.Background()
-	if _, ok, err := f.store.Acquire(ctx, reviewJob, "review", f.at, f.deps.LeaseTTL); err != nil || !ok {
+	if _, ok, err := f.store.Acquire(ctx, reviewJob, "review", f.at, time.Minute); err != nil || !ok {
 		f.t.Fatalf("Acquire = %v, %v", ok, err)
 	}
 	if err := f.store.Commit(ctx, store.Commit{JobID: reviewJob, Holder: "review", State: review.Start, Release: true}); err != nil {
@@ -155,7 +156,7 @@ func TestAPushByAnyoneElseWhileAwaitingTheReviewHandsBack(t *testing.T) {
 func TestAParkedReviewJobIsHandedBackNotStartedOver(t *testing.T) {
 	f := greenPR(t)
 	ctx := context.Background()
-	if _, ok, err := f.store.Acquire(ctx, reviewJob, "review", f.at, f.deps.LeaseTTL); err != nil || !ok {
+	if _, ok, err := f.store.Acquire(ctx, reviewJob, "review", f.at, time.Minute); err != nil || !ok {
 		t.Fatalf("Acquire = %v, %v", ok, err)
 	}
 	if err := f.store.Commit(ctx, store.Commit{JobID: reviewJob, Holder: "review", State: review.Posting, Attempts: 3, Release: true}); err != nil {

@@ -21,7 +21,6 @@ package owed
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -370,38 +370,25 @@ func (b *Book) path(jobID string) string {
 	return filepath.Join(b.Dir, jobID+".json")
 }
 
-// save writes the record atomically, so a crash leaves the old file or the
-// new one and never half of one.
+// save writes the record.
 func (b *Book) save(jobID string, r Record) error {
 	if b.Dir == "" {
 		// The path would be relative to wherever the process is.
 		return errors.New("owed has no directory to keep records in")
 	}
-	path := b.path(jobID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.Marshal(r)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return statefile.Save(b.path(jobID), r)
 }
 
 func (b *Book) load(jobID string) (Record, error) {
 	if b.Dir == "" {
 		return Record{}, errors.New("owed has no directory to keep records in")
 	}
-	data, err := os.ReadFile(b.path(jobID))
-	if err != nil {
+	var r Record
+	err := statefile.Load(b.path(jobID), &r)
+	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, err
 	}
-	var r Record
-	if err := json.Unmarshal(data, &r); err != nil {
+	if err != nil {
 		return Record{}, fmt.Errorf("what %s owes: %w", jobID, err)
 	}
 	if r.Next == "" || len(r.Items) == 0 {

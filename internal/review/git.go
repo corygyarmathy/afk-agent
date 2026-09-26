@@ -3,8 +3,8 @@ package review
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
+
+	"github.com/corygyarmathy/afk-agent/internal/git"
 )
 
 // Git checks a pull request's head out with the git binary.
@@ -28,22 +28,9 @@ func (g Git) Checkout(ctx context.Context, dir string, number int) (string, erro
 		{"checkout", "--quiet", "--detach", "FETCH_HEAD"},
 	}
 	for _, args := range steps {
-		if _, err := git(ctx, dir, args...); err != nil {
+		if _, err := git.Run(ctx, dir, args...); err != nil {
 			return "", err
 		}
 	}
-	return git(ctx, dir, "rev-parse", "HEAD")
-}
-
-func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	// Nothing on stdin and no prompt for credentials: an unattended fetch
-	// that wants a password is a failure, not a wait.
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
+	return git.Run(ctx, dir, "rev-parse", "HEAD")
 }

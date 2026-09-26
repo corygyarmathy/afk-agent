@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/corygyarmathy/afk-agent/internal/git"
 )
 
 // prepare clones the remote's default branch into dir, which must not exist or
@@ -24,15 +26,15 @@ import (
 // The clone sends no credentials. Pushing is the only thing that needs them,
 // and it is not done here.
 func prepare(ctx context.Context, remote, dir, prefix string, issue int) (branch, base, into string, err error) {
-	if _, err := git(ctx, "", "clone", "--quiet", "--no-tags", remote, dir); err != nil {
+	if _, err := git.Run(ctx, "", "clone", "--quiet", "--no-tags", remote, dir); err != nil {
 		return "", "", "", err
 	}
-	into, err = git(ctx, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
+	into, err = git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
 	if err != nil {
 		return "", "", "", err
 	}
 	into = strings.TrimPrefix(into, "origin/")
-	heads, err := git(ctx, dir, "ls-remote", "--heads", "origin")
+	heads, err := git.Run(ctx, dir, "ls-remote", "--heads", "origin")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -48,10 +50,10 @@ func prepare(ctx context.Context, remote, dir, prefix string, issue int) (branch
 			break
 		}
 	}
-	if _, err := git(ctx, dir, "switch", "--quiet", "--create", branch); err != nil {
+	if _, err := git.Run(ctx, dir, "switch", "--quiet", "--create", branch); err != nil {
 		return "", "", "", err
 	}
-	base, err = git(ctx, dir, "rev-parse", "HEAD")
+	base, err = git.Run(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -76,14 +78,14 @@ func relay(ctx context.Context, workspace, relayDir, branch string) (string, err
 	if err := os.RemoveAll(relayDir); err != nil {
 		return "", err
 	}
-	if _, err := gitEnv(ctx, "", isolated, "init", "--quiet", "--bare", relayDir); err != nil {
+	if _, err := git.RunEnv(ctx, "", isolated, "init", "--quiet", "--bare", relayDir); err != nil {
 		return "", err
 	}
 	ref := "refs/heads/" + branch
-	if _, err := gitEnv(ctx, relayDir, isolated, "fetch", "--quiet", "--no-tags", "--force", workspace, "+"+ref+":"+ref); err != nil {
+	if _, err := git.RunEnv(ctx, relayDir, isolated, "fetch", "--quiet", "--no-tags", "--force", workspace, "+"+ref+":"+ref); err != nil {
 		return "", err
 	}
-	return gitEnv(ctx, relayDir, isolated, "rev-parse", ref)
+	return git.RunEnv(ctx, relayDir, isolated, "rev-parse", ref)
 }
 
 // isolated is the environment that keeps git to the configuration of the
@@ -97,7 +99,7 @@ var isolated = []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=
 // each of its parents, so a path the merge itself adds is here too: `git log`
 // lists none for a merge by default.
 func touched(ctx context.Context, dir, base, head string) ([]string, error) {
-	out, err := gitEnv(ctx, dir, isolated, "log", "--no-renames", "--diff-merges=separate", "--name-only", "--format=", "-z", base+".."+head)
+	out, err := git.RunEnv(ctx, dir, isolated, "log", "--no-renames", "--diff-merges=separate", "--name-only", "--format=", "-z", base+".."+head)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +159,7 @@ func pushEnv(remote, token string) []string {
 // such branch. Read with no credentials, as the clone is, and isolated as the
 // push is, so that both read the same remote.
 func remoteHead(ctx context.Context, remote, branch string) (string, error) {
-	out, err := gitEnv(ctx, "", isolated, "ls-remote", remote, "refs/heads/"+branch)
+	out, err := git.RunEnv(ctx, "", isolated, "ls-remote", remote, "refs/heads/"+branch)
 	if err != nil {
 		return "", err
 	}
@@ -167,7 +169,7 @@ func remoteHead(ctx context.Context, remote, branch string) (string, error) {
 
 // commits is how many commits the workspace's branch has on top of base.
 func commits(ctx context.Context, dir, base string) (int, error) {
-	out, err := git(ctx, dir, "rev-list", "--count", base+"..HEAD")
+	out, err := git.Run(ctx, dir, "rev-list", "--count", base+"..HEAD")
 	if err != nil {
 		return 0, err
 	}
@@ -178,40 +180,20 @@ func commits(ctx context.Context, dir, base string) (int, error) {
 // files and not committed: empty for a clean tree. Untracked files are not
 // counted; the gate cleans them away before it runs.
 func uncommitted(ctx context.Context, dir string) (string, error) {
-	return git(ctx, dir, "status", "--porcelain", "--untracked-files=no")
+	return git.Run(ctx, dir, "status", "--porcelain", "--untracked-files=no")
 }
 
 // reset puts the workspace back at base, on the branch it has checked out,
 // with nothing untracked.
 func reset(ctx context.Context, dir, base string) error {
-	if _, err := git(ctx, dir, "reset", "--quiet", "--hard", base); err != nil {
+	if _, err := git.Run(ctx, dir, "reset", "--quiet", "--hard", base); err != nil {
 		return err
 	}
-	_, err := git(ctx, dir, "clean", "--quiet", "--force", "-d")
+	_, err := git.Run(ctx, dir, "clean", "--quiet", "--force", "-d")
 	return err
 }
 
 // branchOf is the branch the workspace has checked out, or HEAD if none is.
 func branchOf(ctx context.Context, dir string) (string, error) {
-	return git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
-}
-
-// git runs one git command in dir, or in the process's own directory if dir is
-// empty, and returns its output trimmed.
-func git(ctx context.Context, dir string, args ...string) (string, error) {
-	return gitEnv(ctx, dir, nil, args...)
-}
-
-// gitEnv is git with env added to the process's environment.
-func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	// Nothing on stdin and no prompt for credentials: an unattended fetch
-	// that wants a password is a failure, not a wait.
-	cmd.Env = append(append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
+	return git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
 }

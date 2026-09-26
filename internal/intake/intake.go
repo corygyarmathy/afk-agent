@@ -233,62 +233,75 @@ func (in *Intake) answered(ctx context.Context, commentID int64) (bool, error) {
 }
 
 // arm makes the job a command asks for due, and reserves the command's key in
-// the same commit. It reports false, having changed nothing, when the job is
-// already queued or a live process holds it: that run will meet the command,
-// and if it does not answer it a later pass will.
+// the same commit. A command is a human asking for the work afresh, so the job
+// starts over wherever it came to rest.
+func (in *Intake) arm(ctx context.Context, cmd Command, subject store.Subject, key string) (store.Job, bool, error) {
+	a := Armer{Store: in.Store, Holder: in.Holder, LeaseTTL: in.LeaseTTL}
+	return a.Arm(ctx, cmd.Kind, subject, cmd.Start, in.now(), []string{key}, true)
+}
+
+// Armer makes jobs due under a lease of its own, for whatever asks for work
+// outside the job's own transitions: a command, or another job.
+type Armer struct {
+	Store    store.Store
+	Holder   string
+	LeaseTTL time.Duration
+}
+
+// Arm makes the job of kind for subject due at now, in state start with its
+// attempts cleared, and reserves keys in the same commit. It reports false,
+// having changed nothing, when the job is already queued or a live process
+// holds it: that run will meet whatever asked. So it does for a job at rest in
+// a state other than start, unless restart says to start that over.
 //
 // A job that is not there yet is created at rest and then armed like any
-// other, so that the key is always reserved by the commit that made the job
+// other, so that the keys are always reserved by the commit that made the job
 // due. A crash between the two leaves a job at rest with nothing reserved, and
-// the next pass arms it.
-func (in *Intake) arm(ctx context.Context, cmd Command, subject store.Subject, key string) (store.Job, bool, error) {
-	job, err := in.Store.Ensure(ctx, cmd.Kind, subject, cmd.Start, time.Time{})
+// the next ask arms it. With no keys to reserve, it is created due.
+func (a Armer) Arm(ctx context.Context, kind store.Kind, subject store.Subject, start string, now time.Time, keys []string, restart bool) (store.Job, bool, error) {
+	var runAt time.Time
+	if len(keys) == 0 {
+		runAt = now
+	}
+	job, err := a.Store.Ensure(ctx, kind, subject, start, runAt)
 	if err != nil {
 		return store.Job{}, false, err
 	}
-	if !job.NextRunAt.IsZero() {
+	armable := func(job store.Job) bool {
+		return job.NextRunAt.IsZero() && (restart || job.State == start)
+	}
+	if !armable(job) {
 		return store.Job{}, false, nil
 	}
 
-	now := in.now()
-	job, ok, err := in.Store.Acquire(ctx, job.ID, in.Holder, now, in.LeaseTTL)
+	job, ok, err := a.Store.Acquire(ctx, job.ID, a.Holder, now, a.LeaseTTL)
 	if err != nil || !ok {
 		return store.Job{}, false, err
 	}
-	if !job.NextRunAt.IsZero() {
+	if !armable(job) {
 		// Scheduled between the read and the lease - by `afk run`, say.
-		return store.Job{}, false, in.Store.Release(ctx, job.ID, in.Holder)
+		return store.Job{}, false, a.Store.Release(ctx, job.ID, a.Holder)
 	}
 
-	armed := rearm(job, cmd)
-	armed.NextRunAt = now
+	job.State = start
+	job.Attempts = 0
+	job.NextRunAt = now
 	// Without the cancellation, for the reason the runner's commit is: a stop
 	// arriving here must not leave the lease standing.
-	err = in.Store.Commit(context.WithoutCancel(ctx), store.Commit{
-		JobID:     armed.ID,
-		Holder:    in.Holder,
-		State:     armed.State,
-		Attempts:  armed.Attempts,
-		NextRunAt: armed.NextRunAt,
-		Keys:      []string{key},
+	err = a.Store.Commit(context.WithoutCancel(ctx), store.Commit{
+		JobID:     job.ID,
+		Holder:    a.Holder,
+		State:     job.State,
+		Attempts:  job.Attempts,
+		NextRunAt: job.NextRunAt,
+		Keys:      keys,
 		Release:   true,
 	})
 	if err != nil {
-		in.Store.Release(context.WithoutCancel(ctx), job.ID, in.Holder)
-		return store.Job{}, false, err
+		return store.Job{}, false, errors.Join(err, a.Store.Release(context.WithoutCancel(ctx), job.ID, a.Holder))
 	}
-	armed.Lease = nil
-	return armed, true, nil
-}
-
-// rearm is what a command does to a job at rest: it starts it over. A command
-// is a human asking for the work afresh, so the job goes back to its kind's
-// first state with its attempts cleared - wherever it came to rest, and
-// however many failures got it there.
-func rearm(job store.Job, cmd Command) store.Job {
-	job.State = cmd.Start
-	job.Attempts = 0
-	return job
+	job.Lease = nil
+	return job, true, nil
 }
 
 func (in *Intake) validate() error {

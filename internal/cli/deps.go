@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
@@ -98,9 +99,8 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Token: tr.app.Token,
 		Store: st,
 		// A holder of its own: it leases the review job, never this one.
-		Holder:   holder() + "/ask-review",
-		LeaseTTL: lease,
-		StateDir: stateDir,
+		AskReview: implement.ReviewAsker(intake.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		StateDir:  stateDir,
 	}, nil
 }
 
