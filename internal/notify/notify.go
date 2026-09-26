@@ -175,9 +175,16 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 // without somebody looking. Each resume tries the whole tier again, so without
 // this the job defers and resumes indefinitely and the only sign is a job in
 // the store that is always deferred.
-func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Episode, cause error) error {
+//
+// It reports whether the episode has been told, by this call or an earlier
+// one, for the pool to record in the store: an episode told is not told again
+// by the next process to count it (#91).
+func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Episode, cause error) (bool, error) {
+	if ep.Told {
+		return true, nil
+	}
 	if ep.Times < n.TierAfter {
-		return nil
+		return false, nil
 	}
 	// The episode's start is in the key, so a job that got past the model and
 	// later ran out again is a new occurrence, and one whose tier stays out is
@@ -199,7 +206,10 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 		"Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, or the provider is down. " +
 		"This is not repeated while the tier stays exhausted."
 
-	return n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body)
+	if err := n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // send publishes a message unless this occurrence has already been published.

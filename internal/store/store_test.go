@@ -642,8 +642,9 @@ func TestIDIsStableAndDistinguishesTheNumberSpace(t *testing.T) {
 }
 
 // An episode is in the file, so a store opened again - a restarted process -
-// reads back what the last one recorded (#91). Recording replaces, and ending
-// forgets; ending one that is not there is nothing.
+// reads back what the last one counted and whether it was told (#91).
+// Counting keeps the episode's start and adds one; ending forgets, and ending
+// one that is not there is nothing.
 func TestAnEpisodeOutlivesTheProcessThatRecordedIt(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -658,11 +659,23 @@ func TestAnEpisodeOutlivesTheProcessThatRecordedIt(t *testing.T) {
 		t.Fatalf("Episode before any = ok %v, %v; want none", ok, err)
 	}
 	since := time.Date(2026, 9, 26, 12, 0, 0, 123, time.UTC)
-	if err := s.SetEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 1}); err != nil {
-		t.Fatalf("SetEpisode: %v", err)
+	start := store.Episode{Running: "reviewing", Deferred: "deferred", Since: since}
+	if ep, err := s.CountEpisode(ctx, j.ID, start); err != nil || ep.Times != 1 {
+		t.Fatalf("CountEpisode = %+v, %v; want a count of 1", ep, err)
 	}
-	if err := s.SetEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 2}); err != nil {
-		t.Fatalf("SetEpisode again: %v", err)
+	later := store.Episode{Running: "other", Deferred: "other", Since: since.Add(time.Hour)}
+	if ep, err := s.CountEpisode(ctx, j.ID, later); err != nil || ep.Times != 2 || !ep.Since.Equal(since) {
+		t.Fatalf("CountEpisode again = %+v, %v; want the first episode with a count of 2", ep, err)
+	}
+	// Told only if it is still the episode that was told about.
+	if err := s.ToldEpisode(ctx, j.ID, since.Add(time.Hour)); err != nil {
+		t.Fatalf("ToldEpisode of another episode: %v", err)
+	}
+	if ep, _, _ := s.Episode(ctx, j.ID); ep.Told {
+		t.Fatal("told by a start that is not the episode's")
+	}
+	if err := s.ToldEpisode(ctx, j.ID, since); err != nil {
+		t.Fatalf("ToldEpisode: %v", err)
 	}
 	s.Close()
 
@@ -671,7 +684,7 @@ func TestAnEpisodeOutlivesTheProcessThatRecordedIt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Episode after reopening = ok %v, %v; want the one recorded", ok, err)
 	}
-	want := store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 2}
+	want := store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 2, Told: true}
 	if ep != want {
 		t.Errorf("Episode after reopening = %+v, want %+v", ep, want)
 	}
@@ -683,5 +696,54 @@ func TestAnEpisodeOutlivesTheProcessThatRecordedIt(t *testing.T) {
 	}
 	if _, ok, err := s.Episode(ctx, j.ID); err != nil || ok {
 		t.Errorf("Episode after it ended = ok %v, %v; want none", ok, err)
+	}
+}
+
+// Leaving ends an episode only for a state outside its two: going round the
+// tier again is inside it.
+func TestAnEpisodeIsLeftOnlyForAnotherState(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, t.TempDir())
+	j := mustEnsure(t, s, store.KindReview, store.Subject{Type: store.SubjectPR, Number: 1}, "reviewing", time.Now())
+	if _, err := s.CountEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, state := range []string{"reviewing", "deferred"} {
+		if err := s.LeaveEpisode(ctx, j.ID, state); err != nil {
+			t.Fatalf("LeaveEpisode(%s): %v", state, err)
+		}
+		if _, ok, _ := s.Episode(ctx, j.ID); !ok {
+			t.Fatalf("a move to %s ended the episode", state)
+		}
+	}
+	if err := s.LeaveEpisode(ctx, j.ID, "posting"); err != nil {
+		t.Fatalf("LeaveEpisode(posting): %v", err)
+	}
+	if _, ok, _ := s.Episode(ctx, j.ID); ok {
+		t.Error("a move to posting left the episode standing")
+	}
+}
+
+// A commit that starts the work afresh ends the episode with it, and one that
+// does not leaves it.
+func TestACommitCanEndAnEpisode(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, t.TempDir())
+	j := mustEnsure(t, s, store.KindReview, store.Subject{Type: store.SubjectPR, Number: 1}, "reviewing", time.Now())
+	if _, err := s.CountEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, end := range []bool{false, true} {
+		if _, ok, err := s.Acquire(ctx, j.ID, "worker-a", time.Now(), time.Minute); err != nil || !ok {
+			t.Fatalf("Acquire: ok %v, %v", ok, err)
+		}
+		if err := s.Commit(ctx, store.Commit{JobID: j.ID, Holder: "worker-a", State: "reviewing", Release: true, EndEpisode: end}); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		if _, ok, _ := s.Episode(ctx, j.ID); ok == end {
+			t.Errorf("Commit with EndEpisode %v: episode standing = %v", end, ok)
+		}
 	}
 }

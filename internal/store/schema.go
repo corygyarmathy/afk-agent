@@ -55,7 +55,8 @@ var migrations = []string{
 		running  TEXT NOT NULL,
 		deferred TEXT NOT NULL,
 		since    INTEGER NOT NULL, -- Unix nanoseconds
-		times    INTEGER NOT NULL
+		times    INTEGER NOT NULL,
+		told     INTEGER NOT NULL DEFAULT 0
 	);
 	`,
 }

@@ -71,6 +71,7 @@ var allowed = map[string]map[string]string{
 		"deferred": "the job's own state an exhausted tier waits in",
 		"since":    "run state: when this agent's tier first ran out for the job, which no tracker records",
 		"times":    "run state: how many local runs have found the tier exhausted since",
+		"told":     "run state: whether this agent's own notification channel has carried it",
 	},
 	"idempotency": {
 		"key":         "the dedup history ADR 0001 §5 requires; nothing in GitHub records it",

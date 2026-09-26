@@ -137,13 +137,14 @@ func (j Job) Held(holder string, now time.Time) bool {
 }
 
 // Episode is one job's episode of an exhausted model tier, as the pool keeps
-// it (CONTEXT.md: episode). The store holds it for the pool and does not
-// interpret it: what starts one, what ends one and when it is told are the
-// pool's (dispatch.Dispatcher).
+// it (CONTEXT.md: episode). When one starts, when it ends and when it is told
+// are the pool's (dispatch.Dispatcher); the store only makes each step one
+// statement, so two workers or two processes counting one job lose nothing.
 //
 // Kept here rather than in the pool's memory so that a restart carries on
-// counting (#91). A pool restarted more often than the tier recovers would
-// otherwise never count far enough to tell anyone.
+// counting, and remembers having told (#91). A pool restarted more often than
+// the tier recovers would otherwise never count far enough to tell anyone, or
+// would tell the same episode once per restart.
 type Episode struct {
 	// Running is the state the model runs from, and Deferred the state an
 	// exhausted tier waits in. The episode is the job moving between the two.
@@ -156,6 +157,9 @@ type Episode struct {
 
 	// Times is how many times the tier has run out in it.
 	Times int
+
+	// Told is whether the operator has been told about it.
+	Told bool
 }
 
 // Commit is one job's state change, applied atomically.
@@ -190,6 +194,12 @@ type Commit struct {
 	// The runner renews at the commit so that its effects are held for a lease
 	// of their own, rather than for what the transition left of the first one.
 	LeaseUntil time.Time
+
+	// EndEpisode ends the job's episode of an exhausted tier in the same
+	// transaction. For a commit that starts the work afresh (transition.Armer):
+	// the tier is tried from the top, and an episode carried over would count
+	// exhaustions from before it.
+	EndEpisode bool
 }
 
 // Store is the job store. The SQLite implementation in this package is the only
@@ -244,16 +254,26 @@ type Store interface {
 	// it has none.
 	Episode(ctx context.Context, id string) (Episode, bool, error)
 
-	// SetEpisode records a job's episode, replacing any it had.
+	// CountEpisode counts one exhaustion of a job's tier, and returns the
+	// episode as it now stands. A job with no episode starts start, with a
+	// count of one; one with an episode keeps it and adds one to its count.
 	//
 	// Not part of Commit, and not under the lease: an episode decides only
-	// what the operator is told, and the pool writes it after the run it
+	// what the operator is told, and the pool counts it after the run it
 	// counts has committed. A crash in between loses one count, which delays
 	// a notification by one tier wait and changes nothing else.
-	SetEpisode(ctx context.Context, id string, ep Episode) error
+	CountEpisode(ctx context.Context, id string, start Episode) (Episode, error)
+
+	// ToldEpisode records that a job's episode has been told, if it is still
+	// the one that started at since.
+	ToldEpisode(ctx context.Context, id string, since time.Time) error
 
 	// EndEpisode forgets a job's episode. A job with none is not an error.
 	EndEpisode(ctx context.Context, id string) error
+
+	// LeaveEpisode ends a job's episode if state is neither of its two: the
+	// job has moved on from the model, rather than going round the tier again.
+	LeaveEpisode(ctx context.Context, id, state string) error
 
 	// Release drops holder's lease on a job without changing its state. A
 	// transition that panics releases rather than making the next worker wait

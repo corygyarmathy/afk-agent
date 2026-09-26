@@ -273,6 +273,12 @@ func (s *sqliteStore) Commit(ctx context.Context, c Commit) error {
 		}
 	}
 
+	if c.EndEpisode {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM episodes WHERE job_id = ?`, c.JobID); err != nil {
+			return fmt.Errorf("end episode of %s: %w", c.JobID, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit %s: %w", c.JobID, err)
 	}
@@ -302,37 +308,63 @@ func (s *sqliteStore) Release(ctx context.Context, id, holder string) error {
 }
 
 func (s *sqliteStore) Episode(ctx context.Context, id string) (Episode, bool, error) {
-	var (
-		ep    Episode
-		since int64
-	)
-	err := s.db.QueryRowContext(ctx, `SELECT running, deferred, since, times FROM episodes WHERE job_id = ?`, id).
-		Scan(&ep.Running, &ep.Deferred, &since, &ep.Times)
+	ep, err := scanEpisode(s.db.QueryRowContext(ctx, `SELECT `+episodeColumns+` FROM episodes WHERE job_id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Episode{}, false, nil
 	}
 	if err != nil {
 		return Episode{}, false, fmt.Errorf("read episode of %s: %w", id, err)
 	}
-	ep.Since = time.Unix(0, since).UTC()
 	return ep, true, nil
 }
 
-func (s *sqliteStore) SetEpisode(ctx context.Context, id string, ep Episode) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO episodes (job_id, running, deferred, since, times) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (job_id) DO UPDATE SET
-			running = excluded.running, deferred = excluded.deferred,
-			since = excluded.since, times = excluded.times`,
-		id, ep.Running, ep.Deferred, ep.Since.UnixNano(), ep.Times)
+// episodeColumns is what scanEpisode reads, in its order.
+const episodeColumns = `running, deferred, since, times, told`
+
+func scanEpisode(row *sql.Row) (Episode, error) {
+	var (
+		ep    Episode
+		since int64
+	)
+	if err := row.Scan(&ep.Running, &ep.Deferred, &since, &ep.Times, &ep.Told); err != nil {
+		return Episode{}, err
+	}
+	ep.Since = time.Unix(0, since).UTC()
+	return ep, nil
+}
+
+func (s *sqliteStore) CountEpisode(ctx context.Context, id string, start Episode) (Episode, error) {
+	// One statement, so a count read by one worker and written back after
+	// another has counted or ended the episode cannot lose the other's.
+	ep, err := scanEpisode(s.db.QueryRowContext(ctx, `
+		INSERT INTO episodes (job_id, running, deferred, since, times) VALUES (?, ?, ?, ?, 1)
+		ON CONFLICT (job_id) DO UPDATE SET times = times + 1
+		RETURNING `+episodeColumns,
+		id, start.Running, start.Deferred, start.Since.UnixNano()))
 	if err != nil {
-		return fmt.Errorf("record episode of %s: %w", id, err)
+		return Episode{}, fmt.Errorf("count episode of %s: %w", id, err)
+	}
+	return ep, nil
+}
+
+func (s *sqliteStore) ToldEpisode(ctx context.Context, id string, since time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE episodes SET told = 1 WHERE job_id = ? AND since = ?`, id, since.UnixNano())
+	if err != nil {
+		return fmt.Errorf("record episode of %s as told: %w", id, err)
 	}
 	return nil
 }
 
 func (s *sqliteStore) EndEpisode(ctx context.Context, id string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM episodes WHERE job_id = ?`, id); err != nil {
+		return fmt.Errorf("end episode of %s: %w", id, err)
+	}
+	return nil
+}
+
+func (s *sqliteStore) LeaveEpisode(ctx context.Context, id, state string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM episodes WHERE job_id = ? AND running <> ? AND deferred <> ?`, id, state, state)
+	if err != nil {
 		return fmt.Errorf("end episode of %s: %w", id, err)
 	}
 	return nil

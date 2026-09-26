@@ -87,12 +87,6 @@ type Dispatcher struct {
 	// does not notify (ADR 0001 §13), and this is a log rather than a
 	// notification channel.
 	Log func(msg string)
-
-	// mu serialises exhausted's read and write of a job's episode. A job's
-	// lease is released at its commit, before the episode is counted, so a
-	// deferral that is due at once can be run and counted by another worker
-	// while this one is still counting the last.
-	mu sync.Mutex
 }
 
 func (d *Dispatcher) now() time.Time {
@@ -305,10 +299,15 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 // over, an episode already told would swallow every exhaustion after the
 // requeue, and one not yet told would count exhaustions from before it.
 //
-// The episode is kept in the store, so a restart carries on counting it
-// (#91): a pool restarted more often than the tier recovers would otherwise
-// never reach the count. It decides only what is told, so a store that cannot
-// be read or written here is a log line, and the next exhaustion tries again.
+// The episode is kept in the store, so a restart carries on counting it, and
+// remembers having told it (#91): a pool restarted more often than the tier
+// recovers would otherwise never reach the count, or would tell the episode
+// once per restart. Each step is one statement in the store, because a job's
+// lease is released at its commit, before the episode is counted: a deferral
+// that is due at once can be run and counted by another worker, or another
+// process, while this one is still counting the last. It decides only what is
+// told, so a store that cannot be written here is a log line, and the next
+// exhaustion tries again.
 //
 // Nothing is followed without a notifier: an episode exists only to be told.
 func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transition.Outcome) {
@@ -323,39 +322,39 @@ func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transitio
 	ctx = context.WithoutCancel(ctx)
 	id := out.Job.ID
 
-	d.mu.Lock()
-	ep, ok, err := d.Store.Episode(ctx, id)
-	if err != nil {
-		d.mu.Unlock()
-		d.logf("%s: %s: %v", holder, id, err)
-		return
-	}
 	if out.Exhausted == nil {
-		if ok && (out.Parked || (out.To != ep.Running && out.To != ep.Deferred)) {
+		var err error
+		if out.Parked {
 			err = d.Store.EndEpisode(ctx, id)
+		} else {
+			err = d.Store.LeaveEpisode(ctx, id, out.To)
 		}
-		d.mu.Unlock()
 		if err != nil {
 			d.logf("%s: %s: %v", holder, id, err)
 		}
 		return
 	}
-	if !ok {
-		ep = store.Episode{Running: out.From, Deferred: out.To, Since: d.now()}
-	}
-	ep.Times++
-	err = d.Store.SetEpisode(ctx, id, ep)
-	d.mu.Unlock()
+	ep, err := d.Store.CountEpisode(ctx, id, store.Episode{Running: out.From, Deferred: out.To, Since: d.now()})
 	if err != nil {
-		// Still offered: the count is right for this run, and only the next
-		// one will be short of it.
 		d.logf("%s: %s: %v", holder, id, err)
+		return
+	}
+	if ep.Told {
+		return
 	}
 
 	// Every exhaustion is offered, not only the one that reaches the count:
 	// the notifier publishes an episode once, and a publish that failed is
 	// tried again on the next one rather than lost.
-	d.notify(ctx, holder, func(c context.Context) error { return d.Notify.TierExhausted(c, out.Job, ep, out.Exhausted) })
+	told, err := d.Notify.TierExhausted(ctx, out.Job, ep, out.Exhausted)
+	if err != nil {
+		d.logf("%s: %v", holder, err)
+	}
+	if told {
+		if err := d.Store.ToldEpisode(ctx, id, ep.Since); err != nil {
+			d.logf("%s: %s: %v", holder, id, err)
+		}
+	}
 }
 
 // admit consults the budget before a job starts, and gives the job back if it
