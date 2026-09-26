@@ -2,9 +2,15 @@ package git_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
@@ -84,5 +90,64 @@ func TestAReadWithNoDirectoryTakesNoRepositoryItIsIn(t *testing.T) {
 	r := git.Remote{URL: src}
 	if heads, err := r.Run(context.Background(), "", "ls-remote", r.URL); err != nil || heads != "" {
 		t.Errorf("ls-remote = %q, %v: want the empty remote's nothing", heads, err)
+	}
+}
+
+// Over HTTP, as GitHub is reached: every request to the remote carries the
+// token, and a request to any other URL, from the same environment, does not.
+func TestTheTokenIsSentToTheRemoteAndNowhereElse(t *testing.T) {
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git on PATH")
+	}
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--quiet", "--bare", filepath.Join(root, "n.git")},
+		{"init", "--quiet", "--bare", filepath.Join(root, "other.git")},
+	} {
+		if _, err := git.RunEnv(context.Background(), "", git.Isolated, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	sent := map[string][]string{}
+	backend := &cgi.Handler{Path: bin, Args: []string{"http-backend"}, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		repo, _, _ := strings.Cut(strings.TrimPrefix(req.URL.Path, "/"), "/")
+		mu.Lock()
+		sent[repo] = append(sent[repo], req.Header.Get("Authorization"))
+		mu.Unlock()
+		backend.ServeHTTP(w, req)
+	}))
+	defer srv.Close()
+
+	r := git.Remote{URL: srv.URL + "/n.git", Token: func(context.Context) (string, error) { return "ghs_secret", nil }}
+	if _, err := r.Run(context.Background(), "", "ls-remote", r.URL); err != nil {
+		t.Fatal(err)
+	}
+	env, err := r.Env(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.RunEnv(context.Background(), "/", env, "ls-remote", srv.URL+"/other.git"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghs_secret"))
+	if len(sent["n.git"]) == 0 {
+		t.Fatal("no request reached the remote")
+	}
+	for _, got := range sent["n.git"] {
+		if got != want {
+			t.Errorf("a request to the remote carried %q, want %q", got, want)
+		}
+	}
+	if len(sent["other.git"]) == 0 {
+		t.Fatal("no request reached the other URL")
+	}
+	for _, got := range sent["other.git"] {
+		if got != "" {
+			t.Errorf("a request to another URL carried %q", got)
+		}
 	}
 }
