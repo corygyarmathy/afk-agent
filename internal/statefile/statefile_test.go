@@ -45,7 +45,7 @@ func TestAMissingFileIsNotExist(t *testing.T) {
 }
 
 // A save that fails leaves the file it would have replaced, whole. That holds
-// whether it fails before writing anything or partway through.
+// whether the value will not encode or the value encodes and the write fails.
 func TestAFailedSaveKeepsThePreviousFile(t *testing.T) {
 	for name, fail := range map[string]func(t *testing.T, path string) any{
 		// A value JSON cannot encode fails before anything is written.
