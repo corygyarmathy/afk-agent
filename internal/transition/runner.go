@@ -55,10 +55,11 @@ type Runner struct {
 	// the other holds.
 	Holder string
 
-	// LeaseTTL is how long a lease is taken for. Long enough that a transition
-	// and its effects finish inside it - the lease is held until the last
-	// effect returns - short enough that a dead holder's job is reclaimable
-	// without an operator. A deployment parameter, so it is supplied rather
+	// LeaseTTL is how long a lease is taken for, and how long it is renewed for
+	// at a commit that has effects to perform. Long enough that a transition
+	// finishes inside it, and that its effects do - the lease is held until the
+	// last effect returns - short enough that a dead holder's job is
+	// reclaimable without an operator. A deployment parameter, so it is supplied rather
 	// than chosen here.
 	LeaseTTL time.Duration
 
@@ -141,8 +142,8 @@ func (o Outcome) String() string {
 // after it, the state moved and the reserved key stops a replay from performing
 // the effect a second time.
 //
-// The lease outlives the commit because the job's next transition must not run
-// while an effect is still in flight. A result due now is due the moment it
+// The lease outlives the commit, renewed for a whole LeaseTTL, because the job's
+// next transition must not run while an effect is still in flight. A result due now is due the moment it
 // commits, and a worker that took it then would read GitHub before the push or
 // the comment had landed, find it missing, and do it again.
 // A lost effect is recoverable because the next transition re-reads GitHub
@@ -229,6 +230,9 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		NextRunAt: res.RunAt,
 		Keys:      Result{Effects: todo}.keys(),
 		Release:   len(todo) == 0,
+	}
+	if !c.Release {
+		c.LeaseUntil = r.now().Add(r.LeaseTTL)
 	}
 	if err := r.Store.Commit(done, c); err != nil {
 		return Outcome{}, r.release(ctx, job, err)
