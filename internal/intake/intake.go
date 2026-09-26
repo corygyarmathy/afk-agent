@@ -233,11 +233,10 @@ func (in *Intake) answered(ctx context.Context, commentID int64) (bool, error) {
 }
 
 // arm makes the job a command asks for due, and reserves the command's key in
-// the same commit. A command is a human asking for the work afresh, so the job
-// starts over wherever it came to rest.
+// the same commit.
 func (in *Intake) arm(ctx context.Context, cmd Command, subject store.Subject, key string) (store.Job, bool, error) {
 	a := Armer{Store: in.Store, Holder: in.Holder, LeaseTTL: in.LeaseTTL}
-	return a.Arm(ctx, cmd.Kind, subject, cmd.Start, in.now(), []string{key}, true)
+	return a.Restart(ctx, cmd.Kind, subject, cmd.Start, in.now(), key)
 }
 
 // Armer makes jobs due under a lease of its own, for whatever asks for work
@@ -248,28 +247,46 @@ type Armer struct {
 	LeaseTTL time.Duration
 }
 
-// Arm makes the job of kind for subject due at now, in state start with its
-// attempts cleared, and reserves keys in the same commit. It reports false,
+// Restart is a human asking for the work afresh: it makes the job of kind for
+// subject due at now, in state start with its attempts cleared, wherever the
+// job came to rest, and reserves key in the same commit. It reports false,
 // having changed nothing, when the job is already queued or a live process
-// holds it: that run will meet whatever asked. So it does for a job at rest in
-// a state other than start, unless restart says to start that over.
+// holds it: that run will meet whatever asked.
 //
 // A job that is not there yet is created at rest and then armed like any
-// other, so that the keys are always reserved by the commit that made the job
+// other, so that the key is always reserved by the commit that made the job
 // due. A crash between the two leaves a job at rest with nothing reserved, and
-// the next ask arms it. With no keys to reserve, it is created due.
-func (a Armer) Arm(ctx context.Context, kind store.Kind, subject store.Subject, start string, now time.Time, keys []string, restart bool) (store.Job, bool, error) {
-	var runAt time.Time
-	if len(keys) == 0 {
-		runAt = now
-	}
-	job, err := a.Store.Ensure(ctx, kind, subject, start, runAt)
+// the next ask arms it.
+func (a Armer) Restart(ctx context.Context, kind store.Kind, subject store.Subject, start string, now time.Time, key string) (store.Job, bool, error) {
+	job, err := a.Store.Ensure(ctx, kind, subject, start, time.Time{})
 	if err != nil {
 		return store.Job{}, false, err
 	}
-	armable := func(job store.Job) bool {
-		return job.NextRunAt.IsZero() && (restart || job.State == start)
+	return a.arm(ctx, job, start, now, []string{key}, func(job store.Job) bool {
+		return job.NextRunAt.IsZero()
+	})
+}
+
+// Ask is another job asking for the work: it makes the job of kind for subject
+// due at now, in state start with its attempts cleared, if it is at rest in
+// start. A job already queued or held is left alone, since that run will meet
+// whatever asked, and so is one parked in any other state, which is the
+// operator's to look at. A job that is not there yet is created due, so that a
+// crash straight after leaves it queued.
+func (a Armer) Ask(ctx context.Context, kind store.Kind, subject store.Subject, start string, now time.Time) error {
+	job, err := a.Store.Ensure(ctx, kind, subject, start, now)
+	if err != nil {
+		return err
 	}
+	_, _, err = a.arm(ctx, job, start, now, nil, func(job store.Job) bool {
+		return job.NextRunAt.IsZero() && job.State == start
+	})
+	return err
+}
+
+// arm takes the lease on job, checks it is still armable, and commits it due
+// at now in state start with keys reserved.
+func (a Armer) arm(ctx context.Context, job store.Job, start string, now time.Time, keys []string, armable func(store.Job) bool) (store.Job, bool, error) {
 	if !armable(job) {
 		return store.Job{}, false, nil
 	}
