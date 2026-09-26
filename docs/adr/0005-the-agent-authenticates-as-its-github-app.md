@@ -19,6 +19,17 @@ to a file, so a clone leaves nothing of it in the workspace the model reads, and
 no token is held across a model run to expire in it. `internal/git`'s `Remote`
 is the one place this is done, for every job kind that reaches the repository.
 
+**Amended 2026-09-26 (a token `git` is refused with is discarded; #88).** §2's
+"a 401 discards the token held" held for the API and not for `git`, which
+reports no HTTP status and, for a 401 with no terminal to prompt on, says only
+that it could not read a username. What `git` does on a 401, and on no other
+answer, is ask a credential helper. The environment that carries the token
+therefore also names a helper for the same URL, which supplies no credential
+and prints a line the agent wrote; a failed process whose output has that line
+was refused, and the token it carried is discarded as the API's would be. A 403
+is not a refusal of the token and does not discard it, for `git` as for the
+API. `internal/git`'s `Remote` does this, beside the token.
+
 ## Context
 
 The agent's first tracker client authenticated with a static bearer token read
@@ -117,19 +128,20 @@ them.
   correct, where a static token was a header.
 - ~~The review's `git` fetch is untouched by this decision and still sends no
   credentials, so a private repository still cannot be reviewed.~~ No longer
-  true: see the amendment of 2026-09-26.
+  true: see the first amendment of 2026-09-26.
 - Every `git` process that reaches the repository holds a live installation
   token in its environment, and an environment is readable in `/proc` by any
-  process running as the same user (§6). Before the amendment of 2026-09-26
-  only the push did; now every clone, fetch and `ls-remote` does, so a model
-  session running as the agent's user, at the same time as another job's read,
-  could take a token with up to an hour left on it. Accepted for now, and not
-  measured.
-- A token GitHub has revoked is discarded when the API refuses it (§2), but
+  process running as the same user (§6). Before the first amendment of
+  2026-09-26 only the push did; now every clone, fetch and `ls-remote` does, so
+  a model session running as the agent's user, at the same time as another
+  job's read, could take a token with up to an hour left on it. Accepted for
+  now, and not measured.
+- ~~A token GitHub has revoked is discarded when the API refuses it (§2), but
   not when `git` is refused. Every read and push fails until an API request
   meets the token or it is replaced on its own schedule, and a public
   repository, which needed no token before the amendment, fails with them
-  (#88).
+  (#88).~~ No longer true: see the second amendment of 2026-09-26. The process
+  that meets a revoked token still fails; the next one mints another.
 
 ## Alternatives considered
 
