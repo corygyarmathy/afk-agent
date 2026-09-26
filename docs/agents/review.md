@@ -144,7 +144,9 @@ before choosing values:
   is handed back: a short comment on the pull request saying so, with the last
   error, and `--hand-back-label`. A claim or a reply out of rounds is a failed
   attempt, since there is nothing to hand back through; the attempt after it -
-  a retry, or an operator freeing the parked job - has rounds of its own.
+  a retry, or an operator freeing the parked job - has rounds of its own. The
+  two bounds multiply: before the job parks, a claim or a reply that never
+  appears is made up to `--effect-rounds` × `--max-attempts` times.
 
 ## Running one by hand
 
