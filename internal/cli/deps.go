@@ -26,17 +26,100 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
-	observer, err := p.budget()
-	if err != nil {
-		return nil, err
-	}
-	path, err := p.storePath()
+	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
 	}
 	login, err := tr.Login(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return &review.Deps{
+		Tracker:  tr.client,
+		Model:    opencode.Command{Path: m.opencode},
+		Store:    st,
+		Checkout: review.Git{Remote: cloneURL(tr)}.Checkout,
+		Resolve:  resolve,
+		Bound:    m.attempts,
+		TierWait: m.tierWait,
+		Login:    login,
+		StateDir: stateDir,
+	}, nil
+}
+
+// implementDeps builds what the implement kind's transitions reach, from the
+// parameters and the command's tracker.
+//
+// A variable for the reason reviewDeps is.
+var implementDeps = func(ctx context.Context, p params, st store.Store, tr *tracker) (*implement.Deps, error) {
+	if tr == nil {
+		return nil, usagef("implement needs --repo (or set AFK_REPO)")
+	}
+	ip, err := p.implement()
+	if err != nil {
+		return nil, err
+	}
+	m, err := p.implementModel()
+	if err != nil {
+		return nil, err
+	}
+	stateDir, resolve, err := resolver(p, m)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := p.leaseTTL()
+	if err != nil {
+		return nil, err
+	}
+	login, err := tr.Login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &implement.Deps{
+		Tracker:       tr.client,
+		Model:         opencode.Command{Path: m.opencode},
+		Login:         login,
+		BranchPrefix:  ip.branchPrefix,
+		Remote:        cloneURL(tr),
+		Resolve:       resolve,
+		Bound:         m.attempts,
+		TierWait:      m.tierWait,
+		Gate:          ip.gate,
+		Attempts:      ip.attempts,
+		HandBackLabel: ip.handBackLabel,
+		HandOffLabel:  ip.handOffLabel,
+		Denylist:      ip.denylist,
+		CIWait:        ip.ciWait,
+		CICeiling:     ip.ciCeiling,
+		CIRounds:      ip.ciRounds,
+		// The installation token, minted and cached by the App the tracker
+		// uses: the push is the agent on the tracker like any other request
+		// (ADR 0005).
+		Token: tr.app.Token,
+		Store: st,
+		// A holder of its own: it leases the review job, never this one.
+		Holder:   holder() + "/ask-review",
+		LeaseTTL: lease,
+		StateDir: stateDir,
+	}, nil
+}
+
+// cloneURL is where the tracker's repository is fetched from. No credentials
+// travel with it: reading a public repository needs none.
+func cloneURL(tr *tracker) string {
+	return "https://github.com/" + tr.client.Repo + ".git"
+}
+
+// resolver is the state directory, and the candidate list for one job kind's
+// model choice as of each call to it.
+func resolver(p params, m modelParams) (string, func(context.Context) (model.Candidates, error), error) {
+	observer, err := p.budget()
+	if err != nil {
+		return "", nil, err
+	}
+	path, err := p.storePath()
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Beside the store and not in it (ADR 0001 §5): the catalogue is
@@ -48,7 +131,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 
 	// Read on every resolution rather than once: the enrolment is a human's
 	// file and the catalogue has a cache of its own, so an edit to either is
-	// seen by the next review without a restart.
+	// seen by the next run without a restart.
 	resolve := func(ctx context.Context) (model.Candidates, error) {
 		enrol, err := readEnrolment(m.enrolment)
 		if err != nil {
@@ -68,37 +151,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		}
 		return model.Resolve(reqs, cat, enrol, budget)
 	}
-
-	return &review.Deps{
-		Tracker:  tr.client,
-		Model:    opencode.Command{Path: m.opencode},
-		Store:    st,
-		Checkout: review.Git{Remote: "https://github.com/" + tr.client.Repo + ".git"}.Checkout,
-		Resolve:  resolve,
-		Bound:    m.attempts,
-		TierWait: m.tierWait,
-		Login:    login,
-		StateDir: stateDir,
-	}, nil
-}
-
-// implementDeps builds what the implement kind's transitions reach, from the
-// parameters and the command's tracker.
-//
-// A variable for the reason reviewDeps is.
-var implementDeps = func(ctx context.Context, p params, tr *tracker) (*implement.Deps, error) {
-	if tr == nil {
-		return nil, usagef("implement needs --repo (or set AFK_REPO)")
-	}
-	prefix, err := required(p.branchPrefix, "branch-prefix", "AFK_BRANCH_PREFIX")
-	if err != nil {
-		return nil, err
-	}
-	login, err := tr.Login(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &implement.Deps{Tracker: tr.client, Login: login, BranchPrefix: prefix}, nil
+	return stateDir, resolve, nil
 }
 
 // kindDeps builds the dependencies of one job kind, and leaves the rest nil:
@@ -112,7 +165,7 @@ func kindDeps(ctx context.Context, kind store.Kind, p params, st store.Store, tr
 	case store.KindReview:
 		d.review, err = reviewDeps(ctx, p, st, tr)
 	case store.KindImplement:
-		d.implement, err = implementDeps(ctx, p, tr)
+		d.implement, err = implementDeps(ctx, p, st, tr)
 	}
 	if err != nil {
 		return nil, err

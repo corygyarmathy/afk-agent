@@ -15,12 +15,22 @@ agent authenticates; the spec is
 
 A `/review` comment on an open pull request, from an account with write access
 that is not the agent's, produces one advisory review comment on that pull
-request's current head. It never gates, never merges, never pushes, and writes
-no label.
+request's current head. So does the implement job's request, once CI is green
+on the pull request it opened ([`implement.md`](implement.md)): it makes the
+review job due, never comments. The review claims that request with a 👀 on the
+pull request's description, which only counts on a pull request the agent
+wrote, and the review comment says the implement job asked for it. The review
+never gates, never merges, never pushes, and writes no label.
+
+The description's 👀 is taken by the first review of the agent's pull request
+that finds it missing. A `/review` during the CI watch takes it before the
+implement job has asked, and that review says the implement job asked for it.
+When the job asks, that review of its head is already there, and it hands off
+on it.
 
 | transition | from | does |
 | --- | --- | --- |
-| `review` | `start` | reacts 👀 to every unanswered `/review` (the claim), then either moves to `reviewing` or, if the head already has a review, replies "Already reviewed" and rests |
+| `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
 | `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
 | `review-post` | `posting` | posts the reply, under a key numbered by posting round |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
@@ -84,6 +94,7 @@ installation's grants:
 | --- | --- | --- |
 | the 👀 claim, on a command on a pull request | Issues: write | refused (403) with Metadata only; accepted with Pull requests: write and no Issues grant |
 | the review comment | Issues: write, or Pull requests: write | not verified |
+| the 👀 claim on the implement job's pull request, and reading its reactions | not recorded | not verified |
 | listing open issues and pull requests, which intake reads commands from | not recorded | not verified |
 | listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
 | reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |

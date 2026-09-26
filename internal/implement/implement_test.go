@@ -10,6 +10,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -26,8 +27,30 @@ var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 // tracker is one issue on a fixture tracker, and the pull requests open beside
 // it.
 type tracker struct {
-	mu          sync.Mutex
-	state       string
+	mu     sync.Mutex
+	state  string
+	body   string
+	labels []string
+	opened []github.NewPullRequest
+
+	// commentedOn and labelledOn are the numbers each comment and label
+	// went on, in order.
+	commentedOn []int
+	labelledOn  []int
+
+	// repoLabels is the labels the repository already has. Applying one of
+	// them in another case keeps the repository's spelling, as GitHub does.
+	repoLabels []string
+
+	// checks is the check runs on a commit, by the time they are asked
+	// for: none, unless a test says otherwise.
+	checks func(sha string, call int) []github.CheckRun
+	asks   int
+
+	// open decides what happens to a pull request the agent opens: whether
+	// it is opened, and what the call reports.
+	open        func(call int) (opens bool, err error)
+	opens       int
 	pullRequest bool
 	prs         []github.PullRequest
 	comments    []github.Comment
@@ -42,7 +65,7 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", PullRequest: tr.pullRequest}, nil
+	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest}, nil
 }
 
 func (tr *tracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
@@ -63,9 +86,10 @@ func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, er
 	return append([]github.Reaction(nil), tr.reactions[id]...), nil
 }
 
-func (tr *tracker) Comment(_ context.Context, _ int, body string) (github.Comment, error) {
+func (tr *tracker) Comment(_ context.Context, n int, body string) (github.Comment, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	tr.commentedOn = append(tr.commentedOn, n)
 	tr.nextID++
 	c := github.Comment{ID: tr.nextID, Login: agent, Association: "NONE", Body: body}
 	tr.comments = append(tr.comments, c)
@@ -82,6 +106,50 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	}
 	tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
 	return nil
+}
+
+func (tr *tracker) Label(_ context.Context, n int, label string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.labelledOn = append(tr.labelledOn, n)
+	for _, l := range tr.repoLabels {
+		if strings.EqualFold(l, label) {
+			label = l
+		}
+	}
+	for i := range tr.prs {
+		if tr.prs[i].Number == n {
+			tr.prs[i].Labels = append(tr.prs[i].Labels, label)
+		}
+	}
+	tr.labels = append(tr.labels, label)
+	return nil
+}
+
+func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.asks++
+	if tr.checks == nil {
+		return nil, nil
+	}
+	return tr.checks(sha, tr.asks), nil
+}
+
+func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.opens++
+	opens, err := true, error(nil)
+	if tr.open != nil {
+		opens, err = tr.open(tr.opens)
+	}
+	pr := github.PullRequest{Number: 100 + tr.opens, State: "open", HeadRef: req.Head, Login: agent, Title: req.Title, Body: req.Body}
+	if opens {
+		tr.opened = append(tr.opened, req)
+		tr.prs = append(tr.prs, pr)
+	}
+	return pr, err
 }
 
 // byAgent is the comments the agent wrote.
@@ -111,26 +179,58 @@ func (tr *tracker) claims(id int64) int {
 }
 
 type fixture struct {
-	t     *testing.T
-	store store.Store
-	tr    *tracker
-	run   *transition.Runner
-	job   store.Job
+	t      *testing.T
+	store  store.Store
+	tr     *tracker
+	model  *coder
+	deps   *implement.Deps
+	remote string
+	reg    *transition.Registry
+	run    *transition.Runner
+	job    store.Job
+
+	// at is the time the runner sees: now, until a test moves it on.
+	at time.Time
 }
 
+// setup is an issue on a fixture tracker, a repository with one commit on a
+// local bare remote, a model that does nothing until a test says what, and a
+// gate that passes while the workspace has a file called `ok`.
 func setup(t *testing.T, tr *tracker) *fixture {
 	t.Helper()
 	s := storetest.Open(t)
-	d := &implement.Deps{Tracker: tr, Login: agent, BranchPrefix: prefix}
+	remote := bareRemote(t)
+	m := &coder{}
+	d := &implement.Deps{
+		Tracker:       tr,
+		Model:         m,
+		Login:         agent,
+		BranchPrefix:  prefix,
+		Remote:        remote,
+		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+		Bound:         2,
+		TierWait:      time.Hour,
+		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+		Attempts:      3,
+		HandBackLabel: "needs-decision",
+		HandOffLabel:  "needs-review",
+		Holder:        "implement-test",
+		LeaseTTL:      time.Minute,
+		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
+		CIWait:        10 * time.Minute,
+		CICeiling:     2 * time.Hour,
+		CIRounds:      2,
+		Store:         s,
+		StateDir:      t.TempDir(),
+	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
 	job, err := s.Ensure(context.Background(), store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: issue}, implement.Start, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{
-		t: t, store: s, tr: tr, job: job,
-		run: &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return now }},
-	}
+	f := &fixture{t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job, at: now}
+	f.run = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
+	return f
 }
 
 // claim runs `implement` once, from start.
@@ -146,6 +246,19 @@ func (f *fixture) now() store.Job {
 		f.t.Fatal(err)
 	}
 	return job
+}
+
+// setState puts the job in state, due now, the fixture state a transition is
+// tested from.
+func (f *fixture) setState(state string) {
+	f.t.Helper()
+	ctx := context.Background()
+	if _, ok, err := f.store.Acquire(ctx, f.job.ID, "fixture", now, time.Minute); err != nil || !ok {
+		f.t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: f.job.ID, Holder: "fixture", State: state, NextRunAt: now, Release: true}); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 // restart puts the job back in start and due, the way intake re-arms it for a

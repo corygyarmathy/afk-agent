@@ -13,6 +13,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
@@ -74,9 +75,23 @@ Model choice, for afk run and afk work:
 
 Implementing an issue, for afk run and afk work:
 
-  --branch-prefix <p>   AFK_BRANCH_PREFIX  begins every branch the agent pushes
-                                           (required to implement; without it
-                                           afk work parks implement jobs)
+  --branch-prefix <p>   AFK_BRANCH_PREFIX    begins every branch the agent pushes
+                                             (without it afk work parks implement jobs)
+  --gate <command>      AFK_GATE             the local gate, run with sh in the workspace
+  --gate-attempts <n>   AFK_GATE_ATTEMPTS    sessions the gate may fail before a hand-back
+  --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
+  --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
+  --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies
+  --hand-off-label <l>  AFK_HAND_OFF_LABEL   the label the hand-off applies
+  --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
+                                             ** spans directories, * stays in one
+  --ci-wait <dur>       AFK_CI_WAIT          wait before unfinished CI, or a review not yet
+                                             posted, is read again
+  --ci-ceiling <dur>    AFK_CI_CEILING       time after a push CI may take, then a hand-back
+  --ci-rounds <n>       AFK_CI_ROUNDS        red runs sent back to the session, then a hand-back
+
+All but --implement-needs are required to implement, with the model choice
+parameters above; implementing also needs the heavy-build token's capacity.
 
 The tracker, for afk intake, afk run and afk work:
 
@@ -122,7 +137,17 @@ type params struct {
 	appID  string
 	appKey string
 
-	branchPrefix string
+	branchPrefix   string
+	gate           string
+	implementTier  string
+	implementNeeds string
+	gateAttempts   string
+	handBackLabel  string
+	handOffLabel   string
+	denylist       string
+	ciWait         string
+	ciCeiling      string
+	ciRounds       string
 
 	opencode      string
 	enrolment     string
@@ -573,6 +598,87 @@ func (p *params) bindModel(fs *flag.FlagSet) {
 // bindImplement binds what implementing an issue needs beyond the tracker.
 func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.branchPrefix, "branch-prefix", "", "begins every branch the agent pushes (AFK_BRANCH_PREFIX)")
+	fs.StringVar(&p.gate, "gate", "", "the local gate, a shell command run in the workspace (AFK_GATE)")
+	fs.StringVar(&p.gateAttempts, "gate-attempts", "", "sessions the gate may fail before a hand-back (AFK_GATE_ATTEMPTS)")
+	fs.StringVar(&p.implementTier, "implement-tier", "", "the tier implementing draws from (AFK_IMPLEMENT_TIER)")
+	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
+	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
+	fs.StringVar(&p.handOffLabel, "hand-off-label", "", "the label the hand-off applies (AFK_HAND_OFF_LABEL)")
+	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
+	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
+	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
+	fs.StringVar(&p.ciRounds, "ci-rounds", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_ROUNDS)")
+}
+
+// implementParams is implementing an issue, resolved, beyond model choice.
+type implementParams struct {
+	branchPrefix  string
+	gate          string
+	attempts      int
+	handBackLabel string
+	handOffLabel  string
+	denylist      []string
+	ciWait        time.Duration
+	ciCeiling     time.Duration
+	ciRounds      int
+}
+
+func (p *params) implement() (implementParams, error) {
+	var (
+		ip  implementParams
+		err error
+	)
+	if ip.branchPrefix, err = required(p.branchPrefix, "branch-prefix", "AFK_BRANCH_PREFIX"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.gate, err = required(p.gate, "gate", "AFK_GATE"); err != nil {
+		return implementParams{}, err
+	}
+	attempts, err := required(p.gateAttempts, "gate-attempts", "AFK_GATE_ATTEMPTS")
+	if err != nil {
+		return implementParams{}, err
+	}
+	if ip.attempts, err = count(attempts, "gate-attempts"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.handBackLabel, err = required(p.handBackLabel, "hand-back-label", "AFK_HAND_BACK_LABEL"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.handOffLabel, err = required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL"); err != nil {
+		return implementParams{}, err
+	}
+	list, err := required(p.denylist, "denylist", "AFK_DENYLIST")
+	if err != nil {
+		return implementParams{}, err
+	}
+	for _, pattern := range strings.Split(list, ",") {
+		if pattern = strings.TrimSpace(pattern); pattern != "" {
+			ip.denylist = append(ip.denylist, pattern)
+		}
+	}
+	if err := implement.ValidDenylist(ip.denylist); err != nil {
+		return implementParams{}, usagef("--denylist: %v", err)
+	}
+	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
+	if err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciWait, err = duration(v, "ci-wait"); err != nil {
+		return implementParams{}, err
+	}
+	if v, err = required(p.ciCeiling, "ci-ceiling", "AFK_CI_CEILING"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciCeiling, err = duration(v, "ci-ceiling"); err != nil {
+		return implementParams{}, err
+	}
+	if v, err = required(p.ciRounds, "ci-rounds", "AFK_CI_ROUNDS"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.ciRounds, err = count(v, "ci-rounds"); err != nil {
+		return implementParams{}, err
+	}
+	return ip, nil
 }
 
 // modelParams is model choice, resolved.
@@ -586,12 +692,23 @@ type modelParams struct {
 	tierWait     time.Duration
 }
 
-// model resolves model choice.
+// model resolves model choice for a review.
+func (p *params) model() (modelParams, error) {
+	return p.modelFor(p.reviewTier, "review-tier", "AFK_REVIEW_TIER", p.reviewNeeds, "AFK_REVIEW_NEEDS")
+}
+
+// implementModel resolves model choice for implementing an issue: the same
+// binary, enrolment and bounds, and a tier of its own.
+func (p *params) implementModel() (modelParams, error) {
+	return p.modelFor(p.implementTier, "implement-tier", "AFK_IMPLEMENT_TIER", p.implementNeeds, "AFK_IMPLEMENT_NEEDS")
+}
+
+// modelFor resolves model choice for one job kind's tier and capabilities.
 //
 // The attempt bound is required rather than defaulting to the tier's length:
 // it also bounds how many times a reply that never appears is posted, and an
 // unset bound there would be one post and no recovery from a lost one.
-func (p *params) model() (modelParams, error) {
+func (p *params) modelFor(tierValue, tierFlag, tierEnv, needsValue, needsEnv string) (modelParams, error) {
 	var (
 		m   modelParams
 		err error
@@ -602,7 +719,7 @@ func (p *params) model() (modelParams, error) {
 	if m.enrolment, err = required(p.enrolment, "enrolment", "AFK_ENROLMENT"); err != nil {
 		return modelParams{}, err
 	}
-	tier, err := required(p.reviewTier, "review-tier", "AFK_REVIEW_TIER")
+	tier, err := required(tierValue, tierFlag, tierEnv)
 	if err != nil {
 		return modelParams{}, err
 	}
@@ -626,7 +743,7 @@ func (p *params) model() (modelParams, error) {
 			return modelParams{}, err
 		}
 	}
-	for _, c := range strings.Split(optional(p.reviewNeeds, "AFK_REVIEW_NEEDS"), ",") {
+	for _, c := range strings.Split(optional(needsValue, needsEnv), ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			m.needs = append(m.needs, model.Capability(c))
 		}

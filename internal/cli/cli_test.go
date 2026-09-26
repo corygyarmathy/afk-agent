@@ -34,7 +34,7 @@ func withCatalogue(t *testing.T, ts ...transition.Transition) {
 	catalogue = func(*deps) *transition.Registry { return reg }
 	wasReview, wasImplement := reviewDeps, implementDeps
 	reviewDeps = func(context.Context, params, store.Store, *tracker) (*review.Deps, error) { return nil, nil }
-	implementDeps = func(context.Context, params, *tracker) (*implement.Deps, error) { return nil, nil }
+	implementDeps = func(context.Context, params, store.Store, *tracker) (*implement.Deps, error) { return nil, nil }
 	t.Cleanup(func() { catalogue, reviewDeps, implementDeps = was, wasReview, wasImplement })
 }
 
@@ -686,25 +686,73 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 	}
 }
 
-// Implementing an issue needs the branch prefix, and reaches the tracker
+// Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
-func TestImplementNeedsABranchPrefixAndSharesTheCommandsTracker(t *testing.T) {
-	t.Setenv("AFK_BRANCH_PREFIX", "")
+func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS",
+		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
+		t.Setenv(env, "")
+	}
 	tr := &tracker{client: &github.Client{Repo: "o/n"}, login: "afk-agent[bot]"}
-
-	if _, err := implementDeps(context.Background(), params{}, tr); err == nil || !strings.Contains(err.Error(), "--branch-prefix") {
-		t.Errorf("err = %v, want it to name --branch-prefix", err)
+	full := params{
+		store:         filepath.Join(t.TempDir(), "state.db"),
+		opencode:      "/bin/opencode",
+		enrolment:     "/etc/afk/enrolment.json",
+		modelAttempts: "3",
+		tierWait:      "30m",
+		branchPrefix:  "afk/",
+		gate:          "go test ./...",
+		gateAttempts:  "2",
+		implementTier: "build",
+		handBackLabel: "needs-decision",
+		handOffLabel:  "needs-review",
+		lease:         "10m",
+		denylist:      ".github/**, flake.lock",
+		ciWait:        "5m",
+		ciCeiling:     "2h",
+		ciRounds:      "2",
 	}
-	if _, err := implementDeps(context.Background(), params{branchPrefix: "afk/"}, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
-		t.Errorf("err = %v, want it to name --repo", err)
-	}
 
-	d, err := implementDeps(context.Background(), params{branchPrefix: "afk/"}, tr)
+	d, err := implementDeps(context.Background(), full, nil, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Tracker != tr.client || d.Login != tr.login || d.BranchPrefix != "afk/" {
-		t.Errorf("deps = %+v, want the command's client and login, and the prefix", d)
+	if d.Tracker != tr.client || d.Login != tr.login {
+		t.Errorf("deps = %+v, want the command's client and login", d)
+	}
+	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
+		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
+		d.HandOffLabel != "needs-review" || d.LeaseTTL != 10*time.Minute || d.Holder == "" ||
+		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIRounds != 2 ||
+		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
+		t.Errorf("deps = %+v, want them read from the parameters", d)
+	}
+
+	if _, err := implementDeps(context.Background(), full, nil, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
+		t.Errorf("err = %v, want it to name --repo", err)
+	}
+	for _, tc := range []struct {
+		spoil func(*params)
+		want  string
+	}{
+		{func(p *params) { p.branchPrefix = "" }, "--branch-prefix is required"},
+		{func(p *params) { p.gate = "" }, "--gate is required"},
+		{func(p *params) { p.gateAttempts = "" }, "--gate-attempts is required"},
+		{func(p *params) { p.gateAttempts = "none" }, "--gate-attempts"},
+		{func(p *params) { p.implementTier = "" }, "--implement-tier is required"},
+		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
+		{func(p *params) { p.denylist = "" }, "--denylist is required"},
+		{func(p *params) { p.handOffLabel = "" }, "--hand-off-label is required"},
+		{func(p *params) { p.ciWait = "" }, "--ci-wait is required"},
+		{func(p *params) { p.ciCeiling = "soon" }, "--ci-ceiling"},
+		{func(p *params) { p.ciRounds = "0" }, "--ci-rounds"},
+		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
+	} {
+		p := full
+		tc.spoil(&p)
+		if _, err := implementDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("err = %v, want it to contain %q", err, tc.want)
+		}
 	}
 }
 
@@ -739,6 +787,21 @@ func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
 	}
 }
 
+// A pool with no implement configured does not answer /implement.
+func TestAPoolAnswersOnlyTheCommandsItCanRun(t *testing.T) {
+	reviewOnly := catalogue(&deps{review: standaloneDeps(t).review})
+	var words []string
+	for _, c := range runnable(commands(), reviewOnly) {
+		words = append(words, c.Word)
+	}
+	if strings.Join(words, " ") != "/review" {
+		t.Errorf("commands %v, want only /review", words)
+	}
+	if got := runnable(commands(), catalogue(standaloneDeps(t))); len(got) != len(commands()) {
+		t.Errorf("a pool with every kind answers %d of %d commands", len(got), len(commands()))
+	}
+}
+
 // standaloneDeps is every kind's dependencies with nothing live behind them: a
 // tracker that answers from memory, and a budget that is limited, so every
 // transition reaches a decision from its starting state without a network, a
@@ -755,7 +818,20 @@ func standaloneDeps(t *testing.T) *deps {
 			Login:    "afk-bot",
 			StateDir: t.TempDir(),
 		},
-		implement: &implement.Deps{Tracker: closedTracker{}, Login: "afk-bot", BranchPrefix: "afk/"},
+		implement: &implement.Deps{
+			Tracker: closedTracker{},
+			Login:   "afk-bot",
+			Resolve: func(context.Context) (model.Candidates, error) {
+				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+			},
+			BranchPrefix:  "afk/",
+			Bound:         1,
+			TierWait:      time.Hour,
+			Gate:          "false",
+			Attempts:      1,
+			HandBackLabel: "needs-decision",
+			StateDir:      t.TempDir(),
+		},
 	}
 }
 
@@ -781,6 +857,17 @@ func (closedTracker) Comment(context.Context, int, string) (github.Comment, erro
 	return github.Comment{}, nil
 }
 func (closedTracker) React(context.Context, int64, string) error { return nil }
+func (closedTracker) Label(context.Context, int, string) error   { return nil }
+func (closedTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	return nil, nil
+}
+func (closedTracker) ReactToIssue(context.Context, int, string) error { return nil }
+func (closedTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
+	return nil, nil
+}
+func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
+	return github.PullRequest{}, nil
+}
 
 func TestModelChoiceIsReadFromTheParameters(t *testing.T) {
 	full := params{opencode: "/bin/opencode", enrolment: "/etc/afk/enrolment.json", reviewTier: "review", modelAttempts: "3", tierWait: "30m"}

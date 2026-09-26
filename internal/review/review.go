@@ -5,13 +5,20 @@
 // things that fail differently and a transition is the unit that fails
 // (ADR 0001 §2):
 //
-//	start     --review-------->  reviewing   claim every unanswered command
+//	start     --review-------->  reviewing   claim every unanswered request
 //	reviewing --review-run---->  posting     one candidate model, in a checkout
 //	posting   --review-post--->  verifying   post the reply, under a numbered key
 //	verifying --review-verify->  start       at rest, once the reply is on the PR
 //	deferred  --review-resume->  reviewing   the tier again, from its first model
 //
-// Two of those exist for reasons worth stating where the states are.
+// A request is a /review command, or the implement job making this job due
+// for the pull request it opened (ADR 0001 §14, as amended for #40). The
+// implement job asks by making the job due, never by commenting: a comment the
+// agent wrote must never be able to instruct the agent. Its request is claimed
+// with a 👀 on the pull request's description, which it wrote, so the claim is
+// on what asked and never on anything a human wrote.
+//
+// Two of the transitions exist for reasons worth stating where the states are.
 //
 // The claim is its own transition so that it is committed before anything can
 // fail. A job that failed ahead of its claim would come to rest with its
@@ -33,6 +40,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -71,6 +80,8 @@ type Tracker interface {
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
 	Comment(ctx context.Context, number int, body string) (github.Comment, error)
 	React(ctx context.Context, commentID int64, content string) error
+	IssueReactions(ctx context.Context, number int) ([]github.Reaction, error)
+	ReactToIssue(ctx context.Context, number int, content string) error
 }
 
 // Model runs one model. opencode.Command is one.
@@ -136,7 +147,7 @@ func Marker(head string) string {
 	return "<!-- afk:review head=" + head + " -->"
 }
 
-// claim is `review`: take every unanswered command, and either start the
+// claim is `review`: take every unanswered request, and either start the
 // review or say the head has one already.
 func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, error) {
 	n := in.Job.Subject.Number
@@ -157,6 +168,16 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	for _, c := range commands {
 		effects = append(effects, d.react(c))
 	}
+	asked, err := d.askedByJob(ctx, pr)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if asked {
+		effects = append(effects, transition.Effect{
+			Key: fmt.Sprintf("claim-pr-%d", n),
+			Do:  func(ctx context.Context) error { return d.Tracker.ReactToIssue(ctx, n, intake.Claim) },
+		})
+	}
 
 	if pr.State != "open" {
 		// Nothing to review on a closed pull request, and nothing to say:
@@ -168,6 +189,14 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 			effects = append(effects, d.already(n, c, pr.HeadSHA))
 		}
 		return transition.Result{State: Start, Effects: effects}, nil
+	}
+	if asked {
+		// Recorded here, where the request is taken, for the review to say
+		// which job asked. Who wrote the pull request cannot say it: a
+		// /review on it later is a human's.
+		if err := d.saveAsked(in.Job.ID, d.implementedFor(pr)); err != nil {
+			return transition.Result{}, err
+		}
 	}
 	return transition.Result{State: Reviewing, RunAt: in.Now, Effects: effects}, nil
 }
@@ -251,7 +280,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply)}); err != nil {
+	issue, err := d.askedFor(in.Job.ID)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, issue)}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
@@ -307,8 +340,10 @@ func (d *Deps) verify(ctx context.Context, in transition.In) (transition.Result,
 	if !d.reviewed(comments, p.Head) {
 		return transition.Result{State: Posting, RunAt: in.Now}, nil
 	}
-	if err := os.Remove(d.pendingPath(in.Job.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return transition.Result{}, err
+	for _, path := range []string{d.pendingPath(in.Job.ID), d.askedPath(in.Job.ID)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return transition.Result{}, err
+		}
 	}
 	return transition.Result{State: Start}, nil
 }
@@ -317,6 +352,40 @@ func (d *Deps) verify(ctx context.Context, in transition.In) (transition.Result,
 // from its first model. Moving state is what clears the attempt count.
 func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, error) {
 	return transition.Result{State: Reviewing, RunAt: in.Now}, nil
+}
+
+// implementMarker is the hidden line the implement job's pull request carries
+// (implement.PRMarker). Spelled here rather than imported, because implement
+// imports this package; a test there holds the two to the same spelling.
+var implementMarker = regexp.MustCompile(`<!-- afk:implement issue=(\d+) -->`)
+
+// implementedFor is the issue the pull request is the implement job's work
+// for, or zero if it is not the implement job's. The marker counts only on a
+// pull request the agent wrote: anyone can type it.
+func (d *Deps) implementedFor(pr github.PullRequest) int {
+	if !strings.EqualFold(pr.Login, d.Login) {
+		return 0
+	}
+	m := implementMarker.FindStringSubmatch(pr.Body)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// askedByJob reports whether the implement job has asked for a review that
+// nobody has claimed: its pull request, written by the agent and carrying its
+// marker, with no 👀 from the agent on it yet.
+func (d *Deps) askedByJob(ctx context.Context, pr github.PullRequest) (bool, error) {
+	if d.implementedFor(pr) == 0 {
+		return false, nil
+	}
+	reactions, err := d.Tracker.IssueReactions(ctx, pr.Number)
+	if err != nil {
+		return false, err
+	}
+	return !intake.Claimed(reactions, d.Login), nil
 }
 
 // unanswered is the review commands among comments that nobody has claimed.
@@ -386,10 +455,15 @@ func (d *Deps) round(ctx context.Context, n int, head string) (string, error) {
 	return "", fmt.Errorf("the review of %s was posted %d times and never appeared on pull request %d", short(head), bound, n)
 }
 
-// body is the comment a review is posted as.
-func body(head string, ref model.Ref, reply opencode.Reply) string {
-	return fmt.Sprintf("%s\n**Advisory review** of `%s`. This does not gate or block merging.\n\n%s\n\n<sub>%s · $%.4f</sub>\n",
-		Marker(head), short(head), strings.TrimSpace(reply.Text), ref, reply.Cost)
+// body is the comment a review is posted as. On the implement job's pull
+// request it says the job asked for it.
+func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
+	asked := ""
+	if issue != 0 {
+		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
+	}
+	return fmt.Sprintf("%s\n**Advisory review** of `%s`. This does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n",
+		Marker(head), short(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
 }
 
 // pending is a reply written and not yet seen on the tracker.
@@ -402,14 +476,18 @@ func (d *Deps) pendingPath(jobID string) string {
 	return filepath.Join(d.StateDir, "replies", jobID+".json")
 }
 
-// save writes the pending reply atomically, so a crash leaves the old file or
-// the new one and never half of one.
+// save writes the pending reply.
 func (d *Deps) save(jobID string, p pending) error {
-	path := d.pendingPath(jobID)
+	return writeJSON(d.pendingPath(jobID), p)
+}
+
+// writeJSON writes v to path atomically, so a crash leaves the old file or the
+// new one and never half of one.
+func writeJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	b, err := json.Marshal(p)
+	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
@@ -433,6 +511,38 @@ func (d *Deps) load(jobID string) (pending, error) {
 		return pending{}, fmt.Errorf("pending reply for %s is incomplete", jobID)
 	}
 	return p, nil
+}
+
+// asked is the implement job's request, once its claim has been taken: the
+// issue its pull request implements. It lasts until the review is on the pull
+// request.
+type asked struct {
+	Issue int `json:"issue"`
+}
+
+func (d *Deps) askedPath(jobID string) string {
+	return filepath.Join(d.StateDir, "asked", jobID+".json")
+}
+
+func (d *Deps) saveAsked(jobID string, issue int) error {
+	return writeJSON(d.askedPath(jobID), asked{Issue: issue})
+}
+
+// askedFor is the issue whose implement job asked for this review, or zero if
+// nothing but a command did.
+func (d *Deps) askedFor(jobID string) (int, error) {
+	b, err := os.ReadFile(d.askedPath(jobID))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var a asked
+	if err := json.Unmarshal(b, &a); err != nil {
+		return 0, fmt.Errorf("the request for %s: %w", jobID, err)
+	}
+	return a.Issue, nil
 }
 
 func short(sha string) string {
