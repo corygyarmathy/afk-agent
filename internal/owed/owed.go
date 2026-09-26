@@ -157,6 +157,10 @@ type Book struct {
 	// appears is an error: a failed attempt, which parks the job once the
 	// retries are spent. There is nothing to hand back through - what is
 	// owed is the claim, the reply, or the hand-back itself. A parameter.
+	//
+	// Each retry has rounds of its own (effects), so the bounds multiply: an
+	// item is made up to Rounds times the attempt bound before the job
+	// parks.
 	Rounds int
 
 	// Dir is where a record waits for its read-back - in the state
