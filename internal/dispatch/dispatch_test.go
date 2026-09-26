@@ -180,8 +180,8 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 	}
 
 	d := dispatcher(t, s, reg, pool(t, map[string]int{"heavy-build": 1}), workers)
-	// Short, so a turned-away build comes back quickly. How short decides only
-	// how long the test takes: nothing above waits for it to pass.
+	// Short, so a turned-away build comes back quickly. It decides only how long
+	// the first build holds on, not whether the test passes.
 	d.TokenWait = 50 * time.Millisecond
 	d.Log = func(msg string) {
 		t.Log(msg)
@@ -193,6 +193,16 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 
 	if got := heavyPeak.Load(); got != 1 {
 		t.Errorf("%d builds at once; the heavy-build token's capacity is 1", got)
+	}
+	// Neither, and the first build let go only at the deadline: a second build
+	// was neither let in nor, as far as the log says, turned away, and the
+	// capacity was never put to the test. A reworded log line is the likely
+	// cause, and without this the test would pass slowly instead of failing.
+	select {
+	case <-crowded:
+	case <-refused:
+	default:
+		t.Error("no second build was let in beside the first or turned away; the heavy-build capacity went unchecked")
 	}
 	if got := lightPeak.Load(); got < 2 {
 		t.Errorf("%d reviews at once; a transition holding no token should not be limited to one", got)
