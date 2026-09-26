@@ -29,7 +29,8 @@ var (
 )
 
 // Backoff decides when a job re-enters after a transition failed, given the
-// attempt count including the one that just failed. Reporting false parks the
+// attempt count including the one that just failed: the runs since the job
+// entered its state that returned an error. A stay is not one. Reporting false parks the
 // job - it stays in its state with nothing scheduled, and no worker will pick
 // it up again.
 //
@@ -212,13 +213,15 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		todo = append(todo, e)
 	}
 
-	// A transition that stays where it is is retrying, and its attempts carry
-	// over; one that moves has got somewhere, and the count starts again.
-	// Stays count the same way, and only here: a run that failed did not
-	// decide anything, and fail leaves them where they were.
+	// A transition that stays where it is has decided something, and counts a
+	// stay; its attempts carry over untouched, because an attempt is a run
+	// that returned an error, and fail is the only place that counts one. A
+	// stay that spent the retry bound would park a job on its first error
+	// after a long wait (#74). One that moves has got somewhere, and both
+	// counts start again.
 	attempts, stays := 0, 0
 	if res.State == job.State {
-		attempts, stays = job.Attempts+1, job.Stays+1
+		attempts, stays = job.Attempts, job.Stays+1
 	}
 
 	c := store.Commit{

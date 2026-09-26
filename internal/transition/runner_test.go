@@ -256,25 +256,44 @@ func TestAPanicCostsTheJobAndReleasesTheLease(t *testing.T) {
 	}
 }
 
-func TestAttemptsCarryOnARetryAndResetOnAMove(t *testing.T) {
+// An attempt is a run that returned an error. Errors carry over while the job
+// stays where it is, a stay in between neither adds to the count nor resets
+// it, and a move starts it again (#74).
+func TestAttemptsCountErrorsSinceTheLastMove(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	job := seed(t, s, store.KindImplement, 2, "ci")
 
-	// Staying in the same state is a retry, and the count carries.
+	var fail bool
 	wait := transition.MustRegistry(transition.Transition{
 		Name: "watch-ci", Kind: store.KindImplement, From: "ci",
 		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			if fail {
+				return transition.Result{}, errors.New("502 Bad Gateway")
+			}
 			return transition.Result{State: "ci", RunAt: in.Now.Add(time.Minute)}, nil
 		},
 	})
-	for i := 1; i <= 3; i++ {
-		if _, err := runner(s, wait).Run(ctx, "watch-ci", job.ID); err != nil {
-			t.Fatalf("Run %d: %v", i, err)
+	r := runner(s, wait)
+	r.Backoff = func(int) (time.Time, bool) { return time.Now(), true }
+
+	for i, step := range []struct {
+		fail     bool
+		attempts int
+	}{
+		{false, 0},
+		{true, 1},
+		{false, 1},
+		{false, 1},
+		{true, 2},
+	} {
+		fail = step.fail
+		if _, err := r.Run(ctx, "watch-ci", job.ID); (err != nil) != step.fail {
+			t.Fatalf("run %d: error = %v, want one: %v", i+1, err, step.fail)
 		}
 		got, _ := s.Job(ctx, job.ID)
-		if got.Attempts != i {
-			t.Fatalf("after %d runs attempts = %d, want %d", i, got.Attempts, i)
+		if got.Attempts != step.attempts {
+			t.Fatalf("after run %d attempts = %d, want %d", i+1, got.Attempts, step.attempts)
 		}
 	}
 
@@ -294,10 +313,69 @@ func TestAttemptsCarryOnARetryAndResetOnAMove(t *testing.T) {
 	}
 }
 
-// A run that decided to stay is a stay and an attempt; a run that failed is an
-// attempt and not a stay. The candidate model is chosen by the stays, so this
-// is what keeps an error that is not the model's from moving a job on to the
-// next candidate (#62).
+// A job that waited by staying and then failed once backs off as if it had
+// failed once, and an error that keeps coming back still runs out of retries
+// and parks: waiting does not spend the bound, and does not refill it (#74).
+func TestAStayDoesNotSpendTheRetriesAnErrorNeeds(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindImplement, 2, "ci")
+
+	var fail bool
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "watch-ci", Kind: store.KindImplement, From: "ci",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			if fail {
+				return transition.Result{}, errors.New("502 Bad Gateway")
+			}
+			return transition.Result{State: "ci", RunAt: in.Now.Add(time.Minute)}, nil
+		},
+	})
+	const maxAttempts = 3
+	var backoffs []int
+	r := runner(s, reg)
+	r.Backoff = func(attempts int) (time.Time, bool) {
+		backoffs = append(backoffs, attempts)
+		return time.Now(), attempts < maxAttempts
+	}
+
+	for i := 0; i < 10; i++ {
+		if _, err := r.Run(ctx, "watch-ci", job.ID); err != nil {
+			t.Fatalf("stay %d: %v", i+1, err)
+		}
+	}
+	fail = true
+	out, err := r.Run(ctx, "watch-ci", job.ID)
+	if err == nil {
+		t.Fatal("Run after ten stays: no error, want the 502")
+	}
+	if len(backoffs) != 1 || backoffs[0] != 1 || out.Parked {
+		t.Fatalf("after ten stays and one error: Backoff saw %v, parked %v; want [1], not parked", backoffs, out.Parked)
+	}
+
+	// Stays between the errors do not reset the count either.
+	for attempt := 2; attempt <= maxAttempts; attempt++ {
+		fail = false
+		if _, err := r.Run(ctx, "watch-ci", job.ID); err != nil {
+			t.Fatalf("stay before error %d: %v", attempt, err)
+		}
+		fail = true
+		out, err = r.Run(ctx, "watch-ci", job.ID)
+		if err == nil {
+			t.Fatalf("error %d: Run returned none", attempt)
+		}
+	}
+	got, _ := s.Job(ctx, job.ID)
+	if !out.Parked || !got.NextRunAt.IsZero() || got.Attempts != maxAttempts {
+		t.Errorf("after %d errors: parked %v, due %v, attempts %d; want parked, unscheduled, %d",
+			maxAttempts, out.Parked, got.NextRunAt, got.Attempts, maxAttempts)
+	}
+}
+
+// A run that decided to stay is a stay and not an attempt; a run that failed
+// is an attempt and not a stay. The candidate model is chosen by the stays, so
+// this is what keeps an error that is not the model's from moving a job on to
+// the next candidate (#62).
 func TestStaysCountOnlyRunsThatDecidedToStay(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
@@ -324,10 +402,10 @@ func TestStaysCountOnlyRunsThatDecidedToStay(t *testing.T) {
 		state           string
 		attempts, stays int
 	}{
-		{false, "reviewing", 1, 1},
+		{false, "reviewing", 0, 1},
+		{true, "reviewing", 1, 1},
 		{true, "reviewing", 2, 1},
-		{true, "reviewing", 3, 1},
-		{false, "reviewing", 4, 2},
+		{false, "reviewing", 2, 2},
 		{false, "posting", 0, 0},
 	} {
 		fail = step.fail
