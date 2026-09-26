@@ -640,3 +640,48 @@ func TestIDIsStableAndDistinguishesTheNumberSpace(t *testing.T) {
 		t.Errorf("ID is not stable: %q then %q", pr, again)
 	}
 }
+
+// An episode is in the file, so a store opened again - a restarted process -
+// reads back what the last one recorded (#91). Recording replaces, and ending
+// forgets; ending one that is not there is nothing.
+func TestAnEpisodeOutlivesTheProcessThatRecordedIt(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	j := mustEnsure(t, s, store.KindReview, store.Subject{Type: store.SubjectPR, Number: 1}, "reviewing", time.Now())
+
+	if _, ok, err := s.Episode(ctx, j.ID); err != nil || ok {
+		t.Fatalf("Episode before any = ok %v, %v; want none", ok, err)
+	}
+	since := time.Date(2026, 9, 26, 12, 0, 0, 123, time.UTC)
+	if err := s.SetEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 1}); err != nil {
+		t.Fatalf("SetEpisode: %v", err)
+	}
+	if err := s.SetEpisode(ctx, j.ID, store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 2}); err != nil {
+		t.Fatalf("SetEpisode again: %v", err)
+	}
+	s.Close()
+
+	s = open(t, dir)
+	ep, ok, err := s.Episode(ctx, j.ID)
+	if err != nil || !ok {
+		t.Fatalf("Episode after reopening = ok %v, %v; want the one recorded", ok, err)
+	}
+	want := store.Episode{Running: "reviewing", Deferred: "deferred", Since: since, Times: 2}
+	if ep != want {
+		t.Errorf("Episode after reopening = %+v, want %+v", ep, want)
+	}
+
+	for range 2 {
+		if err := s.EndEpisode(ctx, j.ID); err != nil {
+			t.Fatalf("EndEpisode: %v", err)
+		}
+	}
+	if _, ok, err := s.Episode(ctx, j.ID); err != nil || ok {
+		t.Errorf("Episode after it ended = ok %v, %v; want none", ok, err)
+	}
+}

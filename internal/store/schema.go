@@ -48,6 +48,16 @@ var migrations = []string{
 	`
 	ALTER TABLE jobs ADD COLUMN stays INTEGER NOT NULL DEFAULT 0;
 	`,
+	// 3: episodes of an exhausted tier, so a restart carries on counting (#91).
+	`
+	CREATE TABLE episodes (
+		job_id   TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+		running  TEXT NOT NULL,
+		deferred TEXT NOT NULL,
+		since    INTEGER NOT NULL, -- Unix nanoseconds
+		times    INTEGER NOT NULL
+	);
+	`,
 }
 
 // migrate brings db up to len(migrations), using SQLite's own user_version as
