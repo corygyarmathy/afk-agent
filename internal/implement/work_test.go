@@ -511,8 +511,48 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 	if _, err := g.run.Run(context.Background(), "implement-resume", g.job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if j := g.now(); j.State != implement.Implementing || j.Attempts != 0 {
+	if j := g.now(); j.State != implement.Implementing || j.Stays != 0 || j.Attempts != 0 {
 		t.Errorf("job = %+v, want it back at the work from the first model", j)
+	}
+}
+
+// A tracker error before the model runs is not the model's, and does not move
+// the work on to the next candidate (#62).
+func TestAnErrorBeforeTheModelRunsKeepsTheCandidate(t *testing.T) {
+	tr := newTracker()
+	f := setup(t, tr)
+	f.setState(implement.Implementing)
+	f.run.Backoff = func(int) (time.Time, bool) { return f.at, true }
+	f.model.then(commit("ok"))
+	tr.failIssues = 1
+
+	if errs := f.drive(); len(errs) != 1 {
+		t.Fatalf("errors: %v, want the one 502", errs)
+	}
+	if len(f.model.asked) != 1 || f.model.asked[0].Model != first {
+		t.Errorf("asked %+v, want the first candidate, once", f.model.asked)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Errorf("job in %q, want %q", j.State, implement.Watching)
+	}
+}
+
+// An error that keeps coming back parks the work where it is, as any other
+// transition's does, rather than spend the tier and defer without end (#62).
+func TestAnErrorThatRecursParksTheWork(t *testing.T) {
+	f := setup(t, newTracker())
+	f.setState(implement.Implementing)
+	f.run.Backoff = func(attempts int) (time.Time, bool) { return f.at, attempts < 3 }
+	f.deps.Remote = filepath.Join(t.TempDir(), "gone")
+
+	if errs := f.drive(); len(errs) != 3 {
+		t.Fatalf("errors: %v, want three failed clones", errs)
+	}
+	if j := f.now(); j.State != implement.Implementing || !j.NextRunAt.IsZero() || j.Attempts != 3 {
+		t.Errorf("job = %+v, want it parked in %s after 3 attempts", j, implement.Implementing)
+	}
+	if len(f.model.asked) != 0 {
+		t.Errorf("asked %+v, want no model run", f.model.asked)
 	}
 }
 

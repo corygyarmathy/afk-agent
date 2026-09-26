@@ -134,7 +134,11 @@ before choosing values:
   work is wasted rather than duplicated, but it is still wasted.
 - `--model-attempts` bounds two things: the candidates tried before a tier is
   exhausted, and the times a reply or a claim is made before one that never
-  appears is an error.
+  appears is an error. Only a model run that failed transiently moves on to the
+  next candidate. Any other error in a run - the tracker, the checkout - counts
+  against `--max-attempts`, as any transition's does, and the next run keeps the
+  candidate, so an error that keeps coming back parks the job rather than
+  exhausting the tier.
 
 ## Running one by hand
 
