@@ -109,7 +109,7 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 
 	// The reviews meet rather than sleep. Each one waits until a second is
 	// running alongside it, so that a pool which lets them overlap always gets
-	// the chance to, however the runner schedules the workers - and a pool which
+	// the chance to, however a busy host schedules the workers - and a pool which
 	// runs them one at a time fails at the deadline instead of passing by luck.
 	// The deadline is shared, so that pool fails once rather than once a review.
 	overlapped := make(chan struct{})
