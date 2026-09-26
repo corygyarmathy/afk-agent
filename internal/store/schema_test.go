@@ -65,6 +65,13 @@ var allowed = map[string]map[string]string{
 		"lease_holder":     "a lease is local and has no tracker equivalent (CONTEXT.md: lease vs claim)",
 		"lease_expires_at": "the expiry that makes a dead holder's job reclaimable",
 	},
+	"episodes": {
+		"job_id":   "which job's tier is exhausted, so it goes when the job goes",
+		"running":  "the job's own state the model runs from; GitHub has no opinion about it",
+		"deferred": "the job's own state an exhausted tier waits in",
+		"since":    "run state: when this agent's tier first ran out for the job, which no tracker records",
+		"times":    "run state: how many local runs have found the tier exhausted since",
+	},
 	"idempotency": {
 		"key":         "the dedup history ADR 0001 §5 requires; nothing in GitHub records it",
 		"job_id":      "which job reserved it, so it goes when the job goes",
@@ -199,8 +206,8 @@ func TestAStoreFromAnOlderBinaryIsBroughtForward(t *testing.T) {
 	if _, err := db.Exec(`UPDATE jobs SET state = 'reviewing', attempts = 2`); err != nil {
 		t.Fatal(err)
 	}
-	// Schema version 1 is version 2 without the stays.
-	if _, err := db.Exec(`ALTER TABLE jobs DROP COLUMN stays; PRAGMA user_version = 1`); err != nil {
+	// Schema version 1 is the current one without the stays and the episodes.
+	if _, err := db.Exec(`ALTER TABLE jobs DROP COLUMN stays; DROP TABLE episodes; PRAGMA user_version = 1`); err != nil {
 		t.Fatalf("take the store back to version 1: %v", err)
 	}
 	db.Close()
