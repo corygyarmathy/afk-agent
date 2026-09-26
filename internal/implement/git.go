@@ -2,9 +2,7 @@ package implement
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -123,22 +121,13 @@ func touched(ctx context.Context, dir, base, head string) ([]string, error) {
 // push and nothing else: if anyone else has pushed to the branch since, the
 // remote is not at lease, and the push is refused.
 //
-// The token travels as every read's does (git.Remote).
+// The token travels as every read's does, and a refusal of it is reported the
+// same way (git.Remote).
 func push(ctx context.Context, relayDir string, remote git.Remote, head, branch, lease string) error {
-	env, err := remote.Env(ctx)
-	if err != nil {
-		return err
-	}
 	ref := "refs/heads/" + branch
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null",
+	_, err := remote.Run(ctx, relayDir, "-c", "core.hooksPath=/dev/null",
 		"push", "--quiet", "--no-verify", "--force-with-lease="+ref+":"+lease, remote.URL, head+":"+ref)
-	cmd.Dir = relayDir
-	cmd.Env = append(cmd.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("git push: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return err
 }
 
 // remoteHead is the commit the remote's branch is at, or empty if it has no

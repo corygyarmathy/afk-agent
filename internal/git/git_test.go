@@ -33,7 +33,7 @@ func TestTheTokenIsInTheEnvironmentForTheRemoteOnly(t *testing.T) {
 		for _, want := range []string{
 			"GIT_CONFIG_GLOBAL=/dev/null",
 			"GIT_CONFIG_NOSYSTEM=1",
-			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_COUNT=2",
 			"GIT_CONFIG_KEY_0=http.https://github.com/o/n.git.extraheader",
 			"GIT_CONFIG_VALUE_0=Authorization: Basic eC1hY2Nlc3MtdG9rZW46Z2hzX3NlY3JldA==",
 		} {
@@ -149,5 +149,98 @@ func TestTheTokenIsSentToTheRemoteAndNowhereElse(t *testing.T) {
 		if got != "" {
 			t.Errorf("a request to another URL carried %q", got)
 		}
+	}
+}
+
+// held is a credential as the App is one: a token held until it is refused,
+// and a new one minted after.
+type held struct {
+	mu      sync.Mutex
+	token   string
+	mints   []string
+	refused []string
+}
+
+func (h *held) Token(context.Context) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.token == "" {
+		h.token = h.mints[0]
+		h.mints = h.mints[1:]
+	}
+	return h.token, nil
+}
+
+func (h *held) Refused(token string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.refused = append(h.refused, token)
+	if token == h.token {
+		h.token = ""
+	}
+}
+
+// remoteRefusing is a remote over HTTP, as GitHub is reached, that answers a
+// request bearing the token revoked with status, and serves any other.
+func remoteRefusing(t *testing.T, revoked string, status int) string {
+	t.Helper()
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git on PATH")
+	}
+	root := t.TempDir()
+	if _, err := git.RunEnv(context.Background(), "", git.Isolated, "init", "--quiet", "--bare", filepath.Join(root, "n.git")); err != nil {
+		t.Fatal(err)
+	}
+	refuse := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+revoked))
+	backend := &cgi.Handler{Path: bin, Args: []string{"http-backend"}, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") == refuse {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			w.WriteHeader(status)
+			return
+		}
+		backend.ServeHTTP(w, req)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/n.git"
+}
+
+// A process the remote refuses with a 401 tells the credential which token it
+// carried, so the next process mints another rather than presenting a revoked
+// one until it would have expired (ADR 0005 §2).
+func TestATokenTheRemoteRefusesIsDiscarded(t *testing.T) {
+	url := remoteRefusing(t, "ghs_revoked", http.StatusUnauthorized)
+	cred := &held{mints: []string{"ghs_revoked", "ghs_fresh"}}
+	r := git.Remote{URL: url, Token: cred.Token, Refused: cred.Refused}
+
+	_, err := r.Run(context.Background(), "", "ls-remote", r.URL)
+	if err == nil {
+		t.Fatal("ls-remote with the revoked token succeeded")
+	}
+	if len(cred.refused) != 1 || cred.refused[0] != "ghs_revoked" {
+		t.Fatalf("refused %q, want the revoked token once; the process said: %v", cred.refused, err)
+	}
+	if strings.Contains(err.Error(), "ghs_") {
+		t.Errorf("the error names a token: %v", err)
+	}
+	if _, err := r.Run(context.Background(), "", "ls-remote", r.URL); err != nil {
+		t.Errorf("the next process, with a new token, failed: %v", err)
+	}
+}
+
+// A 403 is a refusal of what the token may do, not of the token: another
+// minted for the same installation may do no more. It is not discarded, as the
+// API client does not discard one either.
+func TestATokenForbiddenAnActionIsKept(t *testing.T) {
+	url := remoteRefusing(t, "ghs_limited", http.StatusForbidden)
+	cred := &held{mints: []string{"ghs_limited"}}
+	r := git.Remote{URL: url, Token: cred.Token, Refused: cred.Refused}
+
+	if _, err := r.Run(context.Background(), "", "ls-remote", r.URL); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("err = %v, want the 403", err)
+	}
+	if len(cred.refused) != 0 {
+		t.Errorf("refused %q after a 403, want nothing", cred.refused)
 	}
 }
