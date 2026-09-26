@@ -2,6 +2,7 @@ package implement_test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -121,6 +122,71 @@ func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
 	}
 	if len(f.tr.labels) != 0 {
 		t.Error("handed off with no review")
+	}
+}
+
+// Someone else's push after green CI is theirs, as it is while CI runs: the
+// review job reviews the new head, so a review of the agent's never comes, and
+// the agent hands back rather than ask for one until its rounds run out.
+func TestAPushByAnyoneElseWhileAwaitingTheReviewHandsBack(t *testing.T) {
+	f := greenPR(t)
+	human := filepath.Join(t.TempDir(), "human")
+	if _, err := run("", "git", "clone", "--quiet", "--branch", "afk/7-1", f.remote, human); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit("review-fix")(human); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(human, "git", "push", "--quiet", "origin", "afk/7-1"); err != nil {
+		t.Fatal(err)
+	}
+	f.restReviewJob()
+
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackOnThePR("Someone else pushed")
+}
+
+// A review job that failed and parked is the operator's to look at. Asking
+// again would throw its state away and pay for the model again, so the agent
+// hands back instead, and leaves the review job where it parked.
+func TestAParkedReviewJobIsHandedBackNotStartedOver(t *testing.T) {
+	f := greenPR(t)
+	ctx := context.Background()
+	if _, ok, err := f.store.Acquire(ctx, reviewJob, "review", f.at, f.deps.LeaseTTL); err != nil || !ok {
+		t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: reviewJob, Holder: "review", State: review.Posting, Attempts: 3, Release: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackOnThePR("review job", review.Posting)
+	if rj := f.reviewJob(); rj.State != review.Posting || rj.Attempts != 3 || !rj.NextRunAt.IsZero() {
+		t.Errorf("review job = %+v, want it left parked in %q", rj, review.Posting)
+	}
+}
+
+// Label names are case-insensitive on GitHub, and the repository's spelling
+// is the one read back.
+func TestTheHandOffLabelIsReadBackInAnyCase(t *testing.T) {
+	f := greenPR(t)
+	f.tr.repoLabels = []string{"Needs-Review"}
+	f.postReview()
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.tr.labels) != 1 {
+		t.Errorf("labels %v, want the hand-off applied once", f.tr.labels)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }
 

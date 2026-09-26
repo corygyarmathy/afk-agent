@@ -45,8 +45,12 @@ An operator's permission for work to continue through one spent budget window, u
 _Avoid_: Override, bypass, failover
 
 **Command**:
-An instruction from a human to the agent, issued as a comment on an issue or a pull request (`/implement`, `/review`, `/revise`). The only imperative channel: every request for the agent to _do_ something is a command. Every command has the same shape - a verb, a subject, an author with write access, optional instructions - and is claimed with a 👀 on the comment and answered at most once. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which the agent reads.
+An instruction from a human to the agent, issued as a comment on an issue or a pull request (`/implement`, `/review`, `/revise`). The only way a human asks the agent to _do_ something; a comment the agent wrote is never a command. Every command has the same shape - a verb, a subject, an author with write access, optional instructions - and is claimed with a 👀 on the comment and answered at most once. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which the agent reads.
 _Avoid_: Trigger, directive
+
+**Request**:
+Something asking for a job's work: a command, or another job making this one due, as `implement` does for the `review` of its pull request. Each request is claimed with a 👀 on what asked - the command comment, or what the asking job posted - and the work says which asked. Unattended work taken through the eligibility label is not a request: nobody asked.
+_Avoid_: Trigger, ask, invocation
 
 **Eligibility label**:
 The issue label that opts an issue in to unattended work: the agent may take it with nobody asking, producing the same job a command would. The single label the agent reads rather than writes, and a queue filter rather than an instruction: it says this issue _may_ be worked, never that a particular thing should happen to it. Not needed for work to start - a command starts work on any issue.

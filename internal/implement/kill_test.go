@@ -43,7 +43,7 @@ const (
 func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 	for _, at := range []string{
 		"after-claim", "model", "after-model", "before-push", "after-push",
-		"before-pr", "after-pr", "watch", "before-hand-off", "after-hand-off",
+		"before-pr", "after-pr", "watch", "ask-review", "re-ask-review", "before-hand-off", "after-hand-off",
 	} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
@@ -166,7 +166,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		CIWait:    time.Minute,
 		CICeiling: 48 * time.Hour,
 		CIRounds:  1,
-		Store:     s,
+		Store:     askStore{s, ft},
 		Holder:    "helper-ask-" + killAt,
 		LeaseTTL:  time.Minute,
 		StateDir:  filepath.Join(dir, "state"),
@@ -230,6 +230,10 @@ func standInForTheReview(t *testing.T, s store.Store, ft *killTracker, now time.
 	for _, c := range f.Comments {
 		posted = posted || strings.Contains(c.Body, marker)
 	}
+	// A review that comes to nothing, so the implement job asks again.
+	if ft.killAt == "re-ask-review" {
+		posted = true
+	}
 	if !posted {
 		f.NextID++
 		f.Comments = append(f.Comments, github.Comment{ID: f.NextID, Login: agent, Body: marker + "\nLooks sound."})
@@ -243,6 +247,31 @@ func standInForTheReview(t *testing.T, s store.Store, ft *killTracker, now time.
 	if err := s.Commit(ctx, store.Commit{JobID: rj.ID, Holder: "helper-review", State: review.Start, Release: true}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// askStore is the store the implement job asks for its review through. It
+// dies once the first ask has made the review job, or with a later ask's lease
+// on the review job taken and nothing committed: the one store write an effect
+// makes, cut in half.
+type askStore struct {
+	store.Store
+	ft *killTracker
+}
+
+func (a askStore) Ensure(ctx context.Context, kind store.Kind, subject store.Subject, state string, runAt time.Time) (store.Job, error) {
+	job, err := a.Store.Ensure(ctx, kind, subject, state, runAt)
+	if err == nil && kind == store.KindReview {
+		a.ft.die("ask-review")
+	}
+	return job, err
+}
+
+func (a askStore) Acquire(ctx context.Context, id, holder string, now time.Time, ttl time.Duration) (store.Job, bool, error) {
+	job, ok, err := a.Store.Acquire(ctx, id, holder, now, ttl)
+	if ok && id == "review-pr-101" {
+		a.ft.die("re-ask-review")
+	}
+	return job, ok, err
 }
 
 // killTracker is one issue and the pull requests from it, in a file, so that

@@ -38,6 +38,10 @@ type tracker struct {
 	commentedOn []int
 	labelledOn  []int
 
+	// repoLabels is the labels the repository already has. Applying one of
+	// them in another case keeps the repository's spelling, as GitHub does.
+	repoLabels []string
+
 	// checks is the check runs on a commit, by the time they are asked
 	// for: none, unless a test says otherwise.
 	checks func(sha string, call int) []github.CheckRun
@@ -108,6 +112,11 @@ func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.labelledOn = append(tr.labelledOn, n)
+	for _, l := range tr.repoLabels {
+		if strings.EqualFold(l, label) {
+			label = l
+		}
+	}
 	for i := range tr.prs {
 		if tr.prs[i].Number == n {
 			tr.prs[i].Labels = append(tr.prs[i].Labels, label)

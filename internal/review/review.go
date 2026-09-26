@@ -11,12 +11,12 @@
 //	verifying --review-verify->  start       at rest, once the reply is on the PR
 //	deferred  --review-resume->  reviewing   the tier again, from its first model
 //
-// A request is a /review command, or the pull request itself when the
-// implement job opened it (ADR 0001 §14, as amended for #40). The implement
-// job asks for a review by making this job due, never by commenting: a comment
-// the agent wrote must never be able to instruct the agent. Its request is
-// claimed with a 👀 on the pull request's description, which it wrote, so the
-// claim is on what asked and never on anything a human wrote.
+// A request is a /review command, or the implement job making this job due
+// for the pull request it opened (ADR 0001 §14, as amended for #40). The
+// implement job asks by making the job due, never by commenting: a comment the
+// agent wrote must never be able to instruct the agent. Its request is claimed
+// with a 👀 on the pull request's description, which it wrote, so the claim is
+// on what asked and never on anything a human wrote.
 //
 // Two of the transitions exist for reasons worth stating where the states are.
 //
@@ -190,6 +190,14 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		}
 		return transition.Result{State: Start, Effects: effects}, nil
 	}
+	if asked {
+		// Recorded here, where the request is taken, for the review to say
+		// which job asked. Who wrote the pull request cannot say it: a
+		// /review on it later is a human's.
+		if err := d.saveAsked(in.Job.ID, d.implementedFor(pr)); err != nil {
+			return transition.Result{}, err
+		}
+	}
 	return transition.Result{State: Reviewing, RunAt: in.Now, Effects: effects}, nil
 }
 
@@ -272,7 +280,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, d.implementedFor(pr))}); err != nil {
+	issue, err := d.askedFor(in.Job.ID)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, issue)}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
@@ -328,8 +340,10 @@ func (d *Deps) verify(ctx context.Context, in transition.In) (transition.Result,
 	if !d.reviewed(comments, p.Head) {
 		return transition.Result{State: Posting, RunAt: in.Now}, nil
 	}
-	if err := os.Remove(d.pendingPath(in.Job.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return transition.Result{}, err
+	for _, path := range []string{d.pendingPath(in.Job.ID), d.askedPath(in.Job.ID)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return transition.Result{}, err
+		}
 	}
 	return transition.Result{State: Start}, nil
 }
@@ -462,14 +476,18 @@ func (d *Deps) pendingPath(jobID string) string {
 	return filepath.Join(d.StateDir, "replies", jobID+".json")
 }
 
-// save writes the pending reply atomically, so a crash leaves the old file or
-// the new one and never half of one.
+// save writes the pending reply.
 func (d *Deps) save(jobID string, p pending) error {
-	path := d.pendingPath(jobID)
+	return writeJSON(d.pendingPath(jobID), p)
+}
+
+// writeJSON writes v to path atomically, so a crash leaves the old file or the
+// new one and never half of one.
+func writeJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	b, err := json.Marshal(p)
+	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
@@ -493,6 +511,38 @@ func (d *Deps) load(jobID string) (pending, error) {
 		return pending{}, fmt.Errorf("pending reply for %s is incomplete", jobID)
 	}
 	return p, nil
+}
+
+// asked is the implement job's request, once its claim has been taken: the
+// issue its pull request implements. It lasts until the review is on the pull
+// request.
+type asked struct {
+	Issue int `json:"issue"`
+}
+
+func (d *Deps) askedPath(jobID string) string {
+	return filepath.Join(d.StateDir, "asked", jobID+".json")
+}
+
+func (d *Deps) saveAsked(jobID string, issue int) error {
+	return writeJSON(d.askedPath(jobID), asked{Issue: issue})
+}
+
+// askedFor is the issue whose implement job asked for this review, or zero if
+// nothing but a command did.
+func (d *Deps) askedFor(jobID string) (int, error) {
+	b, err := os.ReadFile(d.askedPath(jobID))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var a asked
+	if err := json.Unmarshal(b, &a); err != nil {
+		return 0, fmt.Errorf("the request for %s: %w", jobID, err)
+	}
+	return a.Issue, nil
 }
 
 func short(sha string) string {

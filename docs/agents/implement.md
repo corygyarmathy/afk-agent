@@ -23,7 +23,7 @@ the model as instructions. The agent never merges.
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
 | `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: back to the session, with what CI said, until `--ci-rounds` runs out, then hand-back. |
-| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. |
+| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |
 
@@ -34,8 +34,7 @@ only, and the pull request stays open. Either way the job comes to rest, and
 its workspace goes with it.
 
 The review is a `review` job the implement job makes due, never a `/review`
-comment, because a comment the agent wrote must never be able to instruct the
-agent. The review claims the request with a 👀 on the pull request's
+comment (ADR 0001 §14). The review claims the request with a 👀 on the pull request's
 description, and says the implement job asked for it
 ([`review.md`](review.md)).
 

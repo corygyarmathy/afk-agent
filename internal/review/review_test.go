@@ -664,6 +664,29 @@ func TestTheImplementJobsPullRequestIsARequest(t *testing.T) {
 	}
 }
 
+// What asked is decided when the request is claimed, not read off who wrote
+// the pull request: once the implement job's request is claimed, a /review on
+// the same pull request is a human's, and its review does not say the job
+// asked.
+func TestAReviewAHumanAskedForOnTheImplementJobsPullRequestSaysSo(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.author = agent
+	tr.desc = "<!-- afk:implement issue=7 -->\nCloses #7."
+	tr.prEyes = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	posted := tr.byAgent()
+	if len(posted) != 1 {
+		t.Fatalf("agent comments = %+v, want one review", posted)
+	}
+	if strings.Contains(posted[0].Body, "implement job") {
+		t.Errorf("a review a human asked for says the implement job asked:\n%s", posted[0].Body)
+	}
+}
+
 // Only the agent's own pull request can ask: a human's that carries the
 // marker is not a request, and the job reviews it only if a command asks.
 func TestAMarkerFromAnyoneElseIsNotARequest(t *testing.T) {

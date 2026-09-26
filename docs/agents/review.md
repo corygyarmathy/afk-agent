@@ -15,12 +15,18 @@ agent authenticates; the spec is
 
 A `/review` comment on an open pull request, from an account with write access
 that is not the agent's, produces one advisory review comment on that pull
-request's current head. So does the implement job, once CI is green on the pull
-request it opened ([`implement.md`](implement.md)). It asks by making the review
-job due, never by commenting. The review claims that request with a 👀 on the
+request's current head. So does the implement job's request, once CI is green
+on the pull request it opened ([`implement.md`](implement.md)): it makes the
+review job due, never comments. The review claims that request with a 👀 on the
 pull request's description, which only counts on a pull request the agent
-wrote, and the review comment says the implement job asked for it. It never gates, never merges, never pushes, and writes
-no label.
+wrote, and the review comment says the implement job asked for it. The review
+never gates, never merges, never pushes, and writes no label.
+
+The description's 👀 is taken by the first review of the agent's pull request
+that finds it missing. A `/review` during the CI watch takes it before the
+implement job has asked, and that review says the implement job asked for it.
+When the job asks, that review of its head is already there, and it hands off
+on it.
 
 | transition | from | does |
 | --- | --- | --- |
