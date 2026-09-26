@@ -112,10 +112,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	ws := d.workspacePath(in.Job.ID)
-	if p.Failure == "" {
-		// Nothing the gate has read yet, so anything here is a session's
-		// that failed before it finished, and whose id went with it. The
-		// next one starts from the base rather than inherit it unannounced.
+	if p.Session == "" && p.Failure == "" {
+		// No session has finished here, so anything in the workspace is one
+		// that failed before it did, and whose id went with it. The next
+		// starts from the base rather than inherit it unannounced.
 		if err := reset(ctx, ws, p.Base); err != nil {
 			return transition.Result{}, err
 		}
