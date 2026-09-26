@@ -56,7 +56,8 @@ type Runner struct {
 	Holder string
 
 	// LeaseTTL is how long a lease is taken for. Long enough that a transition
-	// finishes inside it, short enough that a dead holder's job is reclaimable
+	// and its effects finish inside it - the lease is held until the last
+	// effect returns - short enough that a dead holder's job is reclaimable
 	// without an operator. A deployment parameter, so it is supplied rather
 	// than chosen here.
 	LeaseTTL time.Duration
@@ -134,10 +135,16 @@ func (o Outcome) String() string {
 //
 // The order is the whole point of this function, and it is the order the store
 // documents: take the lease, decide, commit the state change and reserve the
-// keys in one transaction, and only then perform the outward effects. A process
-// killed at any point in that sequence loses at most this transition: before
-// the commit, nothing happened and the lease expires; after it, the state moved
-// and the reserved key stops a replay from performing the effect a second time.
+// keys in one transaction, then perform the outward effects, and only then give
+// the lease back. A process killed at any point in that sequence loses at most
+// this transition: before the commit, nothing happened and the lease expires;
+// after it, the state moved and the reserved key stops a replay from performing
+// the effect a second time.
+//
+// The lease outlives the commit because the job's next transition must not run
+// while an effect is still in flight. A result due now is due the moment it
+// commits, and a worker that took it then would read GitHub before the push or
+// the comment had landed, find it missing, and do it again.
 // A lost effect is recoverable because the next transition re-reads GitHub
 // (ADR 0001 §5); a duplicated one is not.
 func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
@@ -160,7 +167,8 @@ func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
 
 // apply runs the transition and commits what it decided. Every path out of it
 // that still holds the lease gives it back exactly once: through the commit's
-// own release, or through abandon for the paths that return without a commit.
+// own release when there is nothing to perform, or through abandon - once the
+// effects have run, or on a path that returns without a commit.
 func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now time.Time) (out Outcome, err error) {
 	if job.Kind != t.Kind {
 		return Outcome{}, r.abandon(ctx, job, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind))
@@ -220,7 +228,7 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Stays:     stays,
 		NextRunAt: res.RunAt,
 		Keys:      Result{Effects: todo}.keys(),
-		Release:   true,
+		Release:   len(todo) == 0,
 	}
 	if err := r.Store.Commit(done, c); err != nil {
 		return Outcome{}, r.abandon(ctx, job, err)
@@ -228,7 +236,7 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 
 	committed, err := r.Store.Job(done, job.ID)
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, r.abandon(ctx, job, err)
 	}
 	out = Outcome{
 		Transition: t.Name,
@@ -244,21 +252,23 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 	// the comment is not there.
 	for _, e := range todo {
 		if err := e.Do(ctx); err != nil {
-			return out, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err)
+			return out, r.abandon(ctx, job, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err))
 		}
 		out.Performed = append(out.Performed, e.Key)
 	}
-	return out, nil
+	return out, r.abandon(ctx, job, nil)
 }
 
-// abandon gives the lease back on a run that ends without a commit, and
-// returns the cause. The store's Release is its own guard: it drops only this
-// holder's lease, so a commit that already released makes this a no-op rather
-// than a double release.
+// abandon gives the lease back on a run that ends without a commit or whose
+// effects have finished, and returns the cause, which is nil for a run that
+// succeeded. The store's Release is its own guard: it drops only this holder's
+// lease, so a commit that already released makes this a no-op rather than a
+// double release, and a lease that ran out mid-effect and was taken by another
+// worker stays with that worker.
 func (r *Runner) abandon(ctx context.Context, job store.Job, cause error) error {
 	// Release rather than let the lease run out: the job is going back on the
-	// queue, and making the next worker wait out a full TTL for a failure this
-	// process already knows about is time spent for nothing.
+	// queue, and making the next worker wait out a full TTL for a job this
+	// process has finished with is time spent for nothing.
 	if rerr := r.Store.Release(finishing(ctx), job.ID, r.Holder); rerr != nil {
 		return errors.Join(cause, rerr)
 	}
