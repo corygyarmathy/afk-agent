@@ -223,7 +223,8 @@ func runCmd(args []string, stdout io.Writer) error {
 		return usagef("run takes only one of --job, --issue or --pr")
 	}
 
-	if _, _, err := subject.tracker(); err != nil {
+	on, named, err := subject.tracker()
+	if err != nil {
 		return err
 	}
 
@@ -233,6 +234,9 @@ func runCmd(args []string, stdout io.Writer) error {
 	t, ok := reg.Get(name)
 	if !ok {
 		return usagef("unknown transition %q; %s", name, known(reg))
+	}
+	if want := subjectOf(t.Kind); named && on.Type != want {
+		return usagef("%s runs %s jobs, which are on a %s: use --%s", name, t.Kind, want, want)
 	}
 
 	tr, err := p.tracker()

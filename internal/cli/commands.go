@@ -19,3 +19,13 @@ var commands = func() []intake.Command {
 		{Word: review.Word, On: store.SubjectPR, Kind: store.KindReview, Start: review.Start},
 	}
 }
+
+// subjectOf is the kind of subject a job kind's jobs are attached to. `afk run`
+// refuses any other before it makes a job, because a job on the wrong kind of
+// subject can only fail until it parks.
+func subjectOf(k store.Kind) store.SubjectType {
+	if k == store.KindImplement {
+		return store.SubjectIssue
+	}
+	return store.SubjectPR
+}

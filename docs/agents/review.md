@@ -84,7 +84,8 @@ installation's grants:
 | --- | --- | --- |
 | the 👀 claim, on a command on a pull request | Issues: write | refused (403) with Metadata only; accepted with Pull requests: write and no Issues grant |
 | the review comment | Issues: write, or Pull requests: write | not verified |
-| listing open issues and pull requests, which intake reads commands from | not read from GitHub: the header is returned only to an App's token, and this listing replaced the pull requests listing after #36 | not verified |
+| listing open issues and pull requests, which intake reads commands from | not recorded | not verified |
+| listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
 | reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
 | reading the issues a pull request closes | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |

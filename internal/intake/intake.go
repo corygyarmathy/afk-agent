@@ -87,8 +87,10 @@ func Key(commentID int64) string {
 // Pass reads the tracker once and returns the jobs it made due.
 //
 // A subject that cannot be read does not stop the rest: its error is returned
-// alongside whatever the pass did manage, and the next pass tries it again. Making a job due is all a pass does. Whether that job starts is
-// admission's decision (ADR 0001 §11), and a pass never runs anything.
+// alongside whatever the pass did manage, and the next pass tries it again.
+//
+// Making a job due is all a pass does. Whether that job starts is admission's
+// decision (ADR 0001 §11), and a pass never runs anything.
 func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	if err := in.validate(); err != nil {
 		return nil, err

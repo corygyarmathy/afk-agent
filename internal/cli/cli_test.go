@@ -118,6 +118,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stderrIs: `unexpected argument "extra"`,
 		},
 		{
+			name:     "a subject of the wrong kind",
+			args:     []string{"run", "review", "--issue", "12"},
+			want:     ExitUsage,
+			stderrIs: "review runs review jobs, which are on a pr: use --pr",
+		},
+		{
 			name:     "an unregistered transition names the ones that are",
 			args:     []string{"run", "implement", "--job", "01J0"},
 			want:     ExitUsage,
@@ -411,11 +417,7 @@ func runsStandalone(t *testing.T, tr transition.Transition) error {
 	}
 	defer s.Close()
 
-	typ := store.SubjectPR
-	if tr.Kind == store.KindImplement {
-		typ = store.SubjectIssue
-	}
-	job, err := s.Ensure(ctx, tr.Kind, store.Subject{Type: typ, Number: 1}, tr.From, time.Now())
+	job, err := s.Ensure(ctx, tr.Kind, store.Subject{Type: subjectOf(tr.Kind), Number: 1}, tr.From, time.Now())
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
@@ -730,6 +732,9 @@ func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
 	for _, cmd := range commands() {
 		if _, ok := reg.Next(cmd.Kind, cmd.Start); !ok {
 			t.Errorf("%s starts %s jobs in %q, and no transition runs from there", cmd.Word, cmd.Kind, cmd.Start)
+		}
+		if want := subjectOf(cmd.Kind); cmd.On != want {
+			t.Errorf("%s is read on a %s, and makes %s jobs, which are on a %s", cmd.Word, cmd.On, cmd.Kind, want)
 		}
 	}
 }
