@@ -62,6 +62,12 @@ type Runner struct {
 	// last effect returns - short enough that a dead holder's job is
 	// reclaimable without an operator. A deployment parameter, so it is supplied rather
 	// than chosen here.
+	//
+	// It also bounds the effects: they run under the renewed lease's deadline,
+	// so none outlives the lease it runs under (see leased). The transition's
+	// own run is not bounded by it; one that outlives its lease is refused at
+	// the commit if another worker has taken the job, and wastes work rather
+	// than duplicating it.
 	LeaseTTL time.Duration
 
 	// Backoff schedules re-entry after a failure. Nil parks a failed job,
@@ -94,6 +100,24 @@ func (r *Runner) now() time.Time {
 // SIGTERM should do.
 func finishing(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
+}
+
+// leased is the context a commit's effects run under: the caller's, with a
+// deadline a LeaseTTL from now.
+//
+// An effect that outlives its lease is one another worker can take the job
+// from while it is still in flight - a push or a comment the next transition
+// makes again (#64). The deadline stops the worker being held behind it too,
+// so the job goes back on the queue on time. It narrows the race rather than
+// closing it: cancelling does not take back a request that already reached
+// GitHub.
+//
+// A timer rather than the lease's stored expiry, because that expiry is read
+// off Clock, which a test pins to a fixed date, and a context's deadline is
+// wall-clock time. So it is started before the expiry is read, and on the real
+// clock runs out no later than the lease does.
+func (r *Runner) leased(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, r.LeaseTTL)
 }
 
 // Outcome is what one Run did, in the terms an operator reading a hand-run's
@@ -238,7 +262,14 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Keys:      Result{Effects: todo}.keys(),
 		Release:   len(todo) == 0,
 	}
+	// The effects' deadline starts before the commit rather than after it: a
+	// slow commit comes out of the effects' time, but the deadline can never
+	// fall after the lease the commit writes.
+	effects := ctx
 	if !c.Release {
+		var cancel context.CancelFunc
+		effects, cancel = r.leased(ctx)
+		defer cancel()
 		c.LeaseUntil = r.now().Add(r.LeaseTTL)
 	}
 	if err := r.Store.Commit(done, c); err != nil {
@@ -261,9 +292,10 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 
 	// After the commit. An effect that fails here has not been lost quietly:
 	// the state has moved, and the next transition re-reads GitHub and sees
-	// the comment is not there.
+	// the comment is not there. One still running when the renewed lease runs
+	// out is cancelled, and fails the same way.
 	for _, e := range todo {
-		if err := e.Do(ctx); err != nil {
+		if err := e.Do(effects); err != nil {
 			return out, r.release(ctx, job, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err))
 		}
 		out.Performed = append(out.Performed, e.Key)

@@ -734,3 +734,107 @@ func TestTheEffectsAreHeldForAWholeLeaseFromTheCommit(t *testing.T) {
 		t.Errorf("lease during the effect = %+v; want it to run to %v, a whole lease from the commit", during, want)
 	}
 }
+
+// run is Run on its own goroutine, failing the test rather than hanging it if
+// the run never returns - which is what a run whose work outlived its lease
+// used to do.
+func run(t *testing.T, r *transition.Runner, name, jobID string) (transition.Outcome, error) {
+	t.Helper()
+	type result struct {
+		out transition.Outcome
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := r.Run(context.Background(), name, jobID)
+		done <- result{out, err}
+	}()
+	select {
+	case res := <-done:
+		return res.out, res.err
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return: the work outlived its lease")
+		return transition.Outcome{}, nil
+	}
+}
+
+// An effect that hangs must not outlive the lease it runs under. Past it,
+// another worker can take the job while the effect is still in flight, which
+// is #64's race come back later, and this worker is held behind it. Cancelled,
+// the run returns and the job goes back on the queue on time.
+func TestAnEffectStillRunningWhenTheLeaseRunsOutIsCancelled(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "post", Kind: store.KindReview, From: "start",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			return transition.Result{
+				State: "verifying",
+				RunAt: in.Now,
+				Effects: []transition.Effect{{Key: "review-pr-12-abc123", Do: func(ctx context.Context) error {
+					<-ctx.Done()
+					return ctx.Err()
+				}}},
+			}, nil
+		},
+	})
+	r := runner(s, reg, func(r *transition.Runner) { r.LeaseTTL = 100 * time.Millisecond })
+
+	out, err := run(t, r, "post", job.ID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if len(out.Performed) != 0 {
+		t.Errorf("Performed = %v, want nothing: the effect did not finish", out.Performed)
+	}
+	got, _ := s.Job(ctx, job.ID)
+	if got.State != "verifying" || got.Lease != nil {
+		t.Errorf("job = %q, lease %+v; want verifying and released", got.State, got.Lease)
+	}
+}
+
+// The effects' deadline is the renewed lease's: it runs out no later than the
+// lease's expiry, and not much earlier. Earlier would cut short an effect the
+// lease still covers; later is the race.
+func TestTheEffectsRunOutNoLaterThanTheirLease(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+
+	var (
+		deadline time.Time
+		ok       bool
+		lease    *store.Lease
+	)
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "post", Kind: store.KindReview, From: "start",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			return transition.Result{
+				State: "verifying",
+				RunAt: in.Now,
+				Effects: []transition.Effect{{Key: "k", Do: func(ctx context.Context) error {
+					deadline, ok = ctx.Deadline()
+					j, err := s.Job(ctx, job.ID)
+					lease = j.Lease
+					return err
+				}}},
+			}, nil
+		},
+	})
+	r := runner(s, reg)
+
+	if _, err := r.Run(ctx, "post", job.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !ok || lease == nil {
+		t.Fatalf("deadline %v (set %v), lease %+v; want both", deadline, ok, lease)
+	}
+	if deadline.After(lease.ExpiresAt) {
+		t.Errorf("deadline %v is after the lease's expiry %v", deadline, lease.ExpiresAt)
+	}
+	if gap := lease.ExpiresAt.Sub(deadline); gap > time.Second {
+		t.Errorf("deadline %v is %v short of the lease's expiry %v", deadline, gap, lease.ExpiresAt)
+	}
+}

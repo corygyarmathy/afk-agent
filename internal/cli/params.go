@@ -40,6 +40,7 @@ and the NixOS module that packages this agent sets them:
 
   --store <path>        AFK_STORE         the job store file            (required)
   --lease <duration>    AFK_LEASE         how long a lease is held      (required)
+                                          and the longest an effect may run
   --retry <duration>    AFK_RETRY         when a failed job re-enters
   --max-attempts <n>    AFK_MAX_ATTEMPTS  attempts before a job parks
 
@@ -175,7 +176,7 @@ func (p *params) bindStore(fs *flag.FlagSet) {
 }
 
 func (p *params) bindLease(fs *flag.FlagSet) {
-	fs.StringVar(&p.lease, "lease", "", "how long a lease is held (AFK_LEASE)")
+	fs.StringVar(&p.lease, "lease", "", "how long a lease is held, and the longest an effect may run (AFK_LEASE)")
 }
 
 func (p *params) bindBackoff(fs *flag.FlagSet) {
