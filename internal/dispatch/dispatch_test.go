@@ -1147,18 +1147,16 @@ func TestAnEpisodeSurvivesARestart(t *testing.T) {
 	}
 }
 
-// What a restart does not carry is the notifier's memory of having told, which
-// is in memory for every condition alike (notification.md): an episode already
-// told is told again by the next process to see it run out, because the
-// operator may not have seen the first. It is not counted again from nothing
-// first.
-func TestAToldEpisodeIsToldAgainAfterARestart(t *testing.T) {
+// A restart carries having told as well as the count: an episode already told
+// is not told again by the next process to see its tier run out, so a pool in
+// a crash loop tells an episode once rather than once per restart.
+func TestAToldEpisodeIsNotToldAgainAfterARestart(t *testing.T) {
 	got := runTierAcrossRestarts(t, "xXXd")
 	if n := len(got); n != 3 {
 		t.Fatalf("%d processes, want 3", n)
 	}
-	if len(got[0]) != 1 || len(got[1]) != 1 || len(got[2]) != 0 {
-		t.Fatalf("notifications by process = %d, %d, %d; want 1, 1, 0", len(got[0]), len(got[1]), len(got[2]))
+	if len(got[0]) != 1 || len(got[1]) != 0 || len(got[2]) != 0 {
+		t.Fatalf("notifications by process = %d, %d, %d; want 1, 0, 0", len(got[0]), len(got[1]), len(got[2]))
 	}
 }
 
