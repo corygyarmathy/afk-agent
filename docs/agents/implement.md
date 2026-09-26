@@ -23,7 +23,7 @@ the model as instructions. The agent never merges.
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
 | `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
-| `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: back to the session, with what CI said, until `--ci-rounds` runs out, then hand-back. |
+| `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-rounds` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, logging any check that had already failed. A run waiting for approval hands back without the log line. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
@@ -142,8 +142,3 @@ afk run implement-hand-off --issue 7   # -> start, not scheduled: done
 
 A hand-back moves the job to `handing-back`, and `afk run implement-handed-back
 --issue 7` rests it once the comment and the label are both there.
-
-## What is not done yet
-
-- What CI catches that the local gate did not is not recorded (`dotfiles`
-  ADR 0007 §8).
