@@ -230,8 +230,9 @@ func overCeiling(p Price, ceiling Ceiling) string {
 // to hand back to a human but a job to defer, so the caller gets an
 // ExhaustedError and decides when to come back. Choose defers it for the tier
 // wait and says why, and the pool tells the operator about a job whose tier
-// stays exhausted across that many resumes (notify.Notifier.TierExhausted) -
-// not about one that ran out once and came back.
+// has run out --tier-notify-after times without a model answering in between
+// (notify.Notifier.TierExhausted) - not about one that ran out once and came
+// back.
 func (c Candidates) Attempt(n, bound int) (Ref, error) {
 	limit := len(c)
 	if bound > 0 && bound < limit {

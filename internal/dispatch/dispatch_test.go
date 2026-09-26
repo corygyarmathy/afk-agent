@@ -943,7 +943,9 @@ func TestAHandBackWhoseEffectFailedReachesTheOperator(t *testing.T) {
 // run of the model: x the tier is exhausted and the job defers, s a candidate
 // failed transiently and the job stays for the next, g a model answered and
 // the job moves past it - to a state that leads back to the model, the way a
-// gate that failed does - and d a model answered and the job is done.
+// gate that failed does - p the job parks where it is, for runTier to
+// reschedule the way an operator would, and d a model answered and the job is
+// done.
 //
 // It has the shape review and implement have: a state the model runs from, a
 // state an exhausted tier waits in, and a resume from one to the other that
@@ -981,6 +983,8 @@ func tier(script string) *transition.Registry {
 					return transition.Result{State: "running", RunAt: now()}, nil
 				case 'g':
 					return transition.Result{State: "gated", RunAt: now()}, nil
+				case 'p':
+					return transition.Result{State: "running"}, nil
 				}
 				return transition.Result{State: "done"}, nil
 			},
@@ -989,7 +993,8 @@ func tier(script string) *transition.Registry {
 }
 
 // runTier runs one job through script with a notifier that tells an exhausted
-// tier after two exhaustions, and returns what was published.
+// tier after two exhaustions, and returns what was published. A job that
+// parks is rescheduled where it rests, as an operator's requeue would.
 func runTier(t *testing.T, script string) []string {
 	t.Helper()
 	s := openStore(t)
@@ -1003,10 +1008,35 @@ func runTier(t *testing.T, script string) []string {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		until(t, s, ids[0], "finish", func(j store.Job) bool { return j.State == "done" })
+		for {
+			job := until(t, s, ids[0], "finish or park", func(j store.Job) bool {
+				return j.State == "done" || (j.NextRunAt.IsZero() && j.Lease == nil)
+			})
+			if job.State == "done" {
+				return
+			}
+			requeue(t, s, job)
+		}
 	}()
 	runUntil(t, d, done)
 	return p.all()
+}
+
+// requeue schedules a parked job where it rests.
+func requeue(t *testing.T, s store.Store, job store.Job) {
+	t.Helper()
+	ctx := context.Background()
+	if _, ok, err := s.Acquire(ctx, job.ID, "operator", time.Now(), time.Minute); err != nil || !ok {
+		t.Fatalf("acquire %s to requeue it: ok %v, %v", job.ID, ok, err)
+	}
+	err := s.Commit(ctx, store.Commit{
+		JobID: job.ID, Holder: "operator",
+		State: job.State, Attempts: job.Attempts, Stays: job.Stays,
+		NextRunAt: time.Now().Add(-time.Second), Release: true,
+	})
+	if err != nil {
+		t.Fatalf("requeue %s: %v", job.ID, err)
+	}
 }
 
 // The acceptance criterion of #76: a tier that stays exhausted across resumes
@@ -1042,6 +1072,19 @@ func TestAnEpisodeEndsWhenTheJobGetsPastTheModel(t *testing.T) {
 	}
 	if got := runTier(t, "xxgxxd"); len(got) != 2 {
 		t.Fatalf("%d notifications for two long episodes, want 2:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+}
+
+// A park ends an episode: the job is the operator's now, and what they do
+// with it is not the tier's. Exhaustions after a requeue are a new episode,
+// counted from nothing and told again - rather than added to one that was
+// already told, and so never told at all.
+func TestAParkEndsAnEpisode(t *testing.T) {
+	if got := runTier(t, "xpxd"); len(got) != 0 {
+		t.Fatalf("%d notifications for two short episodes either side of a park, want none:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	if got := runTier(t, "xxpxxd"); len(got) != 2 {
+		t.Fatalf("%d notifications for two long episodes either side of a park, want 2:\n%s", len(got), strings.Join(got, "\n---\n"))
 	}
 }
 

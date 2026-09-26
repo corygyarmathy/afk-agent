@@ -314,6 +314,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 // needs no knowledge of which states a job kind has, and a failed run, which
 // leaves the job where it was, is inside the episode rather than an end to it.
 //
+// So is a park, although it leaves the job in one of the two: the job is the
+// operator's now, and whatever requeues it starts the tier afresh. Carried
+// over, an episode already told would swallow every exhaustion after the
+// requeue, and one not yet told would count exhaustions from before it.
+//
 // Nothing is followed without a notifier: an episode exists only to be told.
 func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transition.Outcome) {
 	if d.Notify == nil || out.Transition == "" {
@@ -326,7 +331,7 @@ func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transitio
 	d.mu.Lock()
 	ep, ok := d.episodes[out.Job.ID]
 	if out.Exhausted == nil {
-		if ok && out.To != ep.running && out.To != ep.deferred {
+		if ok && (out.Parked || (out.To != ep.running && out.To != ep.deferred)) {
 			delete(d.episodes, out.Job.ID)
 		}
 		d.mu.Unlock()

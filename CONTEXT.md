@@ -36,6 +36,10 @@ _Avoid_: Stuck, suspended, dropped
 A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a run that returned an error is an attempt and not a stay - it decided nothing - and a stay is not an attempt, so waiting does not spend the retries an error needs. A job counts both since it entered its state - neither breaks the other's count - and a move to another state starts both again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
 _Avoid_: Retry, skip, candidate index
 
+**Episode**:
+One stretch of a job's model tier staying exhausted: from the first time every candidate in the tier fails transiently until the job next gets past the model or parks. Deferring and resuming to try the tier again are inside it. What the operator is told about once, when it has gone on long enough, rather than once per deferral. Kept in memory by the pool, so a restart starts it again.
+_Avoid_: Outage, incident, streak
+
 **Budget observation**:
 One reading of the account's usage, taken from the provider's own endpoint. Account-wide and dollar-denominated, across independent windows, and it sees interactive use as well as the agent's. Never a number this agent accumulated: the agent observes its budget and does not estimate it.
 _Avoid_: Ledger, estimate, quota, usage tracking

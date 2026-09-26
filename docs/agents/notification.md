@@ -53,8 +53,9 @@ resume indefinitely, and the only sign would be a job that is always in
 
 So the pool counts. An **episode** starts the first time a job's tier runs out,
 and ends the next time the job moves anywhere other than back to the model or
-into `deferred` - the model answered, or something else moved the job on. A
-candidate failing on the way, or a run that errored, is inside the episode.
+into `deferred` - the model answered, or something else moved the job on - or
+the next time the job parks, which hands it to the operator. A candidate failing
+on the way, or a run that errored and was rescheduled, is inside the episode.
 The operator is told once, on the `--tier-notify-after`th exhaustion of an
 episode; a later episode of the same job is told again.
 

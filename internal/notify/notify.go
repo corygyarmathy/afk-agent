@@ -149,7 +149,7 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	//   - Admission names the window that reopens last while it can defer, and
 	//     the worst one once the timestamp has passed with the account still
 	//     limited. Those can be different windows, and a second name is a
-	//     second key. One limit episode can therefore publish twice.
+	//     second key. One spent window can therefore publish twice.
 	key := fmt.Sprintf("exhausted:%s:%s", w.Name, w.ResetsAt.Format(time.RFC3339))
 
 	body := w.String() + "\n\n"
@@ -164,9 +164,9 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 }
 
 // Episode is one run of a job's model tier staying exhausted: from the first
-// time the tier ran out until the job next gets past the model. Resuming and
-// trying the tier again is inside it; so is a candidate failing transiently
-// on the way. The pool keeps it, because the pool is what sees every run.
+// time the tier ran out until the job next gets past the model or parks.
+// Resuming and trying the tier again is inside it; so is a candidate failing
+// transiently on the way. The pool keeps it, because the pool is what sees every run.
 type Episode struct {
 	// Since is when the tier first ran out in this episode. With the job, it
 	// is what identifies the episode.
