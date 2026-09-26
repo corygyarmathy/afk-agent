@@ -22,9 +22,10 @@ type Git struct {
 // the base comes from the tracker rather than from git, which is what lets the
 // fetch stay shallow.
 //
-// The repository is made isolated, so no template or hook from the agent
-// user's configuration is in it when the fetch, which carries the token, runs
-// there. Nothing of the token is left in dir.
+// Every step is isolated, so no template, hook or other configuration of the
+// agent user's is in the repository when the fetch, which carries the token,
+// runs there, or when the head is checked out. Nothing of the token is left
+// in dir.
 func (g Git) Checkout(ctx context.Context, dir string, number int) (string, error) {
 	if _, err := git.RunEnv(ctx, dir, git.Isolated, "init", "--quiet"); err != nil {
 		return "", err
@@ -32,8 +33,8 @@ func (g Git) Checkout(ctx context.Context, dir string, number int) (string, erro
 	if _, err := g.Remote.Run(ctx, dir, "fetch", "--quiet", "--depth=1", g.Remote.URL, fmt.Sprintf("refs/pull/%d/head", number)); err != nil {
 		return "", err
 	}
-	if _, err := git.Run(ctx, dir, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
+	if _, err := git.RunEnv(ctx, dir, git.Isolated, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
 		return "", err
 	}
-	return git.Run(ctx, dir, "rev-parse", "HEAD")
+	return git.RunEnv(ctx, dir, git.Isolated, "rev-parse", "HEAD")
 }

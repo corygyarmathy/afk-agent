@@ -779,7 +779,8 @@ func TestGitChecksOutThePullRequestHead(t *testing.T) {
 
 // The fetch carries the token, and nothing of it is left in the workspace the
 // model reads, or in the agent user's configuration, which the session could
-// write. Nor does that configuration redirect the fetch (#65).
+// write. Nor does that configuration redirect the fetch, or run a hook when
+// the head is checked out (#65).
 func TestGitLeavesTheTokenNowhereTheSessionCanRead(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git on PATH")
@@ -794,8 +795,12 @@ func TestGitLeavesTheTokenNowhereTheSessionCanRead(t *testing.T) {
 	gitIn(t, elsewhere, "init", "--quiet")
 	gitIn(t, elsewhere, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "elsewhere")
 	gitIn(t, elsewhere, "update-ref", "refs/pull/7/head", "HEAD")
+	hooks, ran := t.TempDir(), filepath.Join(t.TempDir(), "ran")
+	if err := os.WriteFile(filepath.Join(hooks, "post-checkout"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	global := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(global, []byte("[url \""+elsewhere+"\"]\n\tinsteadOf = "+src+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(global, []byte("[url \""+elsewhere+"\"]\n\tinsteadOf = "+src+"\n[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
@@ -812,6 +817,9 @@ func TestGitLeavesTheTokenNowhereTheSessionCanRead(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("checked out %s, want %s from the remote rather than its redirect", got, want)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the checkout ran a hook from the agent user's configuration")
 	}
 	if minted == 0 {
 		t.Fatal("no token was minted, so none could have been left")
