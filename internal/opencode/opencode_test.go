@@ -397,6 +397,27 @@ func TestARunPastItsBoundIsKilledAndTransient(t *testing.T) {
 	}
 }
 
+// A run that exited cleanly as its bound ran out finished, and keeps its
+// reply. Here what it left behind holds its stdout open, so the stream does not
+// end until the bound kills the group, and the kill lands after the run itself
+// had exited 0.
+func TestARunThatFinishedAsItsBoundRanOutKeepsItsReply(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "pids")
+	c := fake(t, "linger", map[string]string{envPids: pids, envStream: fixture(t, "ok.jsonl"), envExit: "0"})
+	c.Timeout = 500 * time.Millisecond
+
+	reply, err := c.Run(context.Background(), request(t))
+	if err != nil {
+		t.Fatalf("got %v, want the reply the run wrote before it exited", err)
+	}
+	if strings.TrimSpace(reply.Text) == "" {
+		t.Error("the reply is empty")
+	}
+	for _, pid := range waitForPids(t, pids) {
+		gone(t, pid)
+	}
+}
+
 // A run that succeeds takes what it started with it. opencode starts language
 // servers, and a review that finished must not leave them running for the
 // life of the worker.
@@ -490,11 +511,14 @@ func helper(mode string, args []string) int {
 		}
 		return replay()
 	case "hang":
-		startChild()
+		startChild(nil)
 		time.Sleep(time.Hour)
 		return 0
 	case "orphan":
-		startChild()
+		startChild(nil)
+		return replay()
+	case "linger":
+		startChild(os.Stdout)
 		return replay()
 	case "sleep":
 		time.Sleep(time.Hour)
@@ -506,10 +530,14 @@ func helper(mode string, args []string) int {
 
 // startChild starts a grandchild that outlives this process unless something
 // kills it, the way a language server opencode started would, and records both
-// pids.
-func startChild() {
+// pids. A non-nil stdout is handed to it, as opencode's own is to a language
+// server that inherits it.
+func startChild(stdout *os.File) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperIsOpencode$", "--")
 	cmd.Env = append(os.Environ(), envMode+"=sleep")
+	if stdout != nil {
+		cmd.Stdout = stdout
+	}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)
