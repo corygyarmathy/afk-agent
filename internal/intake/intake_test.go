@@ -127,28 +127,6 @@ func ids(jobs []store.Job) []string {
 	return out
 }
 
-func job(t *testing.T, s store.Store, id string) store.Job {
-	t.Helper()
-	j, err := s.Job(context.Background(), id)
-	if err != nil {
-		t.Fatalf("Job(%s): %v", id, err)
-	}
-	return j
-}
-
-// rest puts a job in a state with nothing scheduled and no lease, the way a
-// transition that finished or handed back leaves it.
-func rest(t *testing.T, s store.Store, id, state string, attempts int) {
-	t.Helper()
-	ctx := context.Background()
-	if _, ok, err := s.Acquire(ctx, id, "a-transition", now, time.Minute); err != nil || !ok {
-		t.Fatalf("Acquire(%s) = %v, %v", id, ok, err)
-	}
-	if err := s.Commit(ctx, store.Commit{JobID: id, Holder: "a-transition", State: state, Attempts: attempts, Release: true}); err != nil {
-		t.Fatalf("Commit(%s): %v", id, err)
-	}
-}
-
 func TestAReviewCommandMakesAReviewJobDue(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{prs: []int{12}, comments: map[int][]github.Comment{
@@ -160,7 +138,7 @@ func TestAReviewCommandMakesAReviewJobDue(t *testing.T) {
 	if got := ids(made); len(got) != 1 || got[0] != "review-pr-12" {
 		t.Fatalf("made due %v, want [review-pr-12]", got)
 	}
-	j := job(t, s, "review-pr-12")
+	j := storetest.Job(t, s, "review-pr-12")
 	if j.State != "start" || !j.NextRunAt.Equal(now) || j.Lease != nil {
 		t.Errorf("job = %+v, want state start, due now, no lease", j)
 	}
@@ -286,14 +264,14 @@ func TestANewCommandStartsAJobAtRestOver(t *testing.T) {
 	// The first command is answered and its job has come to rest, having
 	// failed twice on the way.
 	tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-	rest(t, s, "review-pr-12", "reviewed", 2)
+	storetest.Rest(t, s, "review-pr-12", "reviewed", 2, now)
 
 	tr.say(12, comment(2, "alice", "OWNER", "/review"))
 	made := pass(t, in)
 	if got := ids(made); len(got) != 1 || got[0] != "review-pr-12" {
 		t.Fatalf("made due %v, want [review-pr-12]", got)
 	}
-	j := job(t, s, "review-pr-12")
+	j := storetest.Job(t, s, "review-pr-12")
 	if j.State != "start" || j.Attempts != 0 || !j.NextRunAt.Equal(now) || j.Lease != nil {
 		t.Errorf("job = %+v, want it started over: state start, no attempts, due now, no lease", j)
 	}
@@ -310,14 +288,14 @@ func TestACommandArmsItsJobOnce(t *testing.T) {
 	in := intakeFor(t, s, tr)
 	pass(t, in)
 
-	rest(t, s, "review-pr-12", "start", 3)
+	storetest.Rest(t, s, "review-pr-12", "start", 3, now)
 
 	for range 3 {
 		if made := pass(t, in); len(made) != 0 {
 			t.Fatalf("an unclaimed command made %v due again", ids(made))
 		}
 	}
-	if j := job(t, s, "review-pr-12"); !j.NextRunAt.IsZero() || j.Attempts != 3 {
+	if j := storetest.Job(t, s, "review-pr-12"); !j.NextRunAt.IsZero() || j.Attempts != 3 {
 		t.Errorf("job = %+v, want it left at rest for a human", j)
 	}
 }
@@ -341,7 +319,7 @@ func TestAJobAlreadyQueuedOrHeldIsLeftAlone(t *testing.T) {
 		if made := pass(t, intakeFor(t, s, commented())); len(made) != 0 {
 			t.Errorf("made %v due", ids(made))
 		}
-		if j := job(t, s, "review-pr-12"); j.State != "waiting" || !j.NextRunAt.Equal(later) {
+		if j := storetest.Job(t, s, "review-pr-12"); j.State != "waiting" || !j.NextRunAt.Equal(later) {
 			t.Errorf("job = %+v, want it untouched", j)
 		}
 	})
@@ -349,14 +327,14 @@ func TestAJobAlreadyQueuedOrHeldIsLeftAlone(t *testing.T) {
 	t.Run("held", func(t *testing.T) {
 		s := storetest.Open(t)
 		seeded := storetest.Seed(t, s, store.KindReview, 12, "start")
-		rest(t, s, seeded.ID, "start", 0)
+		storetest.Rest(t, s, seeded.ID, "start", 0, now)
 		if _, ok, err := s.Acquire(ctx, seeded.ID, "a-live-transition", now, time.Hour); err != nil || !ok {
 			t.Fatalf("Acquire = %v, %v", ok, err)
 		}
 		if made := pass(t, intakeFor(t, s, commented())); len(made) != 0 {
 			t.Errorf("made %v due", ids(made))
 		}
-		if j := job(t, s, seeded.ID); j.Lease == nil || j.Lease.Holder != "a-live-transition" || !j.NextRunAt.IsZero() {
+		if j := storetest.Job(t, s, seeded.ID); j.Lease == nil || j.Lease.Holder != "a-live-transition" || !j.NextRunAt.IsZero() {
 			t.Errorf("job = %+v, want it untouched and still held", j)
 		}
 	})
@@ -548,7 +526,7 @@ func TestACommandLeftToARunIsReadAgainUntilSettled(t *testing.T) {
 	ctx := context.Background()
 	s := storetest.Open(t)
 	seeded := storetest.Seed(t, s, store.KindReview, 12, "start")
-	rest(t, s, seeded.ID, "start", 0)
+	storetest.Rest(t, s, seeded.ID, "start", 0, now)
 	if _, ok, err := s.Acquire(ctx, seeded.ID, "a-live-transition", now, time.Hour); err != nil || !ok {
 		t.Fatalf("Acquire = %v, %v", ok, err)
 	}
@@ -644,51 +622,5 @@ func TestAnIntakeThatCannotWorkIsRefused(t *testing.T) {
 				t.Errorf("err = %v, want it to contain %q", err, tc.want)
 			}
 		})
-	}
-}
-
-// asker arms under a lease of its own, the way another job asks for work.
-func asker(s store.Store) intake.Armer {
-	return intake.Armer{Store: s, Holder: "an-asking-job", LeaseTTL: time.Minute}
-}
-
-var askedPR = store.Subject{Type: store.SubjectPR, Number: 12}
-
-func TestAskCreatesAMissingJobDue(t *testing.T) {
-	s := storetest.Open(t)
-	if err := asker(s).Ask(context.Background(), store.KindReview, askedPR, "start", now); err != nil {
-		t.Fatalf("Ask: %v", err)
-	}
-	j := job(t, s, "review-pr-12")
-	if j.State != "start" || !j.NextRunAt.Equal(now) || j.Lease != nil {
-		t.Errorf("job = %s due %v leased %v, want start due %v unleased", j.State, j.NextRunAt, j.Lease != nil, now)
-	}
-}
-
-func TestAskArmsAJobAtRestInStart(t *testing.T) {
-	s := storetest.Open(t)
-	seeded := storetest.Seed(t, s, store.KindReview, 12, "start")
-	rest(t, s, seeded.ID, "start", 2)
-
-	if err := asker(s).Ask(context.Background(), store.KindReview, askedPR, "start", now); err != nil {
-		t.Fatalf("Ask: %v", err)
-	}
-	j := job(t, s, seeded.ID)
-	if j.State != "start" || j.Attempts != 0 || !j.NextRunAt.Equal(now) || j.Lease != nil {
-		t.Errorf("job = %s attempts %d due %v leased %v, want start attempts 0 due %v unleased", j.State, j.Attempts, j.NextRunAt, j.Lease != nil, now)
-	}
-}
-
-func TestAskLeavesAParkedJobAlone(t *testing.T) {
-	s := storetest.Open(t)
-	seeded := storetest.Seed(t, s, store.KindReview, 12, "start")
-	rest(t, s, seeded.ID, "posting", 3)
-
-	if err := asker(s).Ask(context.Background(), store.KindReview, askedPR, "start", now); err != nil {
-		t.Fatalf("Ask: %v", err)
-	}
-	j := job(t, s, seeded.ID)
-	if j.State != "posting" || j.Attempts != 3 || !j.NextRunAt.IsZero() || j.Lease != nil {
-		t.Errorf("job = %s attempts %d due %v leased %v, want it parked in posting with 3 attempts, unscheduled and unleased", j.State, j.Attempts, j.NextRunAt, j.Lease != nil)
 	}
 }

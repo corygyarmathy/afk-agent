@@ -233,6 +233,9 @@ type fixture struct {
 	// at is the time the runner sees: now, until a test moves it on.
 	at time.Time
 
+	// logged is every line the deps logged.
+	logged []string
+
 	// last and lastErr are what drive's last run returned: an error with
 	// Parked is the outcome dispatch tells the operator about.
 	last    transition.Outcome
@@ -255,6 +258,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Remote:        remote,
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         2,
+		Rounds:        2,
 		TierWait:      time.Hour,
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
@@ -263,9 +267,9 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
-		CIRounds:      2,
+		CIFixes:       2,
 		Store:         s,
-		AskReview:     implement.ReviewAsker(intake.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
+		AskReview:     implement.ReviewAsker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
@@ -274,6 +278,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job, at: now}
+	d.Log = func(msg string) { f.logged = append(f.logged, msg) }
 	f.run = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
 	return f
 }

@@ -76,6 +76,18 @@ _Avoid_: Stuck path, failure
 What a transition has decided to say on the tracker (a claim, a reply to a command, a hand-back's comment and label) and has not yet seen there. The job does not move on from something owed until the tracker shows it: an owed thing lost is made again, never given up on quietly.
 _Avoid_: Pending, outbox, queued
 
+**Effect**:
+Something a transition does outside its job's own commit - a push, a pull request, a comment, a reaction, a label, another job made due - performed only after the transition's state change is committed, and under an idempotency key that commit reserved. May be lost between the two; is never made twice under one key.
+_Avoid_: Side effect, action, write
+
+**Round**:
+One making of an effect, under a key of its own. An effect that never shows up is made again in the next round, a bounded number of times; a key spent on a round is never used again, whether its effect landed, failed or was lost. Distinct from an attempt: a round is counted by the keys an effect has used, an attempt by the runs of a transition.
+_Avoid_: Retry, try, attempt
+
+**Fix**:
+A red CI run sent back to the session that wrote the branch, to be fixed and pushed again. Bounded, and counted once for each head CI failed on.
+_Avoid_: CI round, fix round
+
 **Resource token**:
 A named, capacity-limited permit a transition must hold to run, expressing a host constraint rather than a logical one. A transition that builds holds the heavy-build token; one that calls an API holds nothing.
 _Avoid_: Semaphore, slot, concurrency limit

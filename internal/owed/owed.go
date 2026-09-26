@@ -67,6 +67,12 @@ type Item struct {
 	// Stem is what the item's keys are made from: <stem>-<round>.
 	Stem string `json:"stem"`
 
+	// From is the round the item's allowance counts from. Set when the item
+	// is owed, and moved past the rounds it spent when they run out, so the
+	// next attempt at the job - a retry, or an operator freeing it - has an
+	// allowance of its own. A key is still never used twice.
+	From int `json:"from,omitempty"`
+
 	// On is the issue or pull request the item is on.
 	On int `json:"on,omitempty"`
 
@@ -147,9 +153,15 @@ type Book struct {
 	// whose comment is the agent's.
 	Login string
 
-	// Bound is how many times one item is made before an item that never
-	// appears is an error. A parameter.
-	Bound int
+	// Rounds is how many times one item is made before an item that never
+	// appears is an error: a failed attempt, which parks the job once the
+	// retries are spent. There is nothing to hand back through - what is
+	// owed is the claim, the reply, or the hand-back itself. A parameter.
+	//
+	// Each retry has rounds of its own (effects), so the bounds multiply: an
+	// item is made up to Rounds times the attempt bound before the job
+	// parks.
+	Rounds int
 
 	// Dir is where a record waits for its read-back - in the state
 	// directory, beside the store and never in it (ADR 0001 §5).
@@ -189,15 +201,20 @@ func (b *Book) Owe(ctx context.Context, in transition.In, state string, r Record
 	if len(r.Items) == 0 {
 		return next(in, r), nil
 	}
-	for _, it := range r.Items {
+	for i, it := range r.Items {
 		if err := it.valid(); err != nil {
 			return transition.Result{}, err
 		}
+		from, err := transition.Next(ctx, b.Store, it.Stem)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		r.Items[i].From = from
 	}
 	if err := b.save(in.Job.ID, r); err != nil {
 		return transition.Result{}, err
 	}
-	effects, err := b.effects(ctx, r.Items)
+	effects, err := b.effects(ctx, in.Job.ID, r, r.Items)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -231,7 +248,7 @@ func (b *Book) Settle(ctx context.Context, in transition.In, lost transition.Res
 		}
 		return next(in, r), nil
 	}
-	effects, err := b.effects(ctx, missing)
+	effects, err := b.effects(ctx, in.Job.ID, r, missing)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -247,14 +264,31 @@ func next(in transition.In, r Record) transition.Result {
 }
 
 // effects is each item's effect, under the next round's key.
-func (b *Book) effects(ctx context.Context, items []Item) ([]transition.Effect, error) {
+//
+// An item whose rounds ran out is an error. Its allowance moves on in r first,
+// so the attempt after this one makes it again rather than failing straight
+// away: freeing a parked job is then enough to try once more.
+func (b *Book) effects(ctx context.Context, jobID string, r Record, items []Item) ([]transition.Effect, error) {
 	out := make([]transition.Effect, 0, len(items))
+	var errs []error
 	for _, it := range items {
-		key, err := transition.Round(ctx, b.Store, it.Stem, b.Bound)
+		key, err := transition.Round(ctx, b.Store, it.Stem, it.From, b.Rounds)
+		if spent, ok := transition.Spent(err); ok {
+			for i := range r.Items {
+				if r.Items[i].Stem == it.Stem {
+					r.Items[i].From = spent.Next
+				}
+			}
+			errs = append(errs, err)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, transition.Effect{Key: key, Do: b.do(it)})
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(append(errs, b.save(jobID, r))...)
 	}
 	return out, nil
 }

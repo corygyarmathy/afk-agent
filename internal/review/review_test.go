@@ -171,8 +171,19 @@ func (tr *tracker) ReactToIssue(_ context.Context, _ int, content string) error 
 	return nil
 }
 
-func (tr *tracker) Label(context.Context, int, string) error {
-	return errors.New("a review never labels")
+// Label applies a label to the pull request, which the tracker reads as an
+// issue.
+func (tr *tracker) Label(_ context.Context, n int, label string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.issues == nil {
+		tr.issues = map[int]github.Issue{}
+	}
+	is := tr.issues[n]
+	is.Number = n
+	is.Labels = append(is.Labels, label)
+	tr.issues[n] = is
+	return nil
 }
 
 // byAgent is the comments the agent wrote.
@@ -248,11 +259,13 @@ func setup(t *testing.T, tr *tracker, m *reviewer) *fixture {
 		Checkout: func(_ context.Context, dir string, _ int) (string, error) {
 			return head, os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
 		},
-		Resolve:  func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
-		Bound:    2,
-		TierWait: time.Hour,
-		Login:    agent,
-		StateDir: t.TempDir(),
+		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+		Bound:         2,
+		Rounds:        2,
+		HandBackLabel: "needs-decision",
+		TierWait:      time.Hour,
+		Login:         agent,
+		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(review.Transitions(d)...)
 	job, err := s.Ensure(context.Background(), store.KindReview, store.Subject{Type: store.SubjectPR, Number: 12}, review.Start, now)
@@ -618,23 +631,103 @@ func TestAReviewIsOnThePullRequestExactlyOnce(t *testing.T) {
 	}
 }
 
-// A reply that never appears is not posted forever. After the bound, the job
-// hands back with an error for the operator.
-func TestPostingRoundsAreBounded(t *testing.T) {
+// A reply that never appears is not posted forever. Out of rounds, the review
+// is handed back on the pull request, saying why, and the job rests. A review
+// asked for again has rounds of its own.
+func TestAReviewOutOfRoundsIsHandedBack(t *testing.T) {
 	tr := newTracker(command(1))
-	tr.post = func(int) (bool, error) { return false, nil }
+	rounds := 2
+	tr.post = func(call int) (bool, error) {
+		if call <= rounds {
+			return false, errors.New("POST comment: 422 Unprocessable Entity: body is too long")
+		}
+		return true, nil
+	}
 	f := setup(t, tr, &reviewer{})
+	f.deps.Rounds = rounds
 
 	errs := f.drive()
-	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "never appeared") {
-		t.Fatalf("errors = %v, want one saying the review never appeared", errs)
+	if len(errs) != rounds {
+		t.Fatalf("errors = %v, want the %d failed posts", errs, rounds)
 	}
-	if tr.posts != f.deps.Bound {
-		t.Errorf("posted %d times, want the bound, %d", tr.posts, f.deps.Bound)
+	if tr.posts != rounds+1 {
+		t.Errorf("posted %d times, want the %d rounds and the hand-back", tr.posts, rounds)
 	}
-	if j := f.now(); !j.NextRunAt.IsZero() {
-		t.Errorf("job = %+v, want it parked", j)
+	posted := tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, review.HandBackMarker(head)) ||
+		!strings.Contains(posted[0].Body, "never appeared") || !strings.Contains(posted[0].Body, "body is too long") {
+		t.Fatalf("the agent said %+v, want one hand-back quoting the last error", posted)
 	}
+	if review.Reviewed(posted, agent, head) {
+		t.Error("the hand-back reads as a review of the head")
+	}
+	if is := tr.issues[12]; strings.Join(is.Labels, ",") != "needs-decision" {
+		t.Errorf("labels %v, want the hand-back label once", is.Labels)
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+
+	// Asked again, for the same head: the posts that ran out are spent, and
+	// this review is posted under rounds of its own.
+	tr.comments = append(tr.comments, command(2))
+	f.restart()
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors = %v", errs)
+	}
+	if !review.Reviewed(tr.byAgent(), agent, head) {
+		t.Error("the review asked for again was not posted")
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// A hand-back whose commit is lost is decided again from the reply it kept:
+// no second model run, and no fresh rounds of posts.
+func TestAReviewHandBackWhoseCommitIsLostIsMadeAgain(t *testing.T) {
+	tr := newTracker(command(1))
+	rounds := 2
+	tr.post = func(call int) (bool, error) {
+		if call <= rounds {
+			return false, errors.New("POST comment: 422 Unprocessable Entity: body is too long")
+		}
+		return true, nil
+	}
+	m := &reviewer{}
+	f := setup(t, tr, m)
+	f.deps.Rounds = rounds
+	f.run.Store = &losesCommit{Store: f.store, state: review.HandingBack}
+
+	f.drive()
+	if len(m.asked) != 1 {
+		t.Errorf("the model ran %d times, want once", len(m.asked))
+	}
+	if tr.posts != rounds+1 {
+		t.Errorf("posted %d times, want the %d rounds and the hand-back", tr.posts, rounds)
+	}
+	if posted := tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, review.HandBackMarker(head)) {
+		t.Fatalf("the agent said %+v, want one hand-back", posted)
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// losesCommit is a store that loses the first commit into state, the way a
+// kill or a lost lease would.
+type losesCommit struct {
+	store.Store
+	state string
+	lost  bool
+}
+
+func (s *losesCommit) Commit(ctx context.Context, c store.Commit) error {
+	if !s.lost && c.State == s.state {
+		s.lost = true
+		return store.ErrNotHeld
+	}
+	return s.Store.Commit(ctx, c)
 }
 
 func TestAClosedPullRequestIsClaimedAndNotReviewed(t *testing.T) {

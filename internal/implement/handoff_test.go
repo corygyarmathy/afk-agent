@@ -94,8 +94,9 @@ func TestAGreenHeadIsReviewedThenHandedOff(t *testing.T) {
 }
 
 // A review on its way is waited for; a review job that came to nothing is
-// asked again, a bounded number of times.
-func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
+// asked again, a bounded number of times, and then the pull request is handed
+// back rather than the job parked.
+func TestAReviewThatNeverComesIsAskedForAgainThenHandedBack(t *testing.T) {
 	f := greenPR(t)
 
 	// Queued: nothing is asked again.
@@ -104,7 +105,7 @@ func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
 		t.Fatalf("errors: %v", errs)
 	}
 
-	for i := range f.deps.Bound - 1 {
+	for i := range f.deps.Rounds - 1 {
 		f.restReviewJob()
 		f.at = f.at.Add(f.deps.CIWait)
 		if errs := f.drive(); len(errs) != 0 {
@@ -117,12 +118,49 @@ func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
 
 	f.restReviewJob()
 	f.at = f.at.Add(f.deps.CIWait)
-	errs := f.drive()
-	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "never took effect") {
-		t.Errorf("errors %v, want the review asked for %d times and no more", errs, f.deps.Bound)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "never came") {
+		t.Fatalf("the agent said %+v, want one hand-back saying the review never came", posted)
+	}
+	if strings.Join(f.tr.labels, ",") != "needs-decision" || f.tr.labelledOn[0] != 101 {
+		t.Errorf("labels %v on %v, want the hand-back label on #101 and no hand-off", f.tr.labels, f.tr.labelledOn)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// A review the review job handed back is said once, by the review job: the
+// implement job comes to rest without asking again, handing off, or handing
+// back a second time.
+func TestAReviewHandedBackIsHandedBackOnce(t *testing.T) {
+	f := greenPR(t)
+
+	f.tr.mu.Lock()
+	f.tr.comments = append(f.tr.comments, github.Comment{ID: 900, Login: agent, Body: review.HandBackMarker(f.pushed()) + "\nThe review never appeared."})
+	f.tr.mu.Unlock()
+	f.restReviewJob()
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if posted := f.tr.byAgent(); len(posted) != 1 {
+		t.Errorf("the agent said %+v, want only the review job's hand-back", posted)
 	}
 	if len(f.tr.labels) != 0 {
-		t.Error("handed off with no review")
+		t.Errorf("labels %v, want none from the implement job", f.tr.labels)
+	}
+	if rj := f.reviewJob(); !rj.NextRunAt.IsZero() {
+		t.Error("the review was asked for again")
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+	if _, err := run(f.workspace(), "git", "status"); err == nil {
+		t.Error("the workspace was left behind")
 	}
 }
 

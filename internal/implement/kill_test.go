@@ -221,6 +221,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		Remote:        remote,
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         3,
+		Rounds:        3,
 		TierWait:      time.Hour,
 		Gate:          gate,
 		Attempts:      2,
@@ -233,9 +234,9 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		},
 		CIWait:    time.Minute,
 		CICeiling: 48 * time.Hour,
-		CIRounds:  1,
+		CIFixes:   1,
 		Store:     askStore{s, ft},
-		AskReview: implement.ReviewAsker(intake.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		AskReview: implement.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:  filepath.Join(dir, "state"),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)

@@ -2,6 +2,8 @@ package transition_test
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ func TestRoundIsTheFirstUnreservedKeyUnderTheBound(t *testing.T) {
 	s := openStore(t)
 	job := seed(t, s, store.KindReview, 12, "start")
 
-	next := func() (string, error) { return transition.Round(ctx, s, "hand-off-pr-12", 2) }
+	next := func() (string, error) { return transition.Round(ctx, s, "hand-off-pr-12", 0, 2) }
 	reserve := func(key string) {
 		t.Helper()
 		if _, ok, err := s.Acquire(ctx, job.ID, "test", time.Now(), time.Minute); err != nil || !ok {
@@ -38,7 +40,45 @@ func TestRoundIsTheFirstUnreservedKeyUnderTheBound(t *testing.T) {
 		t.Fatalf("round = %q, %v, want hand-off-pr-12-1", key, err)
 	}
 	reserve("hand-off-pr-12-1")
-	if key, err := next(); err == nil || !strings.Contains(err.Error(), "never took effect") {
-		t.Fatalf("round = %q, %v, want the bound spent", key, err)
+	key, err := next()
+	spent, ok := transition.Spent(err)
+	if !ok || !strings.Contains(err.Error(), "never took effect") || spent.Rounds != 2 || spent.Next != 2 {
+		t.Fatalf("round = %q, %v, want the bound spent, with the next allowance from 2", key, err)
+	}
+
+	// An allowance from where the last one ran out uses the keys after it,
+	// never the ones already spent.
+	if from, err := transition.Next(ctx, s, "hand-off-pr-12"); err != nil || from != 2 {
+		t.Fatalf("next = %d, %v, want 2", from, err)
+	}
+	if key, err := transition.Round(ctx, s, "hand-off-pr-12", 2, 2); err != nil || key != "hand-off-pr-12-2" {
+		t.Fatalf("round = %q, %v, want hand-off-pr-12-2", key, err)
+	}
+}
+
+// An effect's error is kept for the decision that reads why it never took
+// effect, under its own stem, and forgotten once it succeeds.
+func TestAnEffectsErrorIsNotedUntilItSucceeds(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "notes", "job.json")
+	fails := errors.New("403 Forbidden")
+	do := func(err error) func(context.Context) error {
+		return func(context.Context) error { return err }
+	}
+
+	if err := transition.Noting(path, "push-a", do(fails))(ctx); !errors.Is(err, fails) {
+		t.Fatalf("err = %v, want the effect's own", err)
+	}
+	if got := transition.Noted(path, "push-a"); got != "403 Forbidden" {
+		t.Errorf("noted %q, want the effect's error", got)
+	}
+	if got := transition.Noted(path, "push-b"); got != "" {
+		t.Errorf("noted %q for another stem, want nothing", got)
+	}
+	if err := transition.Noting(path, "push-a", do(nil))(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := transition.Noted(path, "push-a"); got != "" {
+		t.Errorf("noted %q after a success, want nothing", got)
 	}
 }

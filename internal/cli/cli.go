@@ -53,7 +53,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	var err error
 	switch cmd := args[0]; cmd {
 	case "run":
-		err = runCmd(args[1:], stdout)
+		err = runCmd(args[1:], stdout, stderr)
 	case "work":
 		err = workCmd(args[1:], stderr)
 	case "intake":
@@ -186,7 +186,7 @@ func resolve(p params, ctx context.Context) (store.Store, transition.Runner, err
 }
 
 // runCmd implements `afk run <transition> (--job <id> | --issue <n> | --pr <n>)`.
-func runCmd(args []string, stdout io.Writer) error {
+func runCmd(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("afk run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var (
@@ -202,6 +202,7 @@ func runCmd(args []string, stdout io.Writer) error {
 	p.bindTracker(fs)
 	p.bindModel(fs)
 	p.bindBudget(fs)
+	p.bindEffects(fs)
 	p.bindImplement(fs)
 
 	// The transition name is positional and comes first, so that the flags
@@ -258,6 +259,9 @@ func runCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if deps.implement != nil {
+		deps.implement.Log = func(msg string) { fmt.Fprintln(stderr, msg) }
+	}
 	runner.Registry = catalogue(deps)
 
 	now := time.Now()
@@ -303,6 +307,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindNotify(fs)
 	p.bindModel(fs)
 	p.bindTracker(fs)
+	p.bindEffects(fs)
 	p.bindImplement(fs)
 
 	if err := fs.Parse(args); err != nil {
@@ -367,6 +372,8 @@ func workCmd(args []string, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "afk work: no --branch-prefix, so implement jobs park rather than run")
 	} else if kinds.implement, err = implementDeps(ctx, p, st, tr); err != nil {
 		return err
+	} else if kinds.implement != nil {
+		kinds.implement.Log = d.Log
 	}
 	d.Registry = catalogue(kinds)
 
