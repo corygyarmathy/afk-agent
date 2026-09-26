@@ -102,10 +102,14 @@ func (l Lease) Expired(now time.Time) bool {
 // belongs to the transition runner (#2); the store persists the name and does
 // not interpret it, so adding a state is not a change to this package.
 type Job struct {
-	ID       string
-	Kind     Kind
-	Subject  Subject
-	State    string
+	ID      string
+	Kind    Kind
+	Subject Subject
+	State   string
+
+	// Attempts is how many runs have returned an error since the job entered
+	// State - what the retry bound and parking read. A stay is not an attempt
+	// and leaves the count where it was (#74); a move sets it back to zero.
 	Attempts int
 
 	// Stays is how many runs have decided to stay in State since the job

@@ -33,7 +33,7 @@ A job left in its persisted state with nothing scheduled - no lease, no next run
 _Avoid_: Stuck, suspended, dropped
 
 **Stay**:
-A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a stay also counts as an attempt, but a run that returned an error is an attempt and not a stay - it decided nothing. A job counts its stays since it entered its state - an error in between does not break the count - and a move to another state starts it again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
+A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a run that returned an error is an attempt and not a stay - it decided nothing - and a stay is not an attempt, so waiting does not spend the retries an error needs. A job counts both since it entered its state - neither breaks the other's count - and a move to another state starts both again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
 _Avoid_: Retry, skip, candidate index
 
 **Budget observation**:
@@ -81,7 +81,7 @@ Something a transition does outside its job's own commit - a push, a pull reques
 _Avoid_: Side effect, action, write
 
 **Round**:
-One making of an effect, under a key of its own. An effect that never shows up is made again in the next round, a bounded number of times; a key spent on a round is never used again, whether its effect landed, failed or was lost. Distinct from an attempt: a round is counted by the keys an effect has used, an attempt by the runs of a transition.
+One making of an effect, under a key of its own. An effect that never shows up is made again in the next round, a bounded number of times; a key spent on a round is never used again, whether its effect landed, failed or was lost. Distinct from an attempt: a round is counted by the keys an effect has used, an attempt by the runs of a transition that returned an error.
 _Avoid_: Retry, try, attempt
 
 **Fix**:
