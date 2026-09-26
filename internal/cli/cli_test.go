@@ -756,6 +756,66 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 }
 
+// What the implement kind logs - what CI caught that the local gate did not -
+// reaches stderr from a hand-run and from the pool alike. Nothing else says
+// it.
+func TestImplementLogsReachStderr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		// untilSignal is a command that runs until it is interrupted.
+		untilSignal bool
+	}{
+		{"run", []string{"run", "implement", "--issue", "7"}, false},
+		{"work", []string{"work", "--workers", "1", "--poll", "1s", "--token-wait", "1s", "--branch-prefix", "afk/"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withLoggingImplement(t, tc.untilSignal)
+			args := append(tc.args, "--store", filepath.Join(t.TempDir(), "state.db"), "--lease", "1m")
+			var stdout, stderr bytes.Buffer
+			if got := Main(args, &stdout, &stderr); got != ExitOK {
+				t.Fatalf("exit code = %d, want %d (stderr: %s)", got, ExitOK, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "a catch\n") {
+				t.Errorf("stderr = %q, want the implement kind's log line", stderr.String())
+			}
+		})
+	}
+}
+
+// withLoggingImplement puts an implement kind in front of the command surface
+// whose catalogue writes one line to the Log it was given. With interrupt, it
+// then interrupts the process, which is how `work` stops.
+func withLoggingImplement(t *testing.T, interrupt bool) {
+	t.Helper()
+	withCatalogue(t)
+	was, wasImplement := catalogue, implementDeps
+	implementDeps = func(context.Context, params, store.Store, *tracker) (*implement.Deps, error) {
+		return &implement.Deps{}, nil
+	}
+	catalogue = func(d *deps) *transition.Registry {
+		if d != nil && d.implement != nil && d.implement.Log != nil {
+			d.implement.Log("a catch")
+		}
+		if interrupt && d != nil {
+			self, err := os.FindProcess(os.Getpid())
+			if err == nil {
+				err = self.Signal(os.Interrupt)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return transition.MustRegistry(transition.Transition{
+			Name: "implement", Kind: store.KindImplement, From: "start",
+			Run: func(context.Context, transition.In) (transition.Result, error) {
+				return transition.Result{State: "done"}, nil
+			},
+		})
+	}
+	t.Cleanup(func() { catalogue, implementDeps = was, wasImplement })
+}
+
 // afk intake is nothing without a repository, and says so before it opens
 // anything.
 func TestIntakeNeedsARepository(t *testing.T) {
