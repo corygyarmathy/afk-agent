@@ -25,10 +25,17 @@ const approval = "action_required"
 // correctness where the local gate only decided whether to push (dotfiles
 // ADR 0007 §3).
 //
+// Green is every check run on the head completed with a passing conclusion,
+// and a run for every check the pull request's base branch requires. The runs
+// alone are not enough: a check that registers late - a job that needs
+// others, a second workflow - is absent rather than unfinished, and without
+// the required checks a head whose early runs are green would read as green
+// before it has run.
+//
 // Waiting is a scheduled re-entry, never a process (ADR 0001 §3): a head whose
 // checks are not finished puts the job back to sleep for the CI wait. A head
-// whose checks never finish looks exactly like a slow one, and only the
-// ceiling tells them apart.
+// whose checks never finish, or never start, looks exactly like a slow one,
+// and only the ceiling tells them apart.
 func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, error) {
 	p, err := d.load(in.Job.ID)
 	if errors.Is(err, os.ErrNotExist) {
@@ -61,8 +68,13 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
+	required, err := d.Tracker.RequiredChecks(ctx, p.Into)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	missing := absent(required, runs)
 	var failed, waiting []github.CheckRun
-	finished := len(runs) > 0
+	finished := len(runs) > 0 && len(missing) == 0
 	for _, r := range runs {
 		switch {
 		case r.Status != "completed":
@@ -79,6 +91,9 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if !finished {
 		if !in.Now.Before(p.PushedAt.Add(d.CICeiling)) {
 			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", git.Short(p.Pushed), d.CICeiling)
+			if len(missing) > 0 {
+				reason += fmt.Sprintf(" %s, required on `%s`, had not started.", quoted(missing), p.Into)
+			}
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
 			}
@@ -142,12 +157,27 @@ func ciOutput(failed []github.CheckRun) string {
 	return tail(b.String(), gateTail)
 }
 
+// absent is the required checks with no run on the head.
+func absent(required []string, runs []github.CheckRun) []string {
+	present := map[string]bool{}
+	for _, r := range runs {
+		present[r.Name] = true
+	}
+	var out []string
+	for _, name := range required {
+		if !present[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func names(runs []github.CheckRun) string {
 	n := make([]string, len(runs))
 	for i, r := range runs {
-		n[i] = "`" + r.Name + "`"
+		n[i] = r.Name
 	}
-	return strings.Join(n, ", ")
+	return quoted(n)
 }
 
 // handBackPR returns the work to a human after the push: a comment saying

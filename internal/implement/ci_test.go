@@ -176,6 +176,58 @@ func TestCIThatNeverFinishesHandsBackAtTheCeiling(t *testing.T) {
 	}
 }
 
+// A required check that has not registered yet is waited for, however green
+// the runs already there are, and the head goes on once it has run.
+func TestARequiredCheckNotYetRegisteredIsWaitedFor(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		if call == 1 {
+			return green(sha, call)
+		}
+		return append(green(sha, call), github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching || !j.NextRunAt.Equal(now.Add(f.deps.CIWait)) {
+		t.Fatalf("job = %+v, want it watching again after the CI wait", j)
+	}
+
+	f.at = now.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+}
+
+// A required check that never registers is handed back at the ceiling, like
+// one that never finishes, and the hand-back names it.
+func TestARequiredCheckThatNeverRegistersHandsBackAtTheCeiling(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = green
+
+	for f.at.Before(now.Add(f.deps.CICeiling + f.deps.CIWait)) {
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if f.now().NextRunAt.IsZero() {
+			break
+		}
+		f.at = f.at.Add(f.deps.CIWait)
+	}
+	if f.at.Before(now.Add(f.deps.CICeiling)) {
+		t.Errorf("handed back at %s, before the ceiling", f.at.Sub(now))
+	}
+	f.handedBackOnThePR("had not finished", "`gate`, required on")
+}
+
 // A pull request a human closed while CI ran is their decision: the job rests
 // and says nothing.
 func TestAPullRequestClosedWhileWatchingIsLeftAlone(t *testing.T) {

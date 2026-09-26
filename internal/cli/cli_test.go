@@ -865,6 +865,10 @@ func (closedTracker) ReactToIssue(context.Context, int, string) error { return n
 func (closedTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
 	return nil, nil
 }
+func (closedTracker) RequiredChecks(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }

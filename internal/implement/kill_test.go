@@ -483,6 +483,10 @@ func (ft *killTracker) IssueReactions(context.Context, int) ([]github.Reaction, 
 
 func (ft *killTracker) ReactToIssue(context.Context, int, string) error { return nil }
 
+func (ft *killTracker) RequiredChecks(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
 	ft.die("before-pr")
 	f, err := ft.load()
