@@ -63,8 +63,10 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	}
 	if review.HandedBack(comments, d.Login, p.Pushed) {
 		// Asking again would write the same review, and post it into
-		// whatever stopped the last one.
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is green on `%s`, but its review never appeared on the pull request.", git.Short(p.Pushed)), "")
+		// whatever stopped the last one. The review job's hand-back is the
+		// pull request's, with the same label and the error that stopped
+		// it: a second would say less, twice.
+		return transition.Result{State: Start}, d.clear(in.Job.ID)
 	}
 
 	wait := transition.Result{State: Reviewing, RunAt: in.Now.Add(d.CIWait)}

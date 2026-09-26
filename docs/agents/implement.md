@@ -24,7 +24,7 @@ the model as instructions. The agent never merges.
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
 | `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. |
-| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. |
+| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |

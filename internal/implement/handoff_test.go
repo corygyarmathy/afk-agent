@@ -133,6 +133,37 @@ func TestAReviewThatNeverComesIsAskedForAgainThenHandedBack(t *testing.T) {
 	}
 }
 
+// A review the review job handed back is said once, by the review job: the
+// implement job comes to rest without asking again, handing off, or handing
+// back a second time.
+func TestAReviewHandedBackIsHandedBackOnce(t *testing.T) {
+	f := greenPR(t)
+
+	f.tr.mu.Lock()
+	f.tr.comments = append(f.tr.comments, github.Comment{ID: 900, Login: agent, Body: review.HandBackMarker(f.pushed()) + "\nThe review never appeared."})
+	f.tr.mu.Unlock()
+	f.restReviewJob()
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if posted := f.tr.byAgent(); len(posted) != 1 {
+		t.Errorf("the agent said %+v, want only the review job's hand-back", posted)
+	}
+	if len(f.tr.labels) != 0 {
+		t.Errorf("labels %v, want none from the implement job", f.tr.labels)
+	}
+	if rj := f.reviewJob(); !rj.NextRunAt.IsZero() {
+		t.Error("the review was asked for again")
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+	if _, err := run(f.workspace(), "git", "status"); err == nil {
+		t.Error("the workspace was left behind")
+	}
+}
+
 // Someone else's push after green CI is theirs, as it is while CI runs: the
 // review job reviews the new head, so a review of the agent's never comes, and
 // the agent hands back rather than ask for one until its rounds run out.
