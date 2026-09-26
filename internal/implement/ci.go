@@ -90,10 +90,10 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if len(failed) == 0 {
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
+	d.caught(in, pr.Number, p, failed)
 	if len(waiting) > 0 {
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
 	}
-	d.caught(in, pr.Number, p, failed)
 
 	p.Rounds++
 	if p.Rounds > d.CIRounds {

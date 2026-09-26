@@ -377,6 +377,25 @@ func TestARunWaitingForApprovalHandsBack(t *testing.T) {
 	f.caught()
 }
 
+// A run that failed beside one waiting for approval is still a catch, though
+// the approval is what hands the work back.
+func TestAFailureBesideAnApprovalWaitIsStillACatch(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{
+			{Name: "test", Status: "completed", Conclusion: "failure"},
+			{Name: "deploy", Status: "completed", Conclusion: "action_required"},
+		}
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackOnThePR("waiting for approval", "`deploy`")
+	f.caught("fix rounds so far 0:")
+}
+
 // A head with a failed run and another that never finishes waits out the
 // ceiling like any unfinished head, and the hand-back quotes the failure.
 func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {

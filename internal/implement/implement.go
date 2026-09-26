@@ -168,9 +168,9 @@ type Deps struct {
 	// store, never in it (ADR 0001 §5).
 	StateDir string
 
-	// Log receives one line each time CI finishes red on a head the local
-	// gate passed: what CI caught that the gate did not (dotfiles ADR 0007
-	// §8). Nil is silent. It is a log rather than a notification: nothing
+	// Log receives one line each time the watch finds a failed run on a head
+	// the local gate passed: what CI caught that the gate did not (dotfiles
+	// ADR 0007 §8). Nil is silent. It is a log rather than a notification: nothing
 	// here is the operator's to act on.
 	Log func(msg string)
 }
