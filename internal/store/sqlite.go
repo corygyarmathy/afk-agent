@@ -249,8 +249,11 @@ func (s *sqliteStore) Commit(ctx context.Context, c Commit) error {
 		holder  any = c.Holder
 		expires any = dbExpires.Int64
 	)
-	if c.Release {
+	switch {
+	case c.Release:
 		holder, expires = nil, nil
+	case !c.LeaseUntil.IsZero():
+		expires = c.LeaseUntil.UnixNano()
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE jobs SET state = ?, attempts = ?, stays = ?, next_run_at = ?, lease_holder = ?, lease_expires_at = ?
