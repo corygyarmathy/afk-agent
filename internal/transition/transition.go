@@ -1,5 +1,6 @@
 // Package transition is the execution core: what a transition is, the registry
-// that names them, and the runner that applies one to a job.
+// that names them, the runner that applies one to a job, and the Armer that
+// makes a job due from outside its own transitions.
 //
 // A transition is the only thing that executes (ADR 0001 §2). It takes a job in
 // a persisted state and moves it to the next one, and nothing runs for longer
@@ -79,9 +80,14 @@ type In struct {
 	Now time.Time
 }
 
-// Effect is one outward, non-undoable action - a comment posted, a label
-// written - paired with the idempotency key that makes replaying it safe
-// (ADR 0001 §5).
+// Effect is one non-undoable action outside the job's own commit - a comment
+// posted, a label written, another job made due - paired with the idempotency
+// key that makes replaying it safe (ADR 0001 §5).
+//
+// An effect that makes another job due writes to the store, through an Armer
+// under a lease of the Armer's own, never the running job's. So a transition
+// still decides and the runner still applies: the write is performed after the
+// commit, under a reserved key, like a comment or a label.
 //
 // The two are one value rather than two fields on Result because the failure
 // mode worth designing out is the mismatch: a key reserved for an effect that
@@ -113,7 +119,8 @@ type Result struct {
 	// the dispatcher will never pick up (see store.Job.NextRunAt).
 	RunAt time.Time
 
-	// Effects are the outward actions this transition is about to perform.
+	// Effects are the actions outside the job's own commit that this
+	// transition is about to perform.
 	Effects []Effect
 }
 

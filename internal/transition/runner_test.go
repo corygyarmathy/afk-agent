@@ -506,3 +506,153 @@ func TestTheLeaseIsReleasedWhenTheTransitionIsDone(t *testing.T) {
 		t.Errorf("lease = %+v; want it released - nothing runs between transitions", got.Lease)
 	}
 }
+
+// A result due now is due the moment it commits, so the lease is what keeps
+// the job's next transition from running while this one's effect is still in
+// flight - a verify that read GitHub before the post landed would post again.
+func TestNoOtherWorkerRunsTheJobWhileAnEffectIsInFlight(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+
+	inside, letGo := make(chan struct{}), make(chan struct{})
+	reg := transition.MustRegistry(
+		transition.Transition{
+			Name: "post", Kind: store.KindReview, From: "start",
+			Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+				return transition.Result{
+					State: "verifying",
+					RunAt: in.Now,
+					Effects: []transition.Effect{{Key: "review-pr-12-abc123", Do: func(context.Context) error {
+						close(inside)
+						<-letGo
+						return nil
+					}}},
+				}, nil
+			},
+		},
+		fixture("verify", func(t *transition.Transition) { t.From = "verifying" }),
+	)
+
+	first := runner(s, reg, func(r *transition.Runner) { r.Holder = "first" })
+	second := runner(s, reg, func(r *transition.Runner) { r.Holder = "second" })
+
+	// Let the effect go on every way out of the test, so a failure below does
+	// not leave the first worker's goroutine blocked behind it.
+	t.Cleanup(func() {
+		select {
+		case <-letGo:
+		default:
+			close(letGo)
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Run(ctx, "post", job.ID)
+		done <- err
+	}()
+	select {
+	case <-inside:
+	case err := <-done:
+		t.Fatalf("Run returned before its effect ran: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the effect never started")
+	}
+
+	// Committed, due, and still not the second worker's to take.
+	got, _ := s.Job(ctx, job.ID)
+	if got.State != "verifying" {
+		t.Fatalf("state = %q, want verifying: the effect runs after the commit", got.State)
+	}
+	if _, err := second.Run(ctx, "verify", job.ID); !errors.Is(err, transition.ErrHeld) {
+		t.Errorf("Run while the effect is in flight = %v, want %v", err, transition.ErrHeld)
+	}
+	if j, ok, err := s.Due(ctx, "second", time.Now(), time.Minute); err != nil || ok {
+		t.Errorf("Due while the effect is in flight = %s, %v, %v; want nothing", j.ID, ok, err)
+	}
+
+	close(letGo)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, _ := s.Job(ctx, job.ID); got.Lease != nil {
+		t.Errorf("lease = %+v; want it released once the effect is done", got.Lease)
+	}
+	if _, err := second.Run(ctx, "verify", job.ID); err != nil {
+		t.Errorf("Run once the effect is done: %v", err)
+	}
+}
+
+// An effect that fails has still finished, and the job is not held past it.
+func TestTheLeaseIsReleasedWhenAnEffectFails(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+	boom := errors.New("tracker down")
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "post", Kind: store.KindReview, From: "start",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			return transition.Result{
+				State:   "verifying",
+				RunAt:   in.Now,
+				Effects: []transition.Effect{{Key: "k", Do: func(context.Context) error { return boom }}},
+			}, nil
+		},
+	})
+
+	if _, err := runner(s, reg).Run(ctx, "post", job.ID); !errors.Is(err, boom) {
+		t.Fatalf("Run error = %v, want %v", err, boom)
+	}
+	got, _ := s.Job(ctx, job.ID)
+	if got.State != "verifying" || got.Lease != nil {
+		t.Errorf("job = %q, lease %+v; want verifying and released", got.State, got.Lease)
+	}
+}
+
+// The lease is renewed at the commit, so the effects are held for a whole
+// lease however long the transition took: a push that starts at the end of a
+// slow transition is not left with the few seconds it had left.
+func TestTheEffectsAreHeldForAWholeLeaseFromTheCommit(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+
+	// The transition takes most of the lease: the runner reads the clock once
+	// to take the lease and again to commit.
+	start := time.Now().Truncate(time.Nanosecond)
+	late := start.Add(50 * time.Second)
+	clock := []time.Time{start, late}
+
+	var during *store.Lease
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "post", Kind: store.KindReview, From: "start",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			return transition.Result{
+				State: "verifying",
+				RunAt: in.Now,
+				Effects: []transition.Effect{{Key: "k", Do: func(ctx context.Context) error {
+					j, err := s.Job(ctx, job.ID)
+					during = j.Lease
+					return err
+				}}},
+			}, nil
+		},
+	})
+	r := runner(s, reg, func(r *transition.Runner) {
+		r.Clock = func() time.Time {
+			now := clock[0]
+			if len(clock) > 1 {
+				clock = clock[1:]
+			}
+			return now
+		}
+	})
+
+	if _, err := r.Run(ctx, "post", job.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := late.Add(r.LeaseTTL); during == nil || !during.ExpiresAt.Equal(want) {
+		t.Errorf("lease during the effect = %+v; want it to run to %v, a whole lease from the commit", during, want)
+	}
+}

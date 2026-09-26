@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
 // Work that passes the gate is pushed once, and opens one pull request that
@@ -43,9 +45,11 @@ func TestCleanWorkIsPushedAndOpensOnePullRequest(t *testing.T) {
 
 // A push lost after its decision was committed - a kill, or a push that
 // failed - is noticed on the remote, and made again under the next key. One
-// push lands, and one pull request.
+// push lands, and one pull request, whatever the attempt bound: rounds are
+// not candidate models.
 func TestALostPushIsMadeAgain(t *testing.T) {
 	f := setup(t, newTracker())
+	f.deps.Bound = 1
 	f.model.then(commit("ok"))
 	failed := false
 	f.deps.Remote.Token = func(context.Context) (string, error) {
@@ -75,7 +79,7 @@ func TestALostPushIsMadeAgain(t *testing.T) {
 }
 
 // A pull request whose opening was lost is opened again, and one whose
-// opening succeeded slowly is not opened twice.
+// opening succeeded slowly is not opened twice, whatever the attempt bound.
 func TestAPullRequestIsOpenedOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -87,6 +91,7 @@ func TestAPullRequestIsOpenedOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setup(t, newTracker())
+			f.deps.Bound = 1
 			f.model.then(commit("ok"))
 			f.tr.open = func(call int) (bool, error) {
 				if call == 1 {
@@ -104,6 +109,35 @@ func TestAPullRequestIsOpenedOnce(t *testing.T) {
 				t.Errorf("%d pull requests open after %d calls, want 1 after %d", len(f.tr.opened), f.tr.opens, tc.want)
 			}
 		})
+	}
+}
+
+// A branch name comes back once its branch is gone from the remote, and an
+// earlier job's pull requests under that name do not spend this job's rounds.
+func TestAReusedBranchNameStillAsksForItsPullRequest(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.Rounds = 1
+	ctx := context.Background()
+	earlier, err := f.store.Ensure(ctx, store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: 99}, implement.Start, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.store.Acquire(ctx, earlier.ID, "earlier", now, time.Minute); err != nil || !ok {
+		t.Fatalf("acquire: %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: earlier.ID, Holder: "earlier", State: implement.Start, Keys: []string{"pull-request-afk/7-1-0"}, Release: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.model.then(commit("ok"))
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
+	}
+	if len(f.tr.opened) != 1 {
+		t.Errorf("%d pull requests opened, want 1", len(f.tr.opened))
 	}
 }
 
@@ -389,10 +423,112 @@ func TestAPushByAnyoneElseIsNeverRewritten(t *testing.T) {
 	f.model.then(amend)
 	f.setState(implement.Implementing)
 	errs := f.drive()
-	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "stale info") {
-		t.Errorf("errors %v, want the push refused by its lease", errs)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "stale info") {
+		t.Errorf("errors %v, want the one push refused by its lease", errs)
 	}
 	if at, _ := run(f.remote, "git", "rev-parse", "refs/heads/afk/7-1"); at != theirs {
 		t.Errorf("the remote's afk/7-1 is at %q, want the other push, %q, left alone", at, theirs)
+	}
+	// Refused once, and not made again: the lease would refuse every push.
+	f.handedBackOnThePR("Someone else changed `afk/7-1`", "stale info")
+}
+
+// A branch someone else makes before the agent's first push lands is theirs,
+// too: the push, leased on there being no branch, is refused, and the work is
+// handed back on the issue.
+func TestABranchMadeByAnyoneElseBeforeTheFirstPushHandsBack(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		human := filepath.Join(t.TempDir(), "human")
+		if _, err := run("", "git", "clone", "--quiet", f.remote, human); err != nil {
+			return err
+		}
+		if err := commit("theirs")(human); err != nil {
+			return err
+		}
+		if _, err := run(human, "git", "push", "--quiet", "origin", "HEAD:refs/heads/afk/7-1"); err != nil {
+			return err
+		}
+		return commit("ok")(dir)
+	})
+
+	errs := f.drive()
+	if len(errs) != 1 {
+		t.Errorf("errors %v, want the one push refused by its lease", errs)
+	}
+	if len(f.tr.opened) != 0 {
+		t.Error("a pull request was opened")
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || f.tr.commentedOn[0] != issue || !strings.Contains(posted[0].Body, "which the agent did not push") {
+		t.Fatalf("comments %+v on %v, want one hand-back on the issue saying the branch was made first", posted, f.tr.commentedOn)
+	}
+	if strings.Join(f.tr.labels, ",") != "needs-decision" {
+		t.Errorf("labels %v, want the hand-back label", f.tr.labels)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// A push that fails every time - a 403, say, that no round will change - is
+// made as many times as the rounds allow, and then handed back on the issue
+// with what the last one said. The job rests rather than parks.
+func TestAPushOutOfRoundsHandsBack(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.Rounds = 3
+	f.model.then(commit("ok"))
+	// The remote refuses every push, as GitHub does one the App may not make.
+	hook := "#!/bin/sh\necho 'Permission to o/n.git denied: 403' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(f.remote, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	errs := f.drive()
+	if len(errs) != f.deps.Rounds {
+		t.Fatalf("errors: %v, want the %d failed pushes", errs, f.deps.Rounds)
+	}
+	if b := f.remoteBranches(); b != "main" {
+		t.Errorf("the remote has %q, want nothing pushed", b)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || f.tr.commentedOn[0] != issue {
+		t.Fatalf("comments %+v on %v, want one hand-back on the issue", posted, f.tr.commentedOn)
+	}
+	for _, want := range []string{"made 3 times and never landed", "Permission to o/n.git denied: 403", "Nothing was pushed"} {
+		if !strings.Contains(posted[0].Body, want) {
+			t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
+		}
+	}
+	if strings.Join(f.tr.labels, ",") != "needs-decision" {
+		t.Errorf("labels %v, want the hand-back label", f.tr.labels)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// A pull request that never opens is asked for as many times as the rounds
+// allow, and then handed back on the issue, which says where the branch is.
+func TestAPullRequestOutOfRoundsHandsBack(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.open = func(int) (bool, error) { return false, errors.New("422 Validation Failed") }
+
+	errs := f.drive()
+	if len(errs) != f.deps.Rounds {
+		t.Fatalf("errors: %v, want the %d failed requests", errs, f.deps.Rounds)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || f.tr.commentedOn[0] != issue {
+		t.Fatalf("comments %+v on %v, want one hand-back on the issue", posted, f.tr.commentedOn)
+	}
+	for _, want := range []string{"never opened", "422 Validation Failed", "`afk/7-1` is on the remote at", "with no pull request"} {
+		if !strings.Contains(posted[0].Body, want) {
+			t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
+		}
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }

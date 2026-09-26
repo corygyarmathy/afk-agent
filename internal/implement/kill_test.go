@@ -229,6 +229,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		}},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         3,
+		Rounds:        3,
 		TierWait:      time.Hour,
 		Gate:          gate,
 		Attempts:      2,
@@ -237,9 +238,9 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		Denylist:      []string{".github/**"},
 		CIWait:        time.Minute,
 		CICeiling:     48 * time.Hour,
-		CIRounds:      1,
+		CIFixes:       1,
 		Store:         askStore{s, ft},
-		AskReview:     implement.ReviewAsker(intake.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		AskReview:     implement.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:      filepath.Join(dir, "state"),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
@@ -486,6 +487,10 @@ func (ft *killTracker) IssueReactions(context.Context, int) ([]github.Reaction, 
 }
 
 func (ft *killTracker) ReactToIssue(context.Context, int, string) error { return nil }
+
+func (ft *killTracker) RequiredChecks(context.Context, string) ([]string, error) {
+	return nil, nil
+}
 
 func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
 	ft.die("before-pr")

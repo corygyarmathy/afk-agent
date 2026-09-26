@@ -288,6 +288,32 @@ func TestCheckRunsAreReadToTheLastPage(t *testing.T) {
 	}
 }
 
+// A branch's required checks are gathered from every rule that requires any,
+// across pages, once each; its other rules say nothing about checks.
+func TestRequiredChecksAreEveryContextTheBranchsRulesRequire(t *testing.T) {
+	var srvURL string
+	c, srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/rules/branches/master", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"go ci"},{"context":"lint"}]}}]`)
+			return
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/rules/branches/master?page=2>; rel="next"`, srvURL))
+		fmt.Fprint(w, `[{"type":"pull_request","parameters":{"required_approving_review_count":0}},{"type":"deletion"},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"go ci","integration_id":15368}]}}]`)
+	})
+	srvURL = srv.URL
+
+	got, err := c.RequiredChecks(context.Background(), "master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"go ci", "lint"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestCreatePullRequestSendsItsFields(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if !expect(t, w, r, "POST", "/repos/o/n/pulls", "application/vnd.github+json") {

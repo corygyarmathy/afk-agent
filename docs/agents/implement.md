@@ -23,8 +23,8 @@ the model as instructions. The agent never merges.
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
 | `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
-| `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: back to the session, with what CI said, until `--ci-rounds` runs out, then hand-back. |
-| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. |
+| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
+| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |
@@ -99,6 +99,11 @@ description, and says the implement job asked for it
   | Issues | write | the claim, replies, hand-backs and labels on the issue | by GitHub's documentation; not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
 
+  The base branch's required checks are read with Metadata: read, which the
+  App already has (by GitHub's documentation; not verified). Only rulesets
+  are read: a check required by legacy branch protection is not waited for,
+  and reading it would need Administration: read.
+
   A push that touches `.github/workflows/` would also need Workflows: write.
   The denylist is expected to stop such a push first.
 - **The heavy-build token.** `implement-run` and `implement-gate` hold it, so
@@ -106,9 +111,10 @@ description, and says the implement job asked for it
 
 The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
-`relays/<job>.git` (the copy pushes are made from) and `progress/<job>.json`
-(branch, base, session, attempts and rounds, the last failure, the pushed
-head). All of it is disposable. Lost before the push, the work starts over.
+`relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
+(branch, base, session, gate attempts and fixes, the last failure, the pushed
+head) and `notes/<job>.json` (the last error of a push, a pull request, a
+review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
 branch.
 
@@ -117,15 +123,24 @@ branch.
 `afk help` lists them, and the NixOS module sets them
 ([`domain.md`](domain.md)). Without `--branch-prefix`, `afk work` neither runs
 implement jobs nor answers `/implement`. With it, all of these are required:
-`--gate`, `--gate-attempts`, `--implement-tier`, `--hand-back-label`,
-`--hand-off-label`, `--denylist`, `--ci-wait`, `--ci-ceiling` and
-`--ci-rounds`, plus model choice as for review. `--implement-needs` is optional.
+`--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
+`--denylist`, `--ci-wait`, `--ci-ceiling` and `--ci-fixes`, plus model choice,
+`--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` is
+optional.
 
-- `--model-attempts` also bounds the rounds of a push, a pull request, a review
-  request, a hand-off label, a claim, a reply or a hand-back that never
-  appears, as it does review's posts.
+- `--effect-rounds` bounds the rounds of a push, a pull request, a review
+  request or a hand-off label that never appears. Out of rounds, the work is
+  handed back - on the issue while there is no pull request, and on the pull
+  request once there is - with the last error, and the job rests. A claim, a
+  reply or a hand-back out of rounds is a failed attempt instead, as it is for
+  review.
+- A push the lease refuses because someone else pushed to the branch, or made
+  it before the agent's first push, is handed back at once rather than made
+  again: every later push would be refused the same way.
 - `--ci-wait` is also how often a review not yet posted is looked for.
-- `--lease` must be longer than a model run, and than the gate.
+- `--lease` must be longer than a model run, than the gate, and than a push.
+  The lease is renewed when a transition commits and held until its effects
+  finish, and the push is one.
 
 ## Running one by hand
 
@@ -146,8 +161,3 @@ afk run implement-hand-off --issue 7   # -> start, not scheduled: done
 
 A hand-back moves the job to `handing-back`, and `afk run implement-handed-back
 --issue 7` rests it once the comment and the label are both there.
-
-## What is not done yet
-
-- What CI catches that the local gate did not is not recorded (`dotfiles`
-  ADR 0007 §8).

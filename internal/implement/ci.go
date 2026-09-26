@@ -25,10 +25,18 @@ const approval = "action_required"
 // correctness where the local gate only decided whether to push (dotfiles
 // ADR 0007 §3).
 //
+// Green is every check run on the head completed with a passing conclusion,
+// and a run for every check the pull request's base branch requires. The runs
+// alone are not enough: a check that registers late - a job that needs
+// others, a second workflow - is absent rather than unfinished, and without
+// the required checks a head whose early runs are green would read as green
+// before it has run. A missing required check only holds back green: once
+// every run there has finished and one has failed, the head is red.
+//
 // Waiting is a scheduled re-entry, never a process (ADR 0001 §3): a head whose
 // checks are not finished puts the job back to sleep for the CI wait. A head
-// whose checks never finish looks exactly like a slow one, and only the
-// ceiling tells them apart.
+// whose checks never finish, or never start, looks exactly like a slow one,
+// and only the ceiling tells them apart.
 func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, error) {
 	p, err := d.load(in.Job.ID)
 	if errors.Is(err, os.ErrNotExist) {
@@ -48,7 +56,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	}
 	// Someone else's push is theirs to see through. It cancels the run on the
 	// agent's head, which would read as red, and the lease would refuse every
-	// push a fix round made on top of it.
+	// push a fix made on top of it.
 	at, err := remoteHead(ctx, d.Remote, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
@@ -61,6 +69,11 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
+	required, err := d.Tracker.RequiredChecks(ctx, p.Into)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	missing := absent(required, runs)
 	var failed, waiting []github.CheckRun
 	finished := len(runs) > 0
 	for _, r := range runs {
@@ -74,14 +87,23 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 			failed = append(failed, r)
 		}
 	}
+	// A missing required check holds back green, never red: a failure is
+	// already something to fix, and the fix's head is watched in its turn.
+	if len(failed) == 0 && len(missing) > 0 {
+		finished = false
+	}
 	output := ciOutput(failed)
 
 	if !finished {
 		if !in.Now.Before(p.PushedAt.Add(d.CICeiling)) {
 			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", git.Short(p.Pushed), d.CICeiling)
+			if len(missing) > 0 {
+				reason += fmt.Sprintf(" %s, required on `%s`, had not started.", quoted(missing), p.Into)
+			}
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
 			}
+			d.caught(in, pr.Number, p, failed)
 			return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, reason, output)
 		}
 		return transition.Result{State: Watching, RunAt: in.Now.Add(d.CIWait)}, nil
@@ -89,17 +111,25 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if len(failed) == 0 {
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
+	d.caught(in, pr.Number, p, failed)
 	if len(waiting) > 0 {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix cannot give.", names(waiting)), output)
 	}
 
-	p.Rounds++
-	if p.Rounds > d.CIRounds {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
+	// Counted once for each head, so a replay of this decision - its commit
+	// lost to a kill, or to the lease - does not count the same red run
+	// twice. A fix always pushes a new head: the gate hands back one
+	// that adds nothing.
+	if p.FixedHead != p.Pushed {
+		p.Fixes++
+		p.FixedHead = p.Pushed
+	}
+	if p.Fixes > d.CIFixes {
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d fixes.", d.CIFixes), output)
 	}
 	// Back to the session that wrote the commit (dotfiles ADR 0007 §4),
-	// with a fresh count of gate attempts: a round is a new convergence on
-	// the local gate, and CI rounds are bounded separately from it (§5).
+	// with a fresh count of gate attempts: a fix is a new convergence on
+	// the local gate, and fixes are bounded separately from it (§5).
 	p.Attempts = 0
 	p.Failure = output
 	p.Why = fmt.Sprintf("CI failed on `%s`, the head the agent pushed: %s.", git.Short(p.Pushed), names(failed))
@@ -110,8 +140,8 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 }
 
 // lost is work past its push whose workspace or progress went with the state
-// directory: in a watch, or in a fix round. A red run could not go back to the
-// session that wrote the branch, and a fix round would start a new branch
+// directory: in a watch, or in a fix. A red run could not go back to the
+// session that wrote the branch, and a fix would start a new branch
 // beside the pull request. The pull request is handed back instead - once per
 // head - or, if there is none, the job rests.
 func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, error) {
@@ -121,6 +151,37 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 	}
 	return d.handBackPR(ctx, in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
+}
+
+// caught logs what CI caught that the local gate did not: every failed run on
+// a head the gate passed before the push (dotfiles ADR 0007 §8). Whether it
+// goes back for a fix or is handed back - out of fixes, or at the
+// ceiling with other runs unfinished - the catch is the same one. A run
+// waiting for approval is not one: it never ran.
+//
+// Logged as it is decided, before the runner commits: a run that fails to
+// commit is run again, and logs the catch again.
+func (d *Deps) caught(in transition.In, pr int, p progress, failed []github.CheckRun) {
+	var ran []github.CheckRun
+	for _, r := range failed {
+		if r.Conclusion != approval {
+			ran = append(ran, r)
+		}
+	}
+	if d.Log == nil || len(ran) == 0 {
+		return
+	}
+	d.Log(fmt.Sprintf("%s: CI caught what the local gate passed, on pull request #%d at %s, fixes so far %d: %s",
+		in.Job.ID, pr, git.Short(p.Pushed), p.Fixes, conclusions(ran)))
+}
+
+// conclusions is each failing run's name and how it failed.
+func conclusions(runs []github.CheckRun) string {
+	c := make([]string, len(runs))
+	for i, r := range runs {
+		c[i] = "`" + r.Name + "` " + r.Conclusion
+	}
+	return strings.Join(c, ", ")
 }
 
 // ciOutput is what the failing check runs said, for the session that has to
@@ -142,12 +203,27 @@ func ciOutput(failed []github.CheckRun) string {
 	return tail(b.String(), gateTail)
 }
 
+// absent is the required checks with no run on the head.
+func absent(required []string, runs []github.CheckRun) []string {
+	present := map[string]bool{}
+	for _, r := range runs {
+		present[r.Name] = true
+	}
+	var out []string
+	for _, name := range required {
+		if !present[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func names(runs []github.CheckRun) string {
 	n := make([]string, len(runs))
 	for i, r := range runs {
-		n[i] = "`" + r.Name + "`"
+		n[i] = r.Name
 	}
-	return strings.Join(n, ", ")
+	return quoted(n)
 }
 
 // handBackPR returns the work to a human after the push: a comment saying

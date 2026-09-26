@@ -49,6 +49,10 @@ type tracker struct {
 	checks func(sha string, call int) []github.CheckRun
 	asks   int
 
+	// required is the checks the base branch's rules require: none, unless
+	// a test says otherwise.
+	required []string
+
 	// open decides what happens to a pull request the agent opens: whether
 	// it is opened, and what the call reports.
 	open        func(call int) (opens bool, err error)
@@ -168,6 +172,12 @@ func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, 
 	return tr.checks(sha, tr.asks), nil
 }
 
+func (tr *tracker) RequiredChecks(context.Context, string) ([]string, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.required, nil
+}
+
 func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
@@ -224,6 +234,9 @@ type fixture struct {
 	// at is the time the runner sees: now, until a test moves it on.
 	at time.Time
 
+	// logged is every line the deps logged.
+	logged []string
+
 	// last and lastErr are what drive's last run returned: an error with
 	// Parked is the outcome dispatch tells the operator about.
 	last    transition.Outcome
@@ -246,6 +259,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Remote:        git.Remote{URL: remote},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         2,
+		Rounds:        2,
 		TierWait:      time.Hour,
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
@@ -254,9 +268,9 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
-		CIRounds:      2,
+		CIFixes:       2,
 		Store:         s,
-		AskReview:     implement.ReviewAsker(intake.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
+		AskReview:     implement.ReviewAsker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
@@ -265,6 +279,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, store: s, tr: tr, model: m, deps: d, remote: remote, reg: reg, job: job, at: now}
+	d.Log = func(msg string) { f.logged = append(f.logged, msg) }
 	f.run = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
 	return f
 }

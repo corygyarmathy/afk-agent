@@ -1,6 +1,7 @@
 package implement_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,7 @@ func TestCIIsWaitedOnAndAGreenHeadGoesOn(t *testing.T) {
 	if j := f.now(); j.State != implement.Reviewing {
 		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
 	}
+	f.caught()
 }
 
 // A red run goes back to the session that wrote the commit, with what CI
@@ -109,6 +111,29 @@ func TestARedRunGoesBackToTheSessionThatWroteIt(t *testing.T) {
 	if len(f.tr.opened) != 1 {
 		t.Errorf("%d pull requests, want 1", len(f.tr.opened))
 	}
+	f.caught("fixes so far 0:")
+}
+
+// caught fails the test unless the log has one line of what CI caught per
+// want, in order, each naming the failing check and saying want.
+func (f *fixture) caught(want ...string) {
+	f.t.Helper()
+	var lines []string
+	for _, l := range f.logged {
+		if strings.Contains(l, "CI caught") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != len(want) {
+		f.t.Fatalf("logged %d catches, want %d:\n%s", len(lines), len(want), strings.Join(f.logged, "\n"))
+	}
+	for i, l := range lines {
+		for _, w := range []string{"implement-issue-7:", "pull request #101", "`test` failure", want[i]} {
+			if !strings.Contains(l, w) {
+				f.t.Errorf("catch %d does not say %q: %s", i, w, l)
+			}
+		}
+	}
 }
 
 func mustHead(t *testing.T, f *fixture) string {
@@ -120,9 +145,33 @@ func mustHead(t *testing.T, f *fixture) string {
 	return head
 }
 
-// Running out of CI rounds hands back on the pull request, and only there,
+// A red run is one fix however many times its decision is made. A
+// commit lost after the decision - a kill, or a lost lease - replays it, and
+// the replay counts nothing new.
+func TestARedRunReplayedIsCountedOnce(t *testing.T) {
+	f := watched(t)
+	f.deps.CIFixes = 1
+	f.tr.checks = red()
+
+	for i := range 2 {
+		// The replay: the decision is made again from watching, with the
+		// progress the first one saved.
+		f.setState(implement.Watching)
+		if _, err := f.run.Run(context.Background(), "implement-watch", f.job.ID); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if j := f.now(); j.State != implement.Implementing {
+			t.Fatalf("run %d: job in %q, want %q: the one round is not spent yet", i, j.State, implement.Implementing)
+		}
+	}
+	if len(f.tr.byAgent()) != 0 {
+		t.Errorf("the agent said %+v, want nothing", f.tr.byAgent())
+	}
+}
+
+// Running out of fixes hands back on the pull request, and only there,
 // with what CI said - and never hands off.
-func TestRunningOutOfCIRoundsHandsBackOnThePullRequest(t *testing.T) {
+func TestRunningOutOfFixesHandsBackOnThePullRequest(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(commit("ok"), commit("a"), commit("b"))
 	f.tr.checks = func(string, int) []github.CheckRun {
@@ -132,15 +181,15 @@ func TestRunningOutOfCIRoundsHandsBackOnThePullRequest(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if len(f.model.asked) != 1+f.deps.CIRounds {
-		t.Errorf("the model was asked %d times, want the first run and %d rounds", len(f.model.asked), f.deps.CIRounds)
+	if len(f.model.asked) != 1+f.deps.CIFixes {
+		t.Errorf("the model was asked %d times, want the first run and %d fixes", len(f.model.asked), f.deps.CIFixes)
 	}
 	pr := 101
 	posted := f.tr.byAgent()
 	if len(posted) != 1 || f.tr.commentedOn[0] != pr {
 		t.Fatalf("comments %+v on %v, want one hand-back on #%d", posted, f.tr.commentedOn, pr)
 	}
-	for _, want := range []string{"before handing this pull request off", "2 rounds", "--- FAIL: TestReserve", "stays open"} {
+	for _, want := range []string{"before handing this pull request off", "2 fixes", "--- FAIL: TestReserve", "stays open"} {
 		if !strings.Contains(posted[0].Body, want) {
 			t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
 		}
@@ -151,6 +200,8 @@ func TestRunningOutOfCIRoundsHandsBackOnThePullRequest(t *testing.T) {
 	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
 		t.Errorf("job = %+v, want it at rest", j)
 	}
+	// Every red reading is a catch, the one that ran out of fixes too.
+	f.caught("fixes so far 0:", "fixes so far 1:", "fixes so far 2:")
 }
 
 // A head whose checks never finish is handed back once the ceiling passes.
@@ -174,6 +225,88 @@ func TestCIThatNeverFinishesHandsBackAtTheCeiling(t *testing.T) {
 	if f.at.Before(now.Add(f.deps.CICeiling)) {
 		t.Errorf("handed back at %s, before the ceiling", f.at.Sub(now))
 	}
+	f.caught()
+}
+
+// A required check that has not registered yet is waited for, however green
+// the runs already there are, and the head goes on once it has run.
+func TestARequiredCheckNotYetRegisteredIsWaitedFor(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		if call == 1 {
+			return green(sha, call)
+		}
+		return append(green(sha, call), github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching || !j.NextRunAt.Equal(now.Add(f.deps.CIWait)) {
+		t.Fatalf("job = %+v, want it watching again after the CI wait", j)
+	}
+
+	f.at = now.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+}
+
+// A required check that never registers is handed back at the ceiling, like
+// one that never finishes, and the hand-back names it.
+func TestARequiredCheckThatNeverRegistersHandsBackAtTheCeiling(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = green
+
+	for f.at.Before(now.Add(f.deps.CICeiling + f.deps.CIWait)) {
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if f.now().NextRunAt.IsZero() {
+			break
+		}
+		f.at = f.at.Add(f.deps.CIWait)
+	}
+	if f.at.Before(now.Add(f.deps.CICeiling)) {
+		t.Errorf("handed back at %s, before the ceiling", f.at.Sub(now))
+	}
+	f.handedBackOnThePR("had not finished", "`gate`, required on")
+}
+
+// A head whose runs have all finished, and one failed, is red, whether or not
+// every required check has registered: it goes back for a fix rather than
+// waiting out the ceiling for a check that may never start. The fix's head is
+// watched in its turn, required checks and all.
+func TestARedRunGoesBackForAFixBeforeEveryRequiredCheckRegisters(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"), commit("fix"))
+	f.tr.required = []string{"build", "gate"}
+	first := red()
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		runs := first(sha, call)
+		if runs[len(runs)-1].Conclusion == "failure" {
+			return runs
+		}
+		return append(runs, github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 2 {
+		t.Fatalf("the model was asked %d times, want 2: a fix for the red head", len(f.model.asked))
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+	f.caught("fixes so far 0:")
 }
 
 // A pull request a human closed while CI ran is their decision: the job rests
@@ -250,7 +383,7 @@ func (f *fixture) handedBackOnThePR(want ...string) {
 	}
 }
 
-// A fix round goes through the same gate and denylist as the first push, and
+// A fix goes through the same gate and denylist as the first push, and
 // what stops it there is handed back on the pull request, not on the issue:
 // by then the work is the pull request's. Nothing more reaches the remote.
 func TestAFixThatIsStoppedBeforeItsPushHandsBackOnThePullRequest(t *testing.T) {
@@ -346,6 +479,27 @@ func TestARunWaitingForApprovalHandsBack(t *testing.T) {
 		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
 	}
 	f.handedBackOnThePR("waiting for approval", "`deploy`")
+	// Nothing the gate could have caught: the run never ran.
+	f.caught()
+}
+
+// A run that failed beside one waiting for approval is still a catch, though
+// the approval is what hands the work back.
+func TestAFailureBesideAnApprovalWaitIsStillACatch(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{
+			{Name: "test", Status: "completed", Conclusion: "failure"},
+			{Name: "deploy", Status: "completed", Conclusion: "action_required"},
+		}
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackOnThePR("waiting for approval", "`deploy`")
+	f.caught("fixes so far 0:")
 }
 
 // A head with a failed run and another that never finishes waits out the
@@ -373,12 +527,14 @@ func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {
 		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
 	}
 	f.handedBackOnThePR("had not finished", "--- FAIL: TestReserve")
+	// The failure is a catch, though CI never finished around it.
+	f.caught("fixes so far 0:")
 }
 
-// A workspace lost during a fix round is not a new start: the branch is
+// A workspace lost during a fix is not a new start: the branch is
 // pushed and the pull request open, so a new branch would be a second pull
 // request. It is handed back on the one there is.
-func TestAWorkspaceLostInAFixRoundHandsBackOnThePullRequest(t *testing.T) {
+func TestAWorkspaceLostInAFixHandsBackOnThePullRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		lose string

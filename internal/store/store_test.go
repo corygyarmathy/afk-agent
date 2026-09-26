@@ -291,6 +291,37 @@ func TestCommitReleasesAndSchedules(t *testing.T) {
 	}
 }
 
+// A commit that keeps the lease can move its expiry, so what follows the
+// commit - a transition's effects - is held for a lease of its own rather than
+// for whatever the transition left of the first one. Without LeaseUntil the
+// expiry is left where it was.
+func TestCommitThatKeepsTheLeaseCanRenewIt(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, t.TempDir())
+	now := time.Now().Truncate(time.Nanosecond)
+	j := mustEnsure(t, s, store.KindReview, store.Subject{Type: store.SubjectPR, Number: 12}, "start", now)
+	if _, ok, _ := s.Acquire(ctx, j.ID, "worker", now, time.Minute); !ok {
+		t.Fatal("could not acquire")
+	}
+
+	if err := s.Commit(ctx, store.Commit{JobID: j.ID, Holder: "worker", State: "posting"}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	got, _ := s.Job(ctx, j.ID)
+	if got.Lease == nil || !got.Lease.ExpiresAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("lease = %+v; want it kept at %v", got.Lease, now.Add(time.Minute))
+	}
+
+	until := now.Add(10 * time.Minute)
+	if err := s.Commit(ctx, store.Commit{JobID: j.ID, Holder: "worker", State: "verifying", LeaseUntil: until}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	got, _ = s.Job(ctx, j.ID)
+	if got.Lease == nil || got.Lease.Holder != "worker" || !got.Lease.ExpiresAt.Equal(until) {
+		t.Errorf("lease = %+v; want worker's, renewed to %v", got.Lease, until)
+	}
+}
+
 // --- Acceptance: Ensure is idempotent, so re-deriving never resets work. ---
 
 func TestEnsureDoesNotResetWorkAlreadyUnderWay(t *testing.T) {

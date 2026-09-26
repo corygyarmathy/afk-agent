@@ -8,11 +8,11 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
+	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
 // reviewDeps builds what the review's transitions reach, from the parameters and
@@ -28,6 +28,10 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
+	ep, err := p.effects()
+	if err != nil {
+		return nil, err
+	}
 	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
@@ -37,15 +41,17 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, err
 	}
 	return &review.Deps{
-		Tracker:  tr.client,
-		Model:    opencode.Command{Path: m.opencode},
-		Store:    st,
-		Checkout: review.Git{Remote: remote(tr)}.Checkout,
-		Resolve:  resolve,
-		Bound:    m.attempts,
-		TierWait: m.tierWait,
-		Login:    login,
-		StateDir: stateDir,
+		Tracker:       tr.client,
+		Model:         opencode.Command{Path: m.opencode},
+		Store:         st,
+		Checkout:      review.Git{Remote: remote(tr)}.Checkout,
+		Resolve:       resolve,
+		Bound:         m.attempts,
+		TierWait:      m.tierWait,
+		Rounds:        ep.rounds,
+		HandBackLabel: ep.handBackLabel,
+		Login:         login,
+		StateDir:      stateDir,
 	}, nil
 }
 
@@ -62,6 +68,10 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		return nil, err
 	}
 	m, err := p.implementModel()
+	if err != nil {
+		return nil, err
+	}
+	ep, err := p.effects()
 	if err != nil {
 		return nil, err
 	}
@@ -86,17 +96,18 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
+		Rounds:        ep.rounds,
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
-		HandBackLabel: ip.handBackLabel,
+		HandBackLabel: ep.handBackLabel,
 		HandOffLabel:  ip.handOffLabel,
 		Denylist:      ip.denylist,
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
-		CIRounds:      ip.ciRounds,
+		CIFixes:       ip.ciFixes,
 		Store:         st,
 		// A holder of its own: it leases the review job, never this one.
-		AskReview: implement.ReviewAsker(intake.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		AskReview: implement.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		StateDir:  stateDir,
 	}, nil
 }
