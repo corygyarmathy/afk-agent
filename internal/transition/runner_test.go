@@ -795,58 +795,29 @@ func TestAnEffectStillRunningWhenTheLeaseRunsOutIsCancelled(t *testing.T) {
 	}
 }
 
-// The transition's own work is held to the lease it was taken under, for the
-// same reason: a worker must not be stuck behind a run another worker can
-// already take the job from.
-func TestATransitionStillRunningWhenTheLeaseRunsOutIsCancelled(t *testing.T) {
+// The effects' deadline is the renewed lease's: it runs out no later than the
+// lease's expiry, and not much earlier. Earlier would cut short an effect the
+// lease still covers; later is the race.
+func TestTheEffectsRunOutNoLaterThanTheirLease(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	job := seed(t, s, store.KindReview, 12, "start")
 
-	reg := transition.MustRegistry(transition.Transition{
-		Name: "review", Kind: store.KindReview, From: "start",
-		Run: func(ctx context.Context, _ transition.In) (transition.Result, error) {
-			<-ctx.Done()
-			return transition.Result{}, ctx.Err()
-		},
-	})
-	r := runner(s, reg, func(r *transition.Runner) { r.LeaseTTL = 100 * time.Millisecond })
-
-	if _, err := run(t, r, "review", job.ID); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Run error = %v, want %v", err, context.DeadlineExceeded)
-	}
-	got, _ := s.Job(ctx, job.ID)
-	if got.State != "start" || got.Attempts != 1 || got.Lease != nil {
-		t.Errorf("job = %q, %d attempt(s), lease %+v; want start, 1 and released", got.State, got.Attempts, got.Lease)
-	}
-}
-
-// The deadlines are the leases': the transition's runs out no later than the
-// lease it was taken under, and the effects' no later than the renewed one.
-// Earlier would cut work short that the lease still covers; later is the race.
-func TestTheWorkRunsOutNoLaterThanItsLease(t *testing.T) {
-	ctx := context.Background()
-	s := openStore(t)
-	job := seed(t, s, store.KindReview, 12, "start")
-
-	type bound struct {
+	var (
 		deadline time.Time
 		ok       bool
 		lease    *store.Lease
-	}
-	var decided, effected bound
+	)
 	reg := transition.MustRegistry(transition.Transition{
 		Name: "post", Kind: store.KindReview, From: "start",
-		Run: func(ctx context.Context, in transition.In) (transition.Result, error) {
-			decided.deadline, decided.ok = ctx.Deadline()
-			decided.lease = in.Job.Lease
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
 			return transition.Result{
 				State: "verifying",
 				RunAt: in.Now,
 				Effects: []transition.Effect{{Key: "k", Do: func(ctx context.Context) error {
-					effected.deadline, effected.ok = ctx.Deadline()
+					deadline, ok = ctx.Deadline()
 					j, err := s.Job(ctx, job.ID)
-					effected.lease = j.Lease
+					lease = j.Lease
 					return err
 				}}},
 			}, nil
@@ -857,19 +828,13 @@ func TestTheWorkRunsOutNoLaterThanItsLease(t *testing.T) {
 	if _, err := r.Run(ctx, "post", job.ID); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, b := range []struct {
-		name string
-		bound
-	}{{"the transition", decided}, {"the effect", effected}} {
-		if !b.ok || b.lease == nil {
-			t.Errorf("%s: deadline %v (set %v), lease %+v; want both", b.name, b.deadline, b.ok, b.lease)
-			continue
-		}
-		if b.deadline.After(b.lease.ExpiresAt) {
-			t.Errorf("%s: deadline %v is after the lease's expiry %v", b.name, b.deadline, b.lease.ExpiresAt)
-		}
-		if gap := b.lease.ExpiresAt.Sub(b.deadline); gap > time.Second {
-			t.Errorf("%s: deadline %v is %v short of the lease's expiry %v", b.name, b.deadline, gap, b.lease.ExpiresAt)
-		}
+	if !ok || lease == nil {
+		t.Fatalf("deadline %v (set %v), lease %+v; want both", deadline, ok, lease)
+	}
+	if deadline.After(lease.ExpiresAt) {
+		t.Errorf("deadline %v is after the lease's expiry %v", deadline, lease.ExpiresAt)
+	}
+	if gap := lease.ExpiresAt.Sub(deadline); gap > time.Second {
+		t.Errorf("deadline %v is %v short of the lease's expiry %v", deadline, gap, lease.ExpiresAt)
 	}
 }

@@ -139,9 +139,9 @@ optional.
   again: every later push would be refused the same way.
 - `--ci-wait` is also how often a review not yet posted is looked for.
 - `--lease` must be longer than a model run, than the gate, and than a push.
-  A transition still running when its lease lapses is cancelled. The lease is
-  renewed when a transition commits and bounds its effects the same way, and
-  the push is one.
+  The lease is renewed when a transition commits and held until its effects
+  finish, and the push is one. An effect still running when the renewed lease
+  lapses is cancelled.
 
 ## Running one by hand
 
