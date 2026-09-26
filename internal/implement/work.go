@@ -13,7 +13,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/template"
+	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -42,15 +44,20 @@ const gateTail = 64 << 10
 // is for a human skimming it, and the workspace is gone by then.
 const handBackTail = 4 << 10
 
+// gateWaitDelay is how long a cancelled gate's pipes are given to close before
+// Wait stops waiting for them. Not a parameter, for the reason opencode's own
+// is not: it bounds how long a cancellation takes to return.
+const gateWaitDelay = 5 * time.Second
+
 // progress is how far the work in a workspace has got. It lives beside the
 // workspace in the state directory and not in the store, so the two are lost
 // together: a progress file without its workspace describes nothing, and a
 // workspace without its progress cannot be trusted (ADR 0001 §5, §6).
 type progress struct {
-	// Run names this run of the work, from the workspace being made to the
-	// job coming to rest. The branch does not: nothing pushed means its
-	// name is free again, and the next run takes it.
-	Run string `json:"run"`
+	// Nonce is made with the workspace, and keys what is said about the work
+	// until the job comes to rest. The branch cannot: nothing pushed means
+	// its name is free again, and the next workspace takes it.
+	Nonce string `json:"nonce"`
 
 	Branch string `json:"branch"`
 	Base   string `json:"base"`
@@ -85,6 +92,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		// configuration mistake, and a human's (ADR 0001 §10).
 		return transition.Result{}, err
 	}
+	// A gate failure moves the job to a new state, which clears the attempt
+	// count, so the retry starts again at the first candidate - which need
+	// not be the model that wrote the session. That is intended: opencode
+	// continues a session under any model, and the tier's order is the
+	// preference (ADR 0001 §9).
 	ref, err := candidates.Attempt(in.Job.Attempts, d.Bound)
 	var exhausted *model.ExhaustedError
 	if errors.As(err, &exhausted) {
@@ -100,6 +112,14 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	ws := d.workspacePath(in.Job.ID)
+	if p.Failure == "" {
+		// Nothing the gate has read yet, so anything here is a session's
+		// that failed before it finished, and whose id went with it. The
+		// next one starts from the base rather than inherit it unannounced.
+		if err := reset(ctx, ws, p.Base); err != nil {
+			return transition.Result{}, err
+		}
+	}
 	if err := d.spec(ctx, ws, n); err != nil {
 		return transition.Result{}, err
 	}
@@ -170,6 +190,16 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		return transition.Result{}, err
 	}
 
+	if branch, err := branchOf(ctx, ws); err != nil {
+		return transition.Result{}, err
+	} else if branch != p.Branch {
+		// The commits are not where the push would take them from, and the
+		// next run's workspace would not recognise the clone: it would start
+		// over with the gate's count at nothing, and the bound would never
+		// be reached.
+		return d.handBack(in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, branch), "")
+	}
+
 	made, err := commits(ctx, ws, p.Base)
 	if err != nil {
 		return transition.Result{}, err
@@ -182,9 +212,16 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if dirty, err := uncommitted(ctx, ws); err != nil {
 		return transition.Result{}, err
 	} else if dirty != "" {
-		why = "The session left changes uncommitted, and the gate reads commits."
-		failure = "git status --porcelain:\n" + dirty + "\n"
+		why = "The session left changes to tracked files uncommitted, and the gate reads commits."
+		failure = "git status --porcelain --untracked-files=no:\n" + dirty + "\n"
 	} else {
+		// Untracked files go before the gate runs rather than fail it
+		// unread: a session runs the gate itself, and what that leaves
+		// behind is not the work. A file the work needed but nobody added
+		// goes too, and the gate says so.
+		if _, err := git(ctx, ws, "clean", "--quiet", "--force", "-d"); err != nil {
+			return transition.Result{}, err
+		}
 		passed, output, err := runGate(ctx, ws, d.Gate)
 		if err != nil {
 			return transition.Result{}, err
@@ -221,8 +258,8 @@ func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, e
 // (dotfiles ADR 0007 §2). The job comes to rest, and its workspace goes with
 // it.
 //
-// Keyed by the run, so a replay says it once and a later run that fails again
-// says so again.
+// Keyed by the progress's nonce, so a replay says it once and a later
+// workspace that fails again says so again.
 func (d *Deps) handBack(in transition.In, p progress, reason, output string) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	var b strings.Builder
@@ -236,14 +273,14 @@ func (d *Deps) handBack(in transition.In, p progress, reason, output string) (tr
 
 	effects := []transition.Effect{
 		{
-			Key: fmt.Sprintf("hand-back-issue-%d-%s", n, p.Run),
+			Key: fmt.Sprintf("hand-back-issue-%d-%s", n, p.Nonce),
 			Do: func(ctx context.Context) error {
 				_, err := d.Tracker.Comment(ctx, n, body)
 				return err
 			},
 		},
 		{
-			Key: fmt.Sprintf("hand-back-label-issue-%d-%s", n, p.Run),
+			Key: fmt.Sprintf("hand-back-label-issue-%d-%s", n, p.Nonce),
 			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandBackLabel) },
 		},
 	}
@@ -282,11 +319,11 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, er
 	if err != nil {
 		return progress{}, err
 	}
-	run := make([]byte, 8)
-	if _, err := rand.Read(run); err != nil {
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
 		return progress{}, err
 	}
-	p = progress{Run: hex.EncodeToString(run), Branch: branch, Base: base}
+	p = progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base}
 	return p, d.save(jobID, p)
 }
 
@@ -365,7 +402,18 @@ func runGate(ctx context.Context, dir, gate string) (bool, string, error) {
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
+
+	// Its own process group, as opencode's run has, so that a cancellation
+	// reaches what the gate started - a test binary, a server it spun up -
+	// and not just the shell, and Wait is not left holding a pipe open.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
+	cmd.WaitDelay = gateWaitDelay
 	err := cmd.Run()
+	if cmd.Process != nil {
+		// Whatever it left running goes with it, pass or fail.
+		killGroup(cmd.Process.Pid)
+	}
 	var exit *exec.ExitError
 	switch {
 	case ctx.Err() != nil:
@@ -376,6 +424,14 @@ func runGate(ctx context.Context, dir, gate string) (bool, string, error) {
 		return false, "", fmt.Errorf("running the gate: %w", err)
 	}
 	return true, "", nil
+}
+
+// killGroup kills a process group. One already gone is not an error.
+func killGroup(pid int) error {
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 func tail(s string, n int) string {
@@ -435,7 +491,7 @@ func (d *Deps) load(jobID string) (progress, error) {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
 	}
-	if p.Run == "" || p.Branch == "" || p.Base == "" {
+	if p.Nonce == "" || p.Branch == "" || p.Base == "" {
 		return progress{}, fmt.Errorf("progress of %s is incomplete", jobID)
 	}
 	return p, nil

@@ -26,9 +26,10 @@ This workspace is not the one the skill expects, in three ways:
   fetch the issue with `gh`. Do not push, and do not create, switch or delete
   branches: commit to `{{.Branch}}`, and the agent pushes it.
 - **You are not the gate.** When you finish, the agent runs the local gate,
-  `{{.Gate}}`, in this directory. Run it yourself before you finish, and leave
-  nothing uncommitted: the gate is run on your commits, and uncommitted changes
-  are a failure.
+  `{{.Gate}}`, in this directory. Run it yourself before you finish, and commit
+  everything the work needs: the gate is run on your commits. Uncommitted
+  changes to tracked files are a failure, and untracked files are deleted
+  before the gate runs.
 
 Reply with a short summary of what you changed and why, in GitHub-flavoured
 markdown. No preamble.

@@ -316,9 +316,58 @@ func TestASessionThatCommitsNothingHandsBack(t *testing.T) {
 	}
 }
 
-// Uncommitted changes are a failure the session is told about: the gate reads
-// the commits, which is what would be pushed.
+// Uncommitted changes to tracked files are a failure the session is told
+// about: the gate reads the commits, which is what would be pushed.
 func TestUncommittedChangesGoBackToTheSession(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		if err := commit("a")(dir); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "a"), []byte("changed\n"), 0o644)
+	}, func(dir string) error {
+		if _, err := run(dir, "git", "commit", "--quiet", "--all", "-m", "change a"); err != nil {
+			return err
+		}
+		return commit("ok")(dir)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Pushing {
+		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	}
+	if !strings.Contains(f.model.asked[1].Prompt, "uncommitted") || !strings.Contains(f.model.logs[1], "M a") {
+		t.Errorf("the session was not told what was uncommitted:\n%s\n%s", f.model.asked[1].Prompt, f.model.logs[1])
+	}
+}
+
+// What a session leaves untracked - the gate's own output, say - is cleaned
+// away before the gate runs, rather than failing the work unread.
+func TestUntrackedLeftoversDoNotFailTheWork(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		if err := commit("ok")(dir); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "coverage.out"), nil, 0o644)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Pushing || len(f.model.asked) != 1 {
+		t.Fatalf("job in %q after %d runs, want %q after 1", j.State, len(f.model.asked), implement.Pushing)
+	}
+	if _, err := os.Stat(filepath.Join(f.workspace(), "coverage.out")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the leftover is still in the workspace: %v", err)
+	}
+}
+
+// A file the work needs but the session never added is cleaned away too, and
+// the gate, run without it, says what is missing.
+func TestAnUnaddedFileFailsTheGate(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(func(dir string) error {
 		if err := commit("a")(dir); err != nil {
@@ -330,11 +379,38 @@ func TestUncommittedChangesGoBackToTheSession(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if j := f.now(); j.State != implement.Pushing {
-		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	if j := f.now(); j.State != implement.Pushing || len(f.model.asked) != 2 {
+		t.Fatalf("job in %q after %d runs, want %q after 2", j.State, len(f.model.asked), implement.Pushing)
 	}
-	if !strings.Contains(f.model.asked[1].Prompt, "uncommitted") || !strings.Contains(f.model.logs[1], "?? ok") {
-		t.Errorf("the session was not told what was uncommitted:\n%s\n%s", f.model.asked[1].Prompt, f.model.logs[1])
+	if !strings.Contains(f.model.logs[1], "FAIL: no ok") {
+		t.Errorf("the gate's output was not left for the session: %q", f.model.logs[1])
+	}
+}
+
+// A session that leaves the branch hands back at once. Its commits are not
+// where the push would take them from, and letting the next run start over
+// would let the gate's attempts start over with it.
+func TestASessionThatLeavesTheBranchHandsBack(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		if _, err := run(dir, "git", "switch", "--quiet", "--create", "elsewhere"); err != nil {
+			return err
+		}
+		return commit("ok")(dir)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want 1", len(f.model.asked))
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "left `afk/7-1` for `elsewhere`") {
+		t.Fatalf("comments %+v, want one hand-back saying the session left the branch", posted)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }
 
@@ -414,6 +490,37 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 	}
 	if j := g.now(); j.State != implement.Implementing || j.Attempts != 0 {
 		t.Errorf("job = %+v, want it back at the work from the first model", j)
+	}
+}
+
+// What a session did before it failed transiently is not left for the next
+// model, which is given the first-run prompt and would not know it was there.
+func TestATransientFailureLeavesNothingForTheNextModel(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		if err := commit("partial")(dir); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "scratch"), nil, 0o644); err != nil {
+			return err
+		}
+		return fail(first)(dir)
+	}, commit("ok"))
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Pushing {
+		t.Fatalf("job in %q, want %q", j.State, implement.Pushing)
+	}
+	ws := f.workspace()
+	if n, _ := run(ws, "git", "rev-list", "--count", "origin/main..HEAD"); n != "1" {
+		t.Errorf("%s commits on the branch, want only the second model's", n)
+	}
+	for _, name := range []string{"partial", "scratch"} {
+		if _, err := os.Stat(filepath.Join(ws, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was left for the next model: %v", name, err)
+		}
 	}
 }
 
