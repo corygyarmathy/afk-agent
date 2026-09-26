@@ -61,7 +61,10 @@ episode; a later episode of the same job is told again.
 
 The count is in memory, like the suppression below. A restart starts every
 episode again, so a tier that is still out is told again once it has run out
-`--tier-notify-after` more times.
+`--tier-notify-after` more times; whether it should survive a restart is #91.
+Only a move the pool makes ends an episode: a job moved on by a hand-run
+`afk run`, or by an edit to the store, keeps its episode until the process
+restarts, so a later exhaustion of that job is counted into it.
 
 ## Repeats
 
