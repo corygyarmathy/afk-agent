@@ -129,12 +129,11 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 	return transition.Result{State: HandingOff, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
-// ReviewAsker is Deps.AskReview, arming under a's lease. A job already queued
+// ReviewAsker is Deps.AskReview, asking under a's lease. A job already queued
 // or held is left alone: that run will review the head. So is one parked away
 // from start, which awaitReview hands back.
 func ReviewAsker(a intake.Armer) func(ctx context.Context, pr store.Subject, now time.Time) error {
 	return func(ctx context.Context, pr store.Subject, now time.Time) error {
-		_, _, err := a.Arm(ctx, store.KindReview, pr, review.Start, now, nil, false)
-		return err
+		return a.Ask(ctx, store.KindReview, pr, review.Start, now)
 	}
 }
