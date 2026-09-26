@@ -84,9 +84,9 @@ type progress struct {
 	PushedAt time.Time `json:"pushed_at,omitzero"`
 
 	// Fixes is how many times CI has sent the work back to the session,
-	// and Counted the head the last of them was counted for.
-	Fixes   int    `json:"fixes,omitempty"`
-	Counted string `json:"counted,omitempty"`
+	// and FixedHead the head the last of them was counted for.
+	Fixes     int    `json:"fixes,omitempty"`
+	FixedHead string `json:"fixed_head,omitempty"`
 
 	// Session is the opencode session that wrote the branch's commits, to
 	// continue with a failure. Empty until a run succeeds.
