@@ -341,6 +341,47 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) 
 	return out, nil
 }
 
+// RequiredChecks is the status-check contexts the rules on branch require, once
+// each: what a pull request into it must pass before it can merge.
+//
+// Only rulesets are read. Legacy branch protection is not part of this
+// endpoint, and reading it needs Administration: read.
+func (c *Client) RequiredChecks(ctx context.Context, branch string) ([]string, error) {
+	u, err := c.repoURL("/rules/branches/%s?per_page=%d", branch, perPage)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := all[wireRule](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range rules {
+		if r.Type != "required_status_checks" {
+			continue
+		}
+		for _, s := range r.Parameters.RequiredStatusChecks {
+			if !seen[s.Context] {
+				seen[s.Context] = true
+				out = append(out, s.Context)
+			}
+		}
+	}
+	return out, nil
+}
+
+// wireRule is one rule on a branch, as the API serves it. Only the required
+// status checks are read from its parameters.
+type wireRule struct {
+	Type       string `json:"type"`
+	Parameters struct {
+		RequiredStatusChecks []struct {
+			Context string `json:"context"`
+		} `json:"required_status_checks"`
+	} `json:"parameters"`
+}
+
 // NewPullRequest is a pull request to open: from the branch Head into Base.
 type NewPullRequest struct {
 	Title string
