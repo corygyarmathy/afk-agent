@@ -12,18 +12,21 @@
 //	                                         implementing  it failed: back to the session that wrote it
 //	                                         handing-back  hand-back on the issue
 //	pushing      --implement-push--------->  opening       the denylist, then the push
-//	                                         handing-back  a denied path: hand-back on the issue
+//	                                         handing-back  a denied path, or out of rounds: hand-back
 //	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
 //	                                         opening       the pull request, under the next key
 //	                                         pushing       the push is not on the remote: again
+//	                                         handing-back  someone else pushed, or the pull request is out of rounds
 //	watching     --implement-watch-------->  reviewing     CI is green on the pushed head
 //	                                         watching      not finished: again after the CI wait
 //	                                         implementing  red: back to the session, with what CI said
 //	                                         handing-back  out of rounds, or past the ceiling: hand-back on the pull request
 //	reviewing    --implement-review------->  handing-off   the review is on the pull request
 //	                                         reviewing     the review job made due, or still on its way
+//	                                         handing-back  someone else pushed, the review job failed, or out of rounds
 //	handing-off  --implement-hand-off----->  start         the hand-off label is on the pull request: at rest
 //	                                         handing-off   applied under the next key
+//	                                         handing-back  out of rounds: hand-back on the pull request
 //	handing-back --implement-handed-back-->  start         the hand-back's comment and label are on the tracker: at rest
 //	                                         handing-back  whichever is not, made again under the next key
 //	deferred     --implement-resume------->  implementing  the tier again, from its first model
@@ -124,6 +127,12 @@ type Deps struct {
 	// exhausted, and TierWait how long an exhausted tier defers. Parameters.
 	Bound    int
 	TierWait time.Duration
+
+	// Rounds is how many times an effect that is read back - a push, the
+	// pull request, the review asked for, a label, what is owed - is made
+	// before it counts as never taking effect. Out of rounds, the work is
+	// handed back. A parameter.
+	Rounds int
 
 	// Gate is the local gate: a shell command run in the workspace, which
 	// passes by exiting zero. A parameter.
@@ -254,7 +263,7 @@ func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Res
 
 // book is the implement kind's way to what it owes the tracker.
 func (d *Deps) book() *owed.Book {
-	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Bound: d.Bound, Dir: filepath.Join(d.StateDir, "owed")}
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed")}
 }
 
 // open finds the agent's open pull request that match accepts, if it has one.

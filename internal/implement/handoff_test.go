@@ -94,8 +94,9 @@ func TestAGreenHeadIsReviewedThenHandedOff(t *testing.T) {
 }
 
 // A review on its way is waited for; a review job that came to nothing is
-// asked again, a bounded number of times.
-func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
+// asked again, a bounded number of times, and then the pull request is handed
+// back rather than the job parked.
+func TestAReviewThatNeverComesIsAskedForAgainThenHandedBack(t *testing.T) {
 	f := greenPR(t)
 
 	// Queued: nothing is asked again.
@@ -104,7 +105,7 @@ func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
 		t.Fatalf("errors: %v", errs)
 	}
 
-	for i := range f.deps.Bound - 1 {
+	for i := range f.deps.Rounds - 1 {
 		f.restReviewJob()
 		f.at = f.at.Add(f.deps.CIWait)
 		if errs := f.drive(); len(errs) != 0 {
@@ -117,12 +118,18 @@ func TestAReviewThatNeverComesIsAskedForAgainThenStops(t *testing.T) {
 
 	f.restReviewJob()
 	f.at = f.at.Add(f.deps.CIWait)
-	errs := f.drive()
-	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "never took effect") {
-		t.Errorf("errors %v, want the review asked for %d times and no more", errs, f.deps.Bound)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
 	}
-	if len(f.tr.labels) != 0 {
-		t.Error("handed off with no review")
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "never came") {
+		t.Fatalf("the agent said %+v, want one hand-back saying the review never came", posted)
+	}
+	if strings.Join(f.tr.labels, ",") != "needs-decision" || f.tr.labelledOn[0] != 101 {
+		t.Errorf("labels %v on %v, want the hand-back label on #101 and no hand-off", f.tr.labels, f.tr.labelledOn)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }
 

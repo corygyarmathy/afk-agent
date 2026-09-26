@@ -1,18 +1,20 @@
 // Package review is the review job kind's transitions: advise on a pull
 // request, once per head, and never gate it.
 //
-// A review is six transitions rather than one, because the work is six
+// A review is seven transitions rather than one, because the work is seven
 // things that fail differently and a transition is the unit that fails
 // (ADR 0001 §2):
 //
-//	start     --review--------->  claiming    claim every unanswered request
-//	claiming  --review-claimed->  reviewing   the claims, and any reply, are on the tracker
-//	                              start       ... and the head was reviewed already: at rest
-//	                              claiming    made again, under the next key
-//	reviewing --review-run----->  posting     one candidate model, in a checkout
-//	posting   --review-post---->  verifying   post the reply, under a numbered key
-//	verifying --review-verify-->  start       at rest, once the reply is on the PR
-//	deferred  --review-resume-->  reviewing   the tier again, from its first model
+//	start        --review--------------->  claiming      claim every unanswered request
+//	claiming     --review-claimed------->  reviewing     the claims, and any reply, are on the tracker
+//	                                       start         ... and the head was reviewed already: at rest
+//	                                       claiming      made again, under the next key
+//	reviewing    --review-run----------->  posting       one candidate model, in a checkout
+//	posting      --review-post---------->  verifying     post the reply, under a numbered key
+//	                                       handing-back  out of rounds: hand-back on the pull request
+//	verifying    --review-verify-------->  start         at rest, once the reply is on the PR
+//	handing-back --review-handed-back--->  start         at rest, once the hand-back is on the PR
+//	deferred     --review-resume-------->  reviewing     the tier again, from its first model
 //
 // A request is a /review command, or the implement job making this job due
 // for the pull request it opened (ADR 0001 §14, as amended for #40). The
@@ -37,7 +39,9 @@
 // claimed and armed: nothing would retry it. review-verify reads the answer
 // back from the tracker, and sends the job round again under the next key if
 // it is not there. The reply is kept in the state directory until then, so a
-// re-post does not pay for a second model run.
+// re-post does not pay for a second model run. A review that never appears
+// after its rounds is handed back rather than posted for ever: a short comment
+// saying so may land where the review did not.
 package review
 
 import (
@@ -72,6 +76,8 @@ const (
 	Posting   = "posting"
 	Verifying = "verifying"
 	Deferred  = "deferred"
+
+	HandingBack = "handing-back"
 )
 
 // Word is the command that asks for a review.
@@ -116,9 +122,14 @@ type Deps struct {
 	Resolve func(ctx context.Context) (model.Candidates, error)
 
 	// Bound is the attempt bound: how many candidates a review tries before
-	// the tier counts as exhausted, and how many times a reply or a claim is
-	// made before one that never appears is an error. A parameter.
+	// the tier counts as exhausted. A parameter.
 	Bound int
+
+	// Rounds is how many times a review, a claim or a reply is posted before
+	// one that never appears counts as never taking effect. A review out of
+	// rounds is handed back, with HandBackLabel. Parameters.
+	Rounds        int
+	HandBackLabel string
 
 	// TierWait is how long an exhausted tier defers the job. A parameter: the
 	// provider gives no timestamp for this, so this is not a defer to a time
@@ -143,6 +154,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "review-post", Kind: store.KindReview, From: Posting, Run: d.post},
 		{Name: "review-verify", Kind: store.KindReview, From: Verifying, Run: d.verify},
 		{Name: "review-resume", Kind: store.KindReview, From: Deferred, Run: d.resume},
+		{Name: "review-handed-back", Kind: store.KindReview, From: HandingBack, Run: d.handedBack},
 	}
 }
 
@@ -214,7 +226,7 @@ func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result
 
 // book is the review's way to what it owes the tracker.
 func (d *Deps) book() *owed.Book {
-	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Bound: d.Bound, Dir: filepath.Join(d.StateDir, "owed")}
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed")}
 }
 
 // run is `review-run`: one candidate model, in a fresh checkout of the head.
@@ -289,7 +301,14 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, issue)}); err != nil {
+	// Posts of a head's review are counted from here, so a review written
+	// again for a head whose posts ran out before has an allowance of its
+	// own.
+	from, err := transition.Next(ctx, d.Store, postStem(n, head))
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, issue), From: from}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
@@ -308,11 +327,15 @@ func (d *Deps) post(ctx context.Context, in transition.In) (transition.Result, e
 	}
 
 	n := in.Job.Subject.Number
-	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("review-pr-%d-%s", n, p.Head), d.Bound)
-	if err != nil {
-		return transition.Result{}, fmt.Errorf("the review of %s never appeared on pull request %d: %w", git.Short(p.Head), n, err)
+	stem := postStem(n, p.Head)
+	key, err := transition.Round(ctx, d.Store, stem, p.From, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		return d.handBack(ctx, in, p, spent.Rounds, transition.Noted(d.notePath(in.Job.ID), stem))
 	}
-	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
+	if err != nil {
+		return transition.Result{}, err
+	}
+	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		// The key stops this run posting twice. The tracker is what stops a
 		// round that follows a slow success from posting again.
 		comments, err := d.Tracker.Comments(ctx, n)
@@ -324,8 +347,59 @@ func (d *Deps) post(ctx context.Context, in transition.In) (transition.Result, e
 		}
 		_, err = d.Tracker.Comment(ctx, n, p.Body)
 		return err
-	}}
+	})}
 	return transition.Result{State: Verifying, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
+}
+
+// postStem is what the keys of the posts of head's review are made from.
+func postStem(n int, head string) string {
+	return fmt.Sprintf("review-pr-%d-%s", n, head)
+}
+
+// handBack is a review written and never seen on the pull request: a short
+// comment saying so, which may land where the review did not, and the
+// hand-back label. Read back like any hand-back (package owed), and then at
+// rest. Said once for each head.
+func (d *Deps) handBack(ctx context.Context, in transition.In, p pending, rounds int, noted string) (transition.Result, error) {
+	n := in.Job.Subject.Number
+	marker := HandBackMarker(p.Head)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\nI wrote a review of `%s`, and posted it %d times, but it never appeared on this pull request.\n", marker, git.Short(p.Head), rounds)
+	if noted = strings.TrimSpace(noted); noted != "" {
+		fmt.Fprintf(&b, "\nThe last error:\n\n````\n%s\n````\n", noted)
+	}
+	fmt.Fprintf(&b, "\nPush a new commit and `%s` again for another review.\n", Word)
+	if err := d.forget(in.Job.ID); err != nil {
+		return transition.Result{}, err
+	}
+	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
+		owed.Comment(fmt.Sprintf("review-hand-back-pr-%d-%s", n, p.Head), n, marker, b.String()),
+		owed.Label(fmt.Sprintf("review-hand-back-label-pr-%d-%s", n, p.Head), n, d.HandBackLabel),
+	}})
+}
+
+// handedBack is `review-handed-back`: at rest, once the hand-back's comment
+// and its label are on the pull request. A record lost with the state
+// directory rests all the same.
+func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Result, error) {
+	return d.book().Settle(ctx, in, transition.Result{State: Start})
+}
+
+// HandBackMarker is the hidden line the hand-back of head's review carries. It
+// is not Marker's: a hand-back is not a review.
+func HandBackMarker(head string) string {
+	return "<!-- afk:review-hand-back head=" + head + " -->"
+}
+
+// HandedBack reports whether the agent has handed back its review of head.
+func HandedBack(comments []github.Comment, login, head string) bool {
+	marker := HandBackMarker(head)
+	for _, c := range comments {
+		if strings.EqualFold(c.Login, login) && strings.Contains(c.Body, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // verify is `review-verify`: done when the reply is on the pull request, and
@@ -345,12 +419,21 @@ func (d *Deps) verify(ctx context.Context, in transition.In) (transition.Result,
 	if !d.reviewed(comments, p.Head) {
 		return transition.Result{State: Posting, RunAt: in.Now}, nil
 	}
-	for _, path := range []string{d.pendingPath(in.Job.ID), d.askedPath(in.Job.ID)} {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return transition.Result{}, err
-		}
+	if err := d.forget(in.Job.ID); err != nil {
+		return transition.Result{}, err
 	}
 	return transition.Result{State: Start}, nil
+}
+
+// forget removes what a review kept while it was on its way to the pull
+// request: the reply, the request, and the note of its last failed post.
+func (d *Deps) forget(jobID string) error {
+	for _, path := range []string{d.pendingPath(jobID), d.askedPath(jobID), d.notePath(jobID)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // resume is `review-resume`: the wait is over, and the tier is tried again
@@ -427,14 +510,22 @@ func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
 		Marker(head), git.Short(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
 }
 
-// pending is a reply written and not yet seen on the tracker.
+// pending is a reply written and not yet seen on the tracker. From is the
+// round its posts are counted from.
 type pending struct {
 	Head string `json:"head"`
 	Body string `json:"body"`
+	From int    `json:"from,omitempty"`
 }
 
 func (d *Deps) pendingPath(jobID string) string {
 	return filepath.Join(d.StateDir, "replies", jobID+".json")
+}
+
+// notePath is where a post's last error waits for the decision that reads it
+// back (transition.Noting).
+func (d *Deps) notePath(jobID string) string {
+	return filepath.Join(d.StateDir, "notes", jobID+".json")
 }
 
 // save writes the pending reply.

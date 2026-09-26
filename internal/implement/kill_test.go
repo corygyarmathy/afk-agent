@@ -221,6 +221,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		Remote:        remote,
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         3,
+		Rounds:        3,
 		TierWait:      time.Hour,
 		Gate:          gate,
 		Attempts:      2,

@@ -33,8 +33,9 @@ on it.
 | `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
 | `review-claimed` | `claiming` | reads the claims and replies back, makes any that are missing again, and once all of them are there moves on to `reviewing` or rests |
 | `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
-| `review-post` | `posting` | posts the reply, under a key numbered by posting round |
+| `review-post` | `posting` | posts the reply, under a key numbered by posting round; out of rounds, owes a hand-back instead and moves to `handing-back` |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
+| `review-handed-back` | `handing-back` | rests once the hand-back's comment and label are on the pull request, and makes whichever is missing again |
 | `review-resume` | `deferred` | tries the tier again from its first model |
 
 The review is the `reviewing-changes` skill's four-axis report. The workspace
@@ -132,13 +133,18 @@ before choosing values:
 - `--lease` must be longer than a model run. A lease that lapses mid-run lets
   another worker take the job; the store refuses the first run's commit, so the
   work is wasted rather than duplicated, but it is still wasted.
-- `--model-attempts` bounds two things: the candidates tried before a tier is
-  exhausted, and the times a reply or a claim is made before one that never
-  appears is an error. Only a model run that failed transiently moves on to the
-  next candidate. Any other error in a run - the tracker, the checkout - counts
-  against `--max-attempts`, as any transition's does, and the next run keeps the
+- `--model-attempts` bounds the candidates tried before a tier is exhausted.
+  Only a model run that failed transiently moves on to the next candidate. Any
+  other error in a run - the tracker, the checkout - counts against
+  `--max-attempts`, as any transition's does, and the next run keeps the
   candidate, so an error that keeps coming back parks the job rather than
   exhausting the tier.
+- `--effect-rounds` bounds the times a review, a claim or a reply is posted
+  before one that never appears counts as never landing. A review out of rounds
+  is handed back: a short comment on the pull request saying so, with the last
+  error, and `--hand-back-label`. A claim or a reply out of rounds is a failed
+  attempt, since there is nothing to hand back through; the attempt after it -
+  a retry, or an operator freeing the parked job - has rounds of its own.
 
 ## Running one by hand
 
@@ -156,6 +162,10 @@ afk run review-run     --pr 12   # the model run; -> posting
 afk run review-post    --pr 12   # -> verifying
 afk run review-verify  --pr 12   # -> start, not scheduled: done
 ```
+
+A review out of posting rounds moves to `handing-back` instead, and
+`afk run review-handed-back --pr 12` rests it once the comment and the label
+are both there.
 
 `afk run review --pr 12` works without `afk intake` too: naming the subject
 creates the job.

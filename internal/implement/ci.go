@@ -93,7 +93,14 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
 	}
 
-	p.Rounds++
+	// Counted once for each head, so a replay of this decision - its commit
+	// lost to a kill, or to the lease - does not count the same red run
+	// twice. A fix round always pushes a new head: the gate hands back one
+	// that adds nothing.
+	if p.Counted != p.Pushed {
+		p.Rounds++
+		p.Counted = p.Pushed
+	}
 	if p.Rounds > d.CIRounds {
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
 	}

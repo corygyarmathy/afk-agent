@@ -164,7 +164,7 @@ func setup(t *testing.T, bound int, items ...owed.Item) *fixture {
 	t.Helper()
 	tr := newTracker()
 	s := storetest.Open(t)
-	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Bound: bound, Dir: t.TempDir()}
+	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Rounds: bound, Dir: t.TempDir()}
 	reg := transition.MustRegistry(
 		transition.Transition{Name: "decide", Kind: store.KindReview, From: "start", Run: func(ctx context.Context, in transition.In) (transition.Result, error) {
 			return b.Owe(ctx, in, "owing", owed.Record{Next: "next", Due: true, Items: items})
@@ -336,9 +336,11 @@ func TestADeletedCommandIsNotWaitedFor(t *testing.T) {
 	}
 }
 
-// Something that never appears is made as many times as the bound allows, and
-// then the read-back is an error: the job fails where someone will see it.
-func TestSomethingThatNeverAppearsRunsOut(t *testing.T) {
+// Something that never appears is made as many times as the rounds allow, and
+// then the read-back is an error: the job fails where someone will see it. The
+// attempt after that - a retry, or an operator freeing the parked job - has
+// rounds of its own, and makes it again.
+func TestSomethingThatNeverAppearsRunsOutAndAFreedJobTriesAgain(t *testing.T) {
 	f := setup(t, 2, owed.Label("hand-back-label-issue-7-abc", 7, "needs-decision"))
 	f.tr.lose["label"] = 10
 	errs := f.drive()
@@ -347,6 +349,26 @@ func TestSomethingThatNeverAppearsRunsOut(t *testing.T) {
 	}
 	if f.state() != "owing" {
 		t.Errorf("the job is in %q, want it left in the read-back", f.state())
+	}
+	if n := 10 - f.tr.lose["label"]; n != 2 {
+		t.Errorf("the label was applied %d times, want the 2 rounds", n)
+	}
+
+	// Freed: due again, in the state it parked in, with whatever stopped
+	// the label put right.
+	f.tr.lose["label"] = 0
+	ctx := context.Background()
+	if _, ok, err := f.store.Acquire(ctx, f.job.ID, "operator", now, time.Minute); err != nil || !ok {
+		t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: f.job.ID, Holder: "operator", State: "owing", NextRunAt: now, Release: true}); err != nil {
+		t.Fatal(err)
+	}
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors = %v, want the freed job to make the label again", errs)
+	}
+	if l := strings.Join(f.tr.labels[7], ","); l != "needs-decision" || f.state() != "next" {
+		t.Errorf("labels %q and the job in %q, want the label and the job moved on", l, f.state())
 	}
 }
 
@@ -370,7 +392,7 @@ func TestALostRecordGoesWhereTheKindSays(t *testing.T) {
 	}
 	// A second book on an empty directory: the first one's record is gone.
 	s, tr := f.store, f.tr
-	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Bound: 3, Dir: t.TempDir()}
+	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Rounds: 3, Dir: t.TempDir()}
 	job, err := s.Job(context.Background(), f.job.ID)
 	if err != nil {
 		t.Fatal(err)

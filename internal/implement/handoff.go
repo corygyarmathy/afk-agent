@@ -61,6 +61,11 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	if review.Reviewed(comments, d.Login, p.Pushed) {
 		return transition.Result{State: HandingOff, RunAt: in.Now}, nil
 	}
+	if review.HandedBack(comments, d.Login, p.Pushed) {
+		// Asking again would write the same review, and post it into
+		// whatever stopped the last one.
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is green on `%s`, but its review never appeared on the pull request.", git.Short(p.Pushed)), "")
+	}
 
 	wait := transition.Result{State: Reviewing, RunAt: in.Now.Add(d.CIWait)}
 	subject := store.Subject{Type: store.SubjectPR, Number: pr.Number}
@@ -80,15 +85,20 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 
 	// No review job, or one at rest with no review of this head to show
 	// for it. Asked for again under the next key, so a request lost to a
-	// kill is made again, and one that keeps coming to nothing runs out.
-	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("review-asked-pr-%d-%s", pr.Number, p.Pushed), d.Bound)
+	// kill is made again, and one that keeps coming to nothing runs out and
+	// is handed back.
+	stem := fmt.Sprintf("review-asked-pr-%d-%s", pr.Number, p.Pushed)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is green on `%s`, but its review was asked for %d times and never came.", git.Short(p.Pushed), spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
+	}
 	if err != nil {
 		return transition.Result{}, err
 	}
 	now := in.Now
-	wait.Effects = []transition.Effect{{Key: key, Do: func(ctx context.Context) error {
+	wait.Effects = []transition.Effect{{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		return d.AskReview(ctx, subject, now)
-	}}}
+	})}}
 	return wait, nil
 }
 
@@ -99,7 +109,8 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 // then performs, so a process killed between the two loses the label with its
 // key reserved. Coming to rest on the decision would leave the pull request
 // reviewed and never handed off, and nothing would look again. This reads the
-// label back, and applies it under the next key until it is there.
+// label back, and applies it under the next key until it is there, or until
+// its rounds run out and the pull request is handed back instead.
 func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result, error) {
 	p, err := d.load(in.Job.ID)
 	if errors.Is(err, os.ErrNotExist) {
@@ -120,12 +131,16 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 			return transition.Result{State: Start}, d.clear(in.Job.ID)
 		}
 	}
-	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("hand-off-pr-%d-%s", pr.Number, p.Pushed), d.Bound)
+	stem := fmt.Sprintf("hand-off-pr-%d-%s", pr.Number, p.Pushed)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is green on `%s` and it has its review, but the `%s` label was applied %d times and never appeared.", git.Short(p.Pushed), d.HandOffLabel, spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
+	}
 	if err != nil {
 		return transition.Result{}, err
 	}
 	n := pr.Number
-	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandOffLabel) }}
+	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandOffLabel) })}
 	return transition.Result{State: HandingOff, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
