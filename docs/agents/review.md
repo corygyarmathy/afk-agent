@@ -146,6 +146,10 @@ before choosing values:
   `--max-attempts`, as any transition's does, and the next run keeps the
   candidate, so an error that keeps coming back parks the job rather than
   exhausting the tier.
+- `--tier-wait` is how long an exhausted tier defers before the resume tries it
+  again from its first model, and `--tier-notify-after` is how many times in a
+  row it may run out before the operator is told:
+  [`notification.md`](notification.md).
 - `--effect-rounds` bounds the times a review, a claim or a reply is posted
   before one that never appears counts as never landing. A review out of rounds
   is handed back: a short comment on the pull request saying so, with the last
@@ -181,7 +185,5 @@ creates the job.
 
 ## What is not done yet
 
-- Exhausting a tier does not notify. It is owed before the agent runs
-  unattended: [#24](https://github.com/corygyarmathy/afk-agent/issues/24).
 - A review job's requirements are a tier and capabilities. A context minimum
   and a price ceiling are supported by the resolver and not yet parameters.

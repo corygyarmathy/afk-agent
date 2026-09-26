@@ -113,6 +113,10 @@ type Outcome struct {
 	// because the transition asked for that or because it failed and there is
 	// no backoff policy.
 	Parked bool
+
+	// Exhausted is the transition's Result.Exhausted: the job is waiting
+	// because its model tier ran out. Nil on a run that failed.
+	Exhausted error
 }
 
 // String renders an outcome as one line.
@@ -252,6 +256,7 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		To:         res.State,
 		Skipped:    skipped,
 		Parked:     res.RunAt.IsZero(),
+		Exhausted:  res.Exhausted,
 	}
 
 	// After the commit. An effect that fails here has not been lost quietly:

@@ -113,12 +113,12 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	// The stays are the candidates that failed transiently only because
 	// that is the one stay this transition makes. Another way to stay here
 	// would move the work on to the next candidate as well (#62).
-	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
+	ref, wait, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if !until.IsZero() {
-		return transition.Result{State: Deferred, RunAt: until}, nil
+	if !wait.Until.IsZero() {
+		return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
 	}
 
 	n := in.Job.Subject.Number

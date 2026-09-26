@@ -227,10 +227,12 @@ func overCeiling(p Price, ceiling Ceiling) string {
 //
 // bound is a parameter and comes from configuration; zero or negative means the
 // only bound is the length of the list. Running past the bound is not a failure
-// to hand back to a human but a job to defer, so the caller gets ErrExhausted
-// and decides when to come back. Exhausting a tier is separately a thing the
-// operator is told about (ADR 0001 §13) - it is one of the two conditions that
-// notify at all.
+// to hand back to a human but a job to defer, so the caller gets an
+// ExhaustedError and decides when to come back. Choose defers it for the tier
+// wait and says why, and the pool tells the operator about a job whose tier
+// has run out --tier-notify-after times without a model answering in between
+// (notify.Notifier.TierExhausted) - not about one that ran out once and came
+// back.
 func (c Candidates) Attempt(n, bound int) (Ref, error) {
 	limit := len(c)
 	if bound > 0 && bound < limit {
@@ -332,10 +334,11 @@ func (e *NoCandidateError) Error() string {
 
 // ExhaustedError is every candidate in the tier having been tried.
 //
-// The operator is told (ADR 0001 §13). The job is deferred rather than handed
-// back: a tier is exhausted by a provider having a bad few minutes far more
-// often than by anything needing a human, and generating work for the operator
-// on the common case is how a notification channel stops being read.
+// The job is deferred rather than handed back: a tier is exhausted by a
+// provider having a bad few minutes far more often than by anything needing a
+// human, and generating work for the operator on the common case is how a
+// notification channel stops being read. The operator is told only when the
+// tier stays exhausted, a configured number of times in a row (ADR 0001 §10).
 type ExhaustedError struct {
 	Tried    int
 	Enrolled int

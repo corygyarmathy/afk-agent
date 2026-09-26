@@ -197,17 +197,85 @@ func TestEachConditionCarriesItsOwnTag(t *testing.T) {
 	if err := n.Exhausted(ctx, window("rolling", "rate-limited", 100, "2026-09-11T18:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
+	if err := n.TierExhausted(ctx, parked("deferred", 0), notify.Episode{Since: time.Now(), Times: 1}, errors.New("tier exhausted")); err != nil {
+		t.Fatal(err)
+	}
 
 	got := r.all()
-	if len(got) != 2 {
-		t.Fatalf("%d notifications, want 2: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("%d notifications, want 3: %+v", len(got), got)
 	}
-	if got[0].tag == got[1].tag {
-		t.Fatalf("both conditions carry the tag %q", got[0].tag)
-	}
+	tags := map[string]bool{}
 	for _, m := range got {
 		if m.tag == "" {
 			t.Fatalf("a notification with no tag: %+v", m)
+		}
+		if tags[m.tag] {
+			t.Fatalf("two conditions carry the tag %q", m.tag)
+		}
+		tags[m.tag] = true
+	}
+}
+
+// An exhausted tier is told once per episode, and only once the episode has
+// gone on for TierAfter exhaustions (#76). Fewer is a bad few minutes at a
+// provider, which ADR 0001 §10 keeps off the channel; more is the same episode
+// the operator has already heard about, re-observed on every tier wait.
+func TestAnExhaustedTierIsToldOncePerEpisodeAfterTheCount(t *testing.T) {
+	ctx := context.Background()
+	r := &recorder{}
+	n := notifier(r)
+	n.TierAfter = 3
+
+	job := parked("deferred", 0)
+	since := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	cause := errors.New("tier exhausted: all 2 enrolled models tried")
+	for times := 1; times <= 5; times++ {
+		if err := n.TierExhausted(ctx, job, notify.Episode{Since: since, Times: times}, cause); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if times >= 3 {
+			want = 1
+		}
+		if got := r.all(); len(got) != want {
+			t.Fatalf("after %d exhaustions, %d notifications, want %d: %+v", times, len(got), want, got)
+		}
+	}
+
+	// A later episode of the same job is a new occurrence: the job got past
+	// the model in between, and its tier running out again is news.
+	later := notify.Episode{Since: since.Add(24 * time.Hour), Times: 3}
+	if err := n.TierExhausted(ctx, job, later, cause); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.all(); len(got) != 2 {
+		t.Fatalf("%d notifications after a second episode, want 2: %+v", len(got), got)
+	}
+}
+
+// What an exhausted tier's message has to carry: which job, on what, how long
+// it has been going on, what the tier said, and that nothing will stop it
+// on its own.
+func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
+	r := &recorder{}
+	n := notifier(r)
+	n.TierAfter = 2
+
+	job := parked("deferred", 0)
+	job.NextRunAt = time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
+	ep := notify.Episode{Since: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC), Times: 2}
+	if err := n.TierExhausted(context.Background(), job, ep, errors.New("tier exhausted: all 2 enrolled models tried")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := r.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications, want 1", len(got))
+	}
+	for _, want := range []string{"review-pr-12", "pr #12", "2 times", "2026-09-26T12:00:00Z", "all 2 enrolled models tried", "2026-09-26T14:00:00Z"} {
+		if !strings.Contains(got[0].title+"\n"+got[0].body, want) {
+			t.Errorf("the notification does not mention %q:\n%s\n%s", want, got[0].title, got[0].body)
 		}
 	}
 }

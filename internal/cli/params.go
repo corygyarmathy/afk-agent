@@ -61,6 +61,10 @@ Notification, for afk work:
 
   --notify-url <url>    AFK_NOTIFY_URL    ntfy topic to publish to
   --notify-key <path>   AFK_NOTIFY_KEY    file holding the ntfy token
+  --tier-notify-after <n>
+                        AFK_TIER_NOTIFY_AFTER
+                                          times a job's tier is exhausted before
+                                          it is told (required with --notify-url)
 
 Model choice, for afk run and afk work:
 
@@ -113,9 +117,10 @@ scheduled for nothing, and waits for an operator.
 Without --budget-key there is no admission control: work runs into the
 provider's limits and they arrive as transient failures.
 
-Without --notify-url nothing is notified. Two conditions reach the operator when
-it is set - a job that parked after a failure, and a budget window the provider
-says is spent - and nothing else does.`
+Without --notify-url nothing is notified. Three conditions reach the operator
+when it is set - a job that parked after a failure, a budget window the provider
+says is spent, and a job whose model tier has been exhausted --tier-notify-after
+times without a model answering in between - and nothing else does.`
 
 // params collects the configuration flags, before they are resolved against the
 // environment.
@@ -134,8 +139,9 @@ type params struct {
 	budgetAge string
 	budgetAt  string
 
-	notifyURL string
-	notifyKey string
+	notifyURL       string
+	notifyKey       string
+	tierNotifyAfter string
 
 	repo   string
 	appID  string
@@ -199,6 +205,7 @@ func (p *params) bindBudget(fs *flag.FlagSet) {
 func (p *params) bindNotify(fs *flag.FlagSet) {
 	fs.StringVar(&p.notifyURL, "notify-url", "", "ntfy topic to publish to (AFK_NOTIFY_URL)")
 	fs.StringVar(&p.notifyKey, "notify-key", "", "file holding the ntfy token (AFK_NOTIFY_KEY)")
+	fs.StringVar(&p.tierNotifyAfter, "tier-notify-after", "", "times a job's tier is exhausted before it is told (AFK_TIER_NOTIFY_AFTER)")
 }
 
 func (p *params) bindPool(fs *flag.FlagSet) {
@@ -435,27 +442,38 @@ func (p *params) budget() (*budget.Observer, error) {
 // and an empty token sends no Authorization header rather than a broken one. A
 // token with no URL is the half-made configuration worth refusing - it is a
 // secret read for a channel that does not exist.
+//
+// The exhaustion count is required with a URL rather than defaulted. Whether a
+// tier that ran out once is worth a notification is the deployment's call:
+// one is every bad few minutes at a provider, and a large one is a job
+// deferred for hours before anyone hears.
 func (p *params) notifier() (*notify.Notifier, error) {
 	url := optional(p.notifyURL, "AFK_NOTIFY_URL")
 	key := optional(p.notifyKey, "AFK_NOTIFY_KEY")
+	after := optional(p.tierNotifyAfter, "AFK_TIER_NOTIFY_AFTER")
 
 	if url == "" {
-		if key != "" {
-			return nil, usagef("--notify-key needs --notify-url: there is nowhere to publish to")
+		if key != "" || after != "" {
+			return nil, usagef("--notify-key and --tier-notify-after need --notify-url: there is nowhere to publish to")
 		}
 		return nil, nil
 	}
 
-	var (
-		token string
-		err   error
-	)
+	if after == "" {
+		return nil, usagef("--notify-url needs --tier-notify-after (or set AFK_TIER_NOTIFY_AFTER)")
+	}
+	tierAfter, err := count(after, "tier-notify-after")
+	if err != nil {
+		return nil, err
+	}
+
+	var token string
 	if key != "" {
 		if token, err = readKey(key, "notify-key"); err != nil {
 			return nil, err
 		}
 	}
-	return &notify.Notifier{URL: url, Token: token}, nil
+	return &notify.Notifier{URL: url, Token: token, TierAfter: tierAfter}, nil
 }
 
 // requireBudgetAge is the check a caller that reuses an observation across jobs

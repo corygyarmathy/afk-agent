@@ -1,20 +1,22 @@
 // Package notify is the operator's interrupt channel (ADR 0001 §13).
 //
-// Two conditions reach a person who is not watching: a job that has come to
-// rest and needs them, and a budget that is spent. Nothing else. Not a pull
-// request ready for review, not a job handed back, not a red CI run - those are
-// states queried when the operator chooses to look, and notifying on them
-// spends the one resource this agent exists to protect.
+// Three conditions reach a person who is not watching: a job that has come to
+// rest and needs them, a budget that is spent, and a job whose model tier
+// stays exhausted (ADR 0001 §10). Nothing else. Not a pull request ready for
+// review, not a job handed back, not a red CI run - those are states queried
+// when the operator chooses to look, and notifying on them spends the one
+// resource this agent exists to protect.
 //
-// That is why the two conditions are methods here rather than a general Send
+// That is why the conditions are methods here rather than a general Send
 // this package's callers compose messages for. The set of things that may
 // interrupt an operator is the decision; a package with one Send has no set,
-// and the next condition worth a log line arrives as a third notification
-// nobody decided on.
+// and the next condition worth a log line arrives as a notification nobody
+// decided on.
 //
 // Everything here is best effort. A notification that cannot be published is a
-// log line, and nothing downstream of it changes: by the time either condition
-// fires, the park is in the store and the budget is readable with `afk budget`.
+// log line, and nothing downstream of it changes: by the time any condition
+// fires, the park or the deferral is in the store and the budget is readable
+// with `afk budget`.
 package notify
 
 import (
@@ -31,21 +33,22 @@ import (
 )
 
 // bodyLimit is the largest body published, in bytes. ntfy refuses a message
-// over 4 KB, and a park's cause is the one part of either message with no
+// over 4 KB, and a park's cause is the one part of any message with no
 // bound on its length - a transition may return whatever error it likes. A
 // notification truncated just under the cap is still a notification; one the
 // server refused is not.
 const bodyLimit = 3800
 
-// Tags on the two conditions, as ntfy's emoji short names.
+// Tags on the conditions, as ntfy's emoji short names.
 //
-// Not parameters. A tag is how a phone tells the two apart at a glance without
-// the message being read, which makes it part of what each notification is
-// rather than a value someone would tune - and there are exactly two of them
-// for as long as ADR 0001 §13 holds.
+// Not parameters. A tag is how a phone tells the conditions apart at a glance
+// without the message being read, which makes it part of what each
+// notification is rather than a value someone would tune - and there is one
+// per condition, for as long as the set of conditions is the one above.
 const (
 	tagParked    = "octagonal_sign"
 	tagExhausted = "money_with_wings"
+	tagTier      = "hourglass"
 )
 
 // Notifier publishes to ntfy.
@@ -70,6 +73,11 @@ type Notifier struct {
 	// network" is enforced by scripts/offline-test.sh (AGENTS.md), and a seam
 	// that has to be honoured is better than one that has to be remembered.
 	Post func(ctx context.Context, title, tag, body string) error
+
+	// TierAfter is how many times one episode of an exhausted tier defers a
+	// job before the operator is told: see TierExhausted. A parameter, and at
+	// least one; the dispatcher refuses a notifier without it.
+	TierAfter int
 
 	mu sync.Mutex
 
@@ -125,7 +133,7 @@ func (n *Notifier) Parked(ctx context.Context, job store.Job, cause error) error
 // Only an actual limit. Approaching one also stops new jobs starting, and is
 // deliberately silent: the queue standing down for an hour as a rolling window
 // fills is admission control working, and a notification for it would train the
-// operator to ignore the channel that carries the other two.
+// operator to ignore the channel that carries the others.
 func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	// The reset timestamp is in the key, so the next time the same window is
 	// spent is a new occurrence. Without it, one notification would cover every
@@ -141,7 +149,7 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	//   - Admission names the window that reopens last while it can defer, and
 	//     the worst one once the timestamp has passed with the account still
 	//     limited. Those can be different windows, and a second name is a
-	//     second key. One limit episode can therefore publish twice.
+	//     second key. One spent window can therefore publish twice.
 	key := fmt.Sprintf("exhausted:%s:%s", w.Name, w.ResetsAt.Format(time.RFC3339))
 
 	body := w.String() + "\n\n"
@@ -153,6 +161,56 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	body += "\nWork already in flight is untouched, and `afk run` still works."
 
 	return n.send(ctx, key, "afk-agent: the "+w.Name+" budget is spent", tagExhausted, body)
+}
+
+// Episode is one run of a job's model tier staying exhausted: from the first
+// time the tier ran out until the job next gets past the model or parks.
+// Resuming and trying the tier again is inside it; so is a candidate failing
+// transiently on the way. The pool keeps it, because the pool is what sees every run.
+type Episode struct {
+	// Since is when the tier first ran out in this episode. With the job, it
+	// is what identifies the episode.
+	Since time.Time
+
+	// Times is how many times the tier has run out in it, this one included.
+	Times int
+}
+
+// TierExhausted reports a job whose model tier has run out and keeps running
+// out (ADR 0001 §10: exhausting a tier is a human-facing event). cause is what
+// the tier said the last time, and job is as committed, deferred.
+//
+// Once per episode, and only once the episode reaches TierAfter. A tier that
+// ran out once and came back on the next try is a bad few minutes at a
+// provider, which §10 says must not generate work for the operator; one that
+// is still out after TierAfter tries is enrolled models the provider does not
+// know, or an outage longer than the agent can wait out, and neither ends
+// without somebody looking. Each resume tries the whole tier again, so without
+// this the job defers and resumes indefinitely and the only sign is a job in
+// the store that is always deferred.
+func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep Episode, cause error) error {
+	if ep.Times < n.TierAfter {
+		return nil
+	}
+	// The episode's start is in the key, so a job that got past the model and
+	// later ran out again is a new occurrence, and one whose tier stays out is
+	// told once rather than once every tier wait.
+	key := fmt.Sprintf("tier:%s:%s", job.ID, ep.Since.Format(time.RFC3339Nano))
+
+	body := fmt.Sprintf("%s, on %s #%d, has run out of models %d times since %s.",
+		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.Format(time.RFC3339))
+	if cause != nil {
+		body += "\n\n" + cause.Error()
+	}
+	body += "\n\nIt is deferred"
+	if !job.NextRunAt.IsZero() {
+		body += " until " + job.NextRunAt.Format(time.RFC3339)
+	}
+	body += " and will try the tier again, and keeps doing so until a model answers. " +
+		"Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, or the provider is down. " +
+		"This is not repeated while the tier stays exhausted."
+
+	return n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body)
 }
 
 // send publishes a message unless this occurrence has already been published.
