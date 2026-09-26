@@ -231,6 +231,11 @@ type fixture struct {
 	run   *transition.Runner
 	reg   *transition.Registry
 	job   store.Job
+
+	// last and lastErr are what drive's last run returned: an error with
+	// Parked is the outcome dispatch tells the operator about.
+	last    transition.Outcome
+	lastErr error
 }
 
 func setup(t *testing.T, tr *tracker, m *reviewer) *fixture {
@@ -275,9 +280,11 @@ func (f *fixture) drive() []error {
 		if !ok {
 			f.t.Fatalf("no transition runs from %q", job.State)
 		}
-		if _, err := f.run.Run(context.Background(), t.Name, job.ID); err != nil {
+		out, err := f.run.Run(context.Background(), t.Name, job.ID)
+		if err != nil {
 			errs = append(errs, err)
 		}
+		f.last, f.lastErr = out, err
 		job = f.now()
 		if job.NextRunAt.IsZero() || job.State == review.Deferred {
 			return errs
@@ -527,6 +534,9 @@ func TestAnErrorThatRecursParksTheReview(t *testing.T) {
 	}
 	if len(f.model.asked) != 0 {
 		t.Errorf("asked %s, want no model run", refs(f.model.asked))
+	}
+	if f.lastErr == nil || !f.last.Parked {
+		t.Errorf("last run = %+v, %v; want a failure that parked, which dispatch tells the operator about", f.last, f.lastErr)
 	}
 }
 

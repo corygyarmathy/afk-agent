@@ -222,6 +222,11 @@ type fixture struct {
 
 	// at is the time the runner sees: now, until a test moves it on.
 	at time.Time
+
+	// last and lastErr are what drive's last run returned: an error with
+	// Parked is the outcome dispatch tells the operator about.
+	last    transition.Outcome
+	lastErr error
 }
 
 // setup is an issue on a fixture tracker, a repository with one commit on a

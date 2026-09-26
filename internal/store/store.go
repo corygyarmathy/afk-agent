@@ -143,6 +143,9 @@ type Commit struct {
 	JobID  string
 	Holder string
 
+	// State, Attempts, Stays and NextRunAt replace the job's, all four: a
+	// writer that leaves one out sets it to its zero value. A writer that
+	// means to keep one copies it from the job it read.
 	State     string
 	Attempts  int
 	Stays     int

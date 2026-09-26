@@ -219,6 +219,9 @@ func (d *Deps) book() *owed.Book {
 
 // run is `review-run`: one candidate model, in a fresh checkout of the head.
 func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
+	// The stays are the candidates that failed transiently only because
+	// that is the one stay this transition makes. Another way to stay here
+	// would move the review on to the next candidate as well (#62).
 	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err
