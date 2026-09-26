@@ -244,3 +244,15 @@ func TestATokenForbiddenAnActionIsKept(t *testing.T) {
 		t.Errorf("refused %q after a 403, want nothing", cred.refused)
 	}
 }
+
+// A failed process's error names the git command it ran, not an option to git
+// itself given before it, so a push run with -c still fails as "git push".
+func TestAnErrorNamesTheCommandAfterGitsOwnOptions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on PATH")
+	}
+	_, err := git.RunEnv(context.Background(), "", git.Isolated, "-C", t.TempDir(), "-c", "core.hooksPath=/dev/null", "no-such-command")
+	if err == nil || !strings.HasPrefix(err.Error(), "git no-such-command: ") {
+		t.Errorf("err = %v, want it to begin git no-such-command", err)
+	}
+}
