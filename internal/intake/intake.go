@@ -2,8 +2,8 @@
 //
 // A pass reads the open issues and pull requests for command comments nobody
 // has answered, and makes a job due for each (ADR 0001 §14). It keeps nothing of its own about
-// which commands exist: the queue is re-derived from the tracker on every pass
-// (ADR 0001 §5), and the store only deduplicates.
+// which commands exist: the queue is re-derived from the tracker (ADR 0001
+// §5), and the store only deduplicates.
 //
 // Answered is read from the tracker, not from the store. The transition that
 // takes a command claims it with the agent's reaction (ADR 0001 §7), so a wiped
@@ -12,6 +12,19 @@
 // that, a job that came to rest before it claimed its command - a failure
 // ahead of the claim, then a park - would be made due on every pass, which is
 // a retry loop with no bound that nobody configured.
+//
+// A pass reads a subject's comments only when the subject has changed since
+// passes last settled it, going by the listing's updated_at. A comments
+// request per open subject per poll is a rate limit the backlog grows into,
+// and a new comment moves updated_at. It takes two passes in a row reading the
+// same updated_at to settle a subject: one read can miss a comment that does
+// not move updated_at past what the listing showed - posted in the same
+// second, which is updated_at's resolution, or not yet in a comments read
+// that lags the listing - and the next pass, a poll later, does not. What a
+// pass remembers is in memory and nowhere else: a restart reads everything. A
+// comment that becomes a command without moving updated_at - its author given
+// write access afterwards, say - waits for the subject's next change or a
+// restart.
 package intake
 
 import (
@@ -77,6 +90,22 @@ type Intake struct {
 
 	// Clock is the time source. Nil means time.Now.
 	Clock func() time.Time
+
+	// seen is each open subject's updated_at as of the last pass that read it
+	// and left nothing to come back for: no error, and every command on it
+	// armed or answered. It is keyed by number, which issues and pull
+	// requests share.
+	seen map[int]reading
+}
+
+// reading is what passes last made of a subject's updated_at.
+type reading struct {
+	at time.Time
+
+	// settled is whether two passes in a row read the subject at at, so that
+	// neither a comment in the same second nor a lagging read can have hidden
+	// a command from both.
+	settled bool
 }
 
 // Key is the idempotency key a command's arming is reserved under.
@@ -88,9 +117,12 @@ func Key(commentID int64) string {
 //
 // A subject that cannot be read does not stop the rest: its error is returned
 // alongside whatever the pass did manage, and the next pass tries it again.
+// A subject that has not changed since passes settled it is not read at all.
 //
 // Making a job due is all a pass does. Whether that job starts is admission's
 // decision (ADR 0001 §11), and a pass never runs anything.
+//
+// Passes are not safe to run concurrently on the same Intake.
 func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
@@ -103,29 +135,50 @@ func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	var (
 		made []store.Job
 		errs []error
+		next = make(map[int]reading, len(open))
 	)
 	for _, is := range open {
+		last, ok := in.seen[is.Number]
+		// A zero updated_at says nothing about whether the subject changed.
+		unchanged := ok && !is.UpdatedAt.IsZero() && last.at.Equal(is.UpdatedAt)
+		if unchanged && last.settled {
+			next[is.Number] = last
+			continue
+		}
 		subject := store.Subject{Type: store.SubjectIssue, Number: is.Number}
 		name := "issue"
 		if is.PullRequest {
 			subject.Type, name = store.SubjectPR, "pull request"
 		}
-		jobs, err := in.subject(ctx, subject)
+		jobs, done, err := in.subject(ctx, subject)
 		made = append(made, jobs...)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s %d: %w", name, is.Number, err))
 		}
+		// The listing's updated_at, not a later one: a comment posted after
+		// the listing's second moves it past this, and the next pass reads it.
+		if done && err == nil {
+			next[is.Number] = reading{at: is.UpdatedAt, settled: unchanged}
+		}
 	}
+	// Built afresh from the open listing, so a closed subject is forgotten.
+	in.seen = next
 	return made, errors.Join(errs...)
 }
 
-func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.Job, error) {
+// subject reads one subject's comments and arms what they ask for. It reports
+// done when there is nothing to come back for until the subject changes:
+// every command on it is armed or answered. A command whose job was already
+// queued or held is neither - that run may park before it claims the command
+// - and the claim is a reaction, which need not move updated_at.
+func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.Job, bool, error) {
 	comments, err := in.Tracker.Comments(ctx, subject.Number)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var made []store.Job
+	done := true
 	for _, c := range comments {
 		cmd, ok := in.command(c, subject.Type)
 		if !ok {
@@ -134,27 +187,29 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 		key := Key(c.ID)
 		armed, err := in.Store.Reserved(ctx, key)
 		if err != nil {
-			return made, err
+			return made, false, err
 		}
 		if armed {
 			continue
 		}
 		answered, err := in.answered(ctx, c.ID)
 		if err != nil {
-			return made, err
+			return made, false, err
 		}
 		if answered {
 			continue
 		}
 		job, ok, err := in.arm(ctx, cmd, subject, key)
 		if err != nil {
-			return made, err
+			return made, false, err
 		}
 		if ok {
 			made = append(made, job)
+		} else {
+			done = false
 		}
 	}
-	return made, nil
+	return made, done, nil
 }
 
 // command reports whether a comment is a command this intake answers: written

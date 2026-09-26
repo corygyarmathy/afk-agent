@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // DefaultBaseURL is the API root a Client with no BaseURL talks to.
@@ -113,6 +114,9 @@ type Issue struct {
 
 	// Labels is the names of the labels on it.
 	Labels []string
+
+	// UpdatedAt is when it last changed. A new comment moves it.
+	UpdatedAt time.Time
 }
 
 // Comment is one comment on a pull request's conversation.
@@ -415,10 +419,12 @@ type wireIssue struct {
 	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (w wireIssue) issue() Issue {
-	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil}
+	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, UpdatedAt: w.UpdatedAt}
 	for _, l := range w.Labels {
 		is.Labels = append(is.Labels, l.Name)
 	}
