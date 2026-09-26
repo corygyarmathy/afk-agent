@@ -110,6 +110,9 @@ type Issue struct {
 	// PullRequest reports that this issue is a pull request. The API serves
 	// every pull request as an issue too, and says which it is.
 	PullRequest bool
+
+	// Labels is the names of the labels on it.
+	Labels []string
 }
 
 // Comment is one comment on a pull request's conversation.
@@ -408,10 +411,18 @@ type wireIssue struct {
 	// PullRequest is present, and its contents are links, only on an issue
 	// that is a pull request.
 	PullRequest *struct{} `json:"pull_request"`
+
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 }
 
 func (w wireIssue) issue() Issue {
-	return Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil}
+	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil}
+	for _, l := range w.Labels {
+		is.Labels = append(is.Labels, l.Name)
+	}
+	return is
 }
 
 type wireComment struct {

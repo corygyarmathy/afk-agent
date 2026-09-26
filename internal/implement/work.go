@@ -21,6 +21,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -288,8 +289,8 @@ func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, e
 
 // handBack returns the work to a human: a comment saying what was tried, and
 // the hand-back label, on the issue before anything was pushed, and on the
-// pull request after (dotfiles ADR 0007 §2). The job comes to rest, and its
-// workspace goes with it.
+// pull request after (dotfiles ADR 0007 §2). The job comes to rest once both
+// are read back from the tracker, and its workspace goes now.
 //
 // Keyed by the progress's nonce, so a replay says it once and a later
 // workspace that fails again says so again.
@@ -304,39 +305,36 @@ func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reaso
 			// decision, and nothing to say about it.
 			return transition.Result{State: Start}, d.clear(in.Job.ID)
 		}
-		return d.handBackPR(in, p, pr.Number, p.Nonce, reason, output)
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, reason, output)
 	}
 	n := in.Job.Subject.Number
-	body := handBackBody(n, p, "I stopped without opening a pull request. "+reason, output,
+	marker := handBackMarker(n, p, p.Nonce)
+	body := handBackBody(marker, "I stopped without opening a pull request. "+reason, output,
 		fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word))
 
-	effects := []transition.Effect{
-		{
-			Key: fmt.Sprintf("hand-back-issue-%d-%s", n, p.Nonce),
-			Do: func(ctx context.Context) error {
-				_, err := d.Tracker.Comment(ctx, n, body)
-				return err
-			},
-		},
-		{
-			Key: fmt.Sprintf("hand-back-label-issue-%d-%s", n, p.Nonce),
-			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandBackLabel) },
-		},
-	}
 	// Before the commit rather than after it. A commit that then fails
 	// leaves the job where it was with its workspace gone, and the gate
 	// starts the work over: a model run spent, and nothing said twice.
 	if err := d.clear(in.Job.ID); err != nil {
 		return transition.Result{}, err
 	}
-	return transition.Result{State: Start, Effects: effects}, nil
+	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
+		owed.Comment(fmt.Sprintf("hand-back-issue-%d-%s", n, p.Nonce), n, marker, body),
+		owed.Label(fmt.Sprintf("hand-back-label-issue-%d-%s", n, p.Nonce), n, d.HandBackLabel),
+	}})
+}
+
+// handBackMarker is the hidden line a hand-back carries: the issue, the
+// branch, and the key it is said once under, which is what it is read back by.
+func handBackMarker(n int, p progress, key string) string {
+	return fmt.Sprintf("<!-- afk:hand-back issue=%d branch=%s key=%s -->", n, p.Branch, key)
 }
 
 // handBackBody is a hand-back comment: what stopped, the end of the output
 // that said so, and what a human can do next.
-func handBackBody(n int, p progress, stopped, output, next string) string {
+func handBackBody(marker, stopped, output, next string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "<!-- afk:hand-back issue=%d branch=%s -->\n", n, p.Branch)
+	fmt.Fprintf(&b, "%s\n", marker)
 	fmt.Fprintf(&b, "%s\n", stopped)
 	if output = strings.TrimSpace(tail(output, handBackTail)); output != "" {
 		fmt.Fprintf(&b, "\nThe end of the last output:\n\n````\n%s\n````\n", output)

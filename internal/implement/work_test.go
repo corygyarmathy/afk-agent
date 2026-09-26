@@ -282,6 +282,9 @@ func TestRunningOutOfAttemptsHandsBackOnTheIssue(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(f.deps.StateDir, "progress")); len(entries) != 0 {
 		t.Errorf("progress was left behind: %v", entries)
 	}
+	if entries, _ := os.ReadDir(filepath.Join(f.deps.StateDir, "owed")); len(entries) != 0 {
+		t.Errorf("the hand-back's record was left behind: %v", entries)
+	}
 
 	// A later /implement that fails again says so again, although nothing
 	// was pushed and the branch name is free for it to take once more.
@@ -293,6 +296,29 @@ func TestRunningOutOfAttemptsHandsBackOnTheIssue(t *testing.T) {
 	}
 	if posted := f.tr.byAgent(); len(posted) != 2 {
 		t.Errorf("%d hand-backs after a second failed run, want 2", len(posted))
+	}
+}
+
+// A hand-back whose comment fails is still made, comment and label both, once
+// each (#58). The runner stops at the first effect that errors, so the label
+// was never tried either, and the job had already been moved on from the work.
+func TestAHandBackWhoseCommentFailsIsStillMade(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("a"), commit("b"), commit("c"))
+	f.tr.failComments = 1
+
+	errs := f.drive()
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "502") {
+		t.Errorf("errors: %v, want the one failed comment", errs)
+	}
+	if posted := f.tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, "without opening a pull request") {
+		t.Errorf("the agent said %+v, want one hand-back", posted)
+	}
+	if fmt.Sprint(f.tr.labels) != "[needs-decision]" {
+		t.Errorf("labels %v, want the hand-back label once", f.tr.labels)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }
 

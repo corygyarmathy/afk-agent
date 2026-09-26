@@ -28,6 +28,7 @@ const (
 	envKillDir    = "AFK_IMPLEMENT_KILL_DIR"
 	envKillAt     = "AFK_IMPLEMENT_KILL_AT"
 	envKillRemote = "AFK_IMPLEMENT_KILL_REMOTE"
+	envKillGate   = "AFK_IMPLEMENT_KILL_GATE"
 )
 
 // An /implement produces one push per commit, one pull request, and one of each
@@ -42,7 +43,7 @@ const (
 // leaves no entry: pushing the same commit twice is one push.
 func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 	for _, at := range []string{
-		"after-claim", "model", "after-model", "before-push", "after-push",
+		"before-claim", "after-claim", "model", "after-model", "before-push", "after-push",
 		"before-pr", "after-pr", "watch", "ask-review", "re-ask-review", "before-hand-off", "after-hand-off",
 	} {
 		t.Run(at, func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			doomed := implementHelper(dir, remote, at)
+			doomed := implementHelper(dir, remote, at, "")
 			doomed.Stdout, doomed.Stderr = os.Stderr, os.Stderr
 			if err := doomed.Start(); err != nil {
 				t.Fatalf("start the helper: %v", err)
@@ -70,7 +71,7 @@ func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 				t.Fatal("the helper exited cleanly; it was supposed to be killed")
 			}
 
-			if out, err := implementHelper(dir, remote, "").CombinedOutput(); err != nil {
+			if out, err := implementHelper(dir, remote, "", "").CombinedOutput(); err != nil {
 				t.Fatalf("finishing the work after the kill: %v\n%s", err, out)
 			}
 
@@ -110,9 +111,72 @@ func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 	}
 }
 
-func implementHelper(dir, remote, killAt string) *exec.Cmd {
+// Work that is handed back produces one hand-back comment and one hand-back
+// label, and killing the process between the commit that decides the hand-back
+// and either of them, then running again, still does (#58). The job has come
+// to rest by then, so nothing but the read-back would ever look again.
+func TestKillingAHandBackStillHandsBackOnce(t *testing.T) {
+	for _, at := range []string{"before-hand-back", "before-hand-back-label"} {
+		t.Run(at, func(t *testing.T) {
+			dir := t.TempDir()
+			remote := bareRemote(t)
+			ft := &killTracker{path: filepath.Join(dir, "tracker.json")}
+			if err := ft.save(killFile{Comments: []github.Comment{command(1)}, Reactions: map[int64][]github.Reaction{}, NextID: 1000}); err != nil {
+				t.Fatal(err)
+			}
+
+			// A gate nothing passes, so the work is handed back on the issue.
+			doomed := implementHelper(dir, remote, at, "false")
+			doomed.Stdout, doomed.Stderr = os.Stderr, os.Stderr
+			if err := doomed.Start(); err != nil {
+				t.Fatalf("start the helper: %v", err)
+			}
+			t.Cleanup(func() { doomed.Process.Kill() })
+			waitForFile(t, filepath.Join(dir, "ready"))
+			if err := doomed.Process.Signal(syscall.SIGKILL); err != nil {
+				t.Fatalf("kill the helper: %v", err)
+			}
+			if err := doomed.Wait(); err == nil {
+				t.Fatal("the helper exited cleanly; it was supposed to be killed")
+			}
+
+			if out, err := implementHelper(dir, remote, "", "false").CombinedOutput(); err != nil {
+				t.Fatalf("finishing the work after the kill: %v\n%s", err, out)
+			}
+
+			got, err := ft.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var handBacks, others int
+			for _, c := range got.Comments {
+				switch {
+				case c.Login != agent:
+				case strings.Contains(c.Body, "afk:hand-back"):
+					handBacks++
+				default:
+					others++
+				}
+			}
+			if handBacks != 1 || others != 0 {
+				t.Errorf("%d hand-backs and %d other comments from the agent after a kill at %s, want 1 and 0", handBacks, others, at)
+			}
+			if l := strings.Join(got.LabelsOn[issue], ","); l != "needs-decision" || len(got.Labels) != 1 {
+				t.Errorf("labels %v, and %q on the issue, after a kill at %s, want the hand-back label on the issue once", got.Labels, l, at)
+			}
+			if got.Opened != 0 {
+				t.Errorf("%d pull requests opened for work that failed its gate", got.Opened)
+			}
+			if n := len(got.Reactions[1]); n != 1 || !intake.Claimed(got.Reactions[1], agent) {
+				t.Errorf("the command has %d reactions after a kill at %s, want the one claim", n, at)
+			}
+		})
+	}
+}
+
+func implementHelper(dir, remote, killAt, gate string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRunsAnImplement$")
-	cmd.Env = append(os.Environ(), envKillDir+"="+dir, envKillAt+"="+killAt, envKillRemote+"="+remote)
+	cmd.Env = append(os.Environ(), envKillDir+"="+dir, envKillAt+"="+killAt, envKillRemote+"="+remote, envKillGate+"="+gate)
 	return cmd
 }
 
@@ -140,6 +204,10 @@ func TestHelperRunsAnImplement(t *testing.T) {
 	killAt := os.Getenv(envKillAt)
 	remote := os.Getenv(envKillRemote)
 	ft := &killTracker{path: filepath.Join(dir, "tracker.json"), killAt: killAt, ready: filepath.Join(dir, "ready"), remote: remote}
+	gate := os.Getenv(envKillGate)
+	if gate == "" {
+		gate = "test -f ok"
+	}
 
 	s, err := store.Open(filepath.Join(dir, "state.db"))
 	if err != nil {
@@ -154,7 +222,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         3,
 		TierWait:      time.Hour,
-		Gate:          "test -f ok",
+		Gate:          gate,
 		Attempts:      2,
 		HandBackLabel: "needs-decision",
 		HandOffLabel:  "needs-review",
@@ -286,6 +354,7 @@ type killFile struct {
 	PRs       []github.PullRequest
 	Opened    int
 	Labels    []string
+	LabelsOn  map[int][]string
 	NextID    int64
 }
 
@@ -325,7 +394,8 @@ func (ft *killTracker) save(f killFile) error {
 }
 
 func (ft *killTracker) Issue(_ context.Context, n int) (github.Issue, error) {
-	return github.Issue{Number: n, State: "open", Title: "Reserve a job"}, nil
+	f, err := ft.load()
+	return github.Issue{Number: n, State: "open", Title: "Reserve a job", Labels: f.LabelsOn[n]}, err
 }
 
 func (ft *killTracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
@@ -354,6 +424,9 @@ func (ft *killTracker) Reactions(_ context.Context, id int64) ([]github.Reaction
 }
 
 func (ft *killTracker) Comment(_ context.Context, _ int, body string) (github.Comment, error) {
+	if strings.Contains(body, "afk:hand-back") {
+		ft.die("before-hand-back")
+	}
 	f, err := ft.load()
 	if err != nil {
 		return github.Comment{}, err
@@ -365,6 +438,7 @@ func (ft *killTracker) Comment(_ context.Context, _ int, body string) (github.Co
 }
 
 func (ft *killTracker) React(_ context.Context, id int64, content string) error {
+	ft.die("before-claim")
 	f, err := ft.load()
 	if err != nil {
 		return err
@@ -379,13 +453,21 @@ func (ft *killTracker) React(_ context.Context, id int64, content string) error 
 	return nil
 }
 
-func (ft *killTracker) Label(_ context.Context, _ int, label string) error {
-	ft.die("before-hand-off")
+func (ft *killTracker) Label(_ context.Context, n int, label string) error {
+	if label == "needs-decision" {
+		ft.die("before-hand-back-label")
+	} else {
+		ft.die("before-hand-off")
+	}
 	f, err := ft.load()
 	if err != nil {
 		return err
 	}
 	f.Labels = append(f.Labels, label)
+	if f.LabelsOn == nil {
+		f.LabelsOn = map[int][]string{}
+	}
+	f.LabelsOn[n] = append(f.LabelsOn[n], label)
 	for i := range f.PRs {
 		f.PRs[i].Labels = append(f.PRs[i].Labels, label)
 	}
@@ -395,6 +477,12 @@ func (ft *killTracker) Label(_ context.Context, _ int, label string) error {
 	ft.die("after-hand-off")
 	return nil
 }
+
+func (ft *killTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	return nil, nil
+}
+
+func (ft *killTracker) ReactToIssue(context.Context, int, string) error { return nil }
 
 func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {
 	ft.die("before-pr")

@@ -2,6 +2,7 @@ package implement_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,10 @@ type tracker struct {
 	comments    []github.Comment
 	reactions   map[int64][]github.Reaction
 	nextID      int64
+
+	// failComments is how many of the agent's next comments fail, without
+	// landing.
+	failComments int
 }
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -65,7 +70,13 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest}, nil
+	var labels []string
+	for i, on := range tr.labelledOn {
+		if on == n {
+			labels = append(labels, tr.labels[i])
+		}
+	}
+	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest, Labels: labels}, nil
 }
 
 func (tr *tracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
@@ -89,6 +100,10 @@ func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, er
 func (tr *tracker) Comment(_ context.Context, n int, body string) (github.Comment, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	if tr.failComments > 0 {
+		tr.failComments--
+		return github.Comment{}, errors.New("POST comment: 502 Bad Gateway")
+	}
 	tr.commentedOn = append(tr.commentedOn, n)
 	tr.nextID++
 	c := github.Comment{ID: tr.nextID, Login: agent, Association: "NONE", Body: body}
@@ -106,6 +121,15 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	}
 	tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
 	return nil
+}
+
+// Nothing here claims a pull request's description: that is the review's.
+func (tr *tracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
+	return nil, nil
+}
+
+func (tr *tracker) ReactToIssue(context.Context, int, string) error {
+	return errors.New("the implement kind never claims a description")
 }
 
 func (tr *tracker) Label(_ context.Context, n int, label string) error {
@@ -233,10 +257,24 @@ func setup(t *testing.T, tr *tracker) *fixture {
 	return f
 }
 
-// claim runs `implement` once, from start.
+// claim runs `implement` once, from start, and then `implement-claimed` until
+// the claim is read back. The outcome is the claim's own.
 func (f *fixture) claim() (transition.Outcome, error) {
 	f.t.Helper()
-	return f.run.Run(context.Background(), "implement", f.job.ID)
+	out, err := f.run.Run(context.Background(), "implement", f.job.ID)
+	if err != nil {
+		return out, err
+	}
+	for range 3 {
+		if f.now().State != implement.Claiming {
+			return out, nil
+		}
+		if _, err := f.run.Run(context.Background(), "implement-claimed", f.job.ID); err != nil {
+			return out, err
+		}
+	}
+	f.t.Fatalf("the claim was never read back; the job is in %q", f.now().State)
+	return out, nil
 }
 
 func (f *fixture) now() store.Job {
@@ -321,8 +359,8 @@ func TestOnlyUnansweredCommandsAreClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(out.Performed, " "); got != "claim-comment-1" {
-		t.Errorf("performed [%s], want [claim-comment-1]", got)
+	if got := strings.Join(out.Performed, " "); got != "claim-comment-1-0" {
+		t.Errorf("performed [%s], want [claim-comment-1-0]", got)
 	}
 	for _, id := range []int64{2, 4, 5} {
 		if tr.claims(id) != 0 {

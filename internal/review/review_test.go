@@ -36,15 +36,20 @@ var (
 
 // tracker is one pull request on a fixture tracker.
 type tracker struct {
-	mu        sync.Mutex
-	state     string
-	desc      string
-	author    string
-	prEyes    []github.Reaction
-	issues    map[int]github.Issue
-	comments  []github.Comment
-	reactions map[int64][]github.Reaction
-	nextID    int64
+	mu     sync.Mutex
+	state  string
+	desc   string
+	author string
+	prEyes []github.Reaction
+
+	// losePREyes is how many of the agent's next reactions on the pull
+	// request are reported made and never land: what a kill between the
+	// commit and the reaction leaves.
+	losePREyes int
+	issues     map[int]github.Issue
+	comments   []github.Comment
+	reactions  map[int64][]github.Reaction
+	nextID     int64
 
 	// post decides what happens to a comment the agent posts: whether it
 	// lands on the pull request, and what the call reports.
@@ -135,6 +140,10 @@ func (tr *tracker) IssueReactions(context.Context, int) ([]github.Reaction, erro
 func (tr *tracker) ReactToIssue(_ context.Context, _ int, content string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	if tr.losePREyes > 0 {
+		tr.losePREyes--
+		return nil
+	}
 	for _, r := range tr.prEyes {
 		if r.Login == agent && r.Content == content {
 			return nil
@@ -142,6 +151,10 @@ func (tr *tracker) ReactToIssue(_ context.Context, _ int, content string) error 
 	}
 	tr.prEyes = append(tr.prEyes, github.Reaction{Login: agent, Content: content})
 	return nil
+}
+
+func (tr *tracker) Label(context.Context, int, string) error {
+	return errors.New("a review never labels")
 }
 
 // byAgent is the comments the agent wrote.
@@ -661,6 +674,54 @@ func TestTheImplementJobsPullRequestIsARequest(t *testing.T) {
 	}
 	if n := len(tr.prEyes); n != 1 {
 		t.Errorf("%d reactions on the pull request, want 1", n)
+	}
+}
+
+// The claim on the implement job's request is read back, like a command's: a
+// 👀 on the description lost between the commit and the reaction is made
+// again (#58). Its key lasts the life of the pull request, so nothing else
+// would ever make it.
+func TestALostClaimOnTheImplementJobsPullRequestIsMadeAgain(t *testing.T) {
+	tr := newTracker()
+	tr.author = agent
+	tr.desc = "<!-- afk:implement issue=7 -->\nCloses #7."
+	tr.losePREyes = 1
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if n := len(tr.prEyes); n != 1 || !intake.Claimed(tr.prEyes, agent) {
+		t.Errorf("reactions on the pull request = %v, want the one claim", tr.prEyes)
+	}
+	posted := tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "Asked for by the implement job for #7") {
+		t.Fatalf("agent comments = %+v, want one review saying the implement job asked", posted)
+	}
+}
+
+// An "already reviewed" reply that fails is made again, once (#58).
+func TestAFailedAlreadyReviewedReplyIsMadeAgain(t *testing.T) {
+	earlier := github.Comment{ID: 500, Login: agent, Association: "COLLABORATOR", Body: review.Marker(head) + "\nAn earlier review."}
+	tr := newTracker(earlier, command(2))
+	tr.post = func(call int) (bool, error) {
+		if call == 1 {
+			return false, errors.New("POST comment: 502 Bad Gateway")
+		}
+		return true, nil
+	}
+	f := setup(t, tr, &reviewer{})
+
+	errs := f.drive()
+	if len(errs) != 1 {
+		t.Errorf("errors: %v, want the one failed reply", errs)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 2 || !strings.Contains(posted[1].Body, "Already reviewed") {
+		t.Fatalf("agent comments = %+v, want the earlier review and one reply saying so", posted)
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }
 

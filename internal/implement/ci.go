@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -52,7 +53,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		return transition.Result{}, err
 	}
 	if at != p.Pushed {
-		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
 	}
 
 	runs, err := d.Tracker.CheckRuns(ctx, p.Pushed)
@@ -80,7 +81,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
 			}
-			return d.handBackPR(in, p, pr.Number, p.Nonce, reason, output)
+			return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, reason, output)
 		}
 		return transition.Result{State: Watching, RunAt: in.Now.Add(d.CIWait)}, nil
 	}
@@ -88,12 +89,12 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
 	if len(waiting) > 0 {
-		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
 	}
 
 	p.Rounds++
 	if p.Rounds > d.CIRounds {
-		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
 	}
 	// Back to the session that wrote the commit (dotfiles ADR 0007 §4),
 	// with a fresh count of gate attempts: a round is a new convergence on
@@ -117,7 +118,7 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil || !ok {
 		return transition.Result{State: Start}, errors.Join(err, d.clear(in.Job.ID))
 	}
-	return d.handBackPR(in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
+	return d.handBackPR(ctx, in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
 }
 
@@ -155,27 +156,18 @@ func names(runs []github.CheckRun) string {
 // closing work a human may want is not the agent's to do.
 //
 // Keyed by what is said once: the progress's nonce, or the head a lost record
-// is handed back at.
-func (d *Deps) handBackPR(in transition.In, p progress, pr int, key, reason, output string) (transition.Result, error) {
-	body := handBackBody(in.Job.Subject.Number, p, "I stopped before handing this pull request off. "+reason, output,
+// is handed back at. Read back like the hand-back on the issue.
+func (d *Deps) handBackPR(ctx context.Context, in transition.In, p progress, pr int, key, reason, output string) (transition.Result, error) {
+	marker := handBackMarker(in.Job.Subject.Number, p, key)
+	body := handBackBody(marker, "I stopped before handing this pull request off. "+reason, output,
 		fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, in.Job.Subject.Number))
-	effects := []transition.Effect{
-		{
-			Key: fmt.Sprintf("hand-back-pr-%d-%s", pr, key),
-			Do: func(ctx context.Context) error {
-				_, err := d.Tracker.Comment(ctx, pr, body)
-				return err
-			},
-		},
-		{
-			Key: fmt.Sprintf("hand-back-label-pr-%d-%s", pr, key),
-			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, pr, d.HandBackLabel) },
-		},
-	}
 	if err := d.clear(in.Job.ID); err != nil {
 		return transition.Result{}, err
 	}
-	return transition.Result{State: Start, Effects: effects}, nil
+	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
+		owed.Comment(fmt.Sprintf("hand-back-pr-%d-%s", pr, key), pr, marker, body),
+		owed.Label(fmt.Sprintf("hand-back-label-pr-%d-%s", pr, key), pr, d.HandBackLabel),
+	}})
 }
 
 func short(sha string) string {

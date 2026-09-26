@@ -18,6 +18,7 @@ the model as instructions. The agent never merges.
 | transition | from | does |
 | --- | --- | --- |
 | `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
+| `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
@@ -25,13 +26,24 @@ the model as instructions. The agent never merges.
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: back to the session, with what CI said, until `--ci-rounds` runs out, then hand-back. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
+| `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |
 
 A **hand-back** is a comment saying what stopped the work, quoting the end of
 the output that said so, plus the hand-back label. Before the push it goes on
 the issue, and nothing was pushed. After the push it goes on the pull request
-only, and the pull request stays open. Either way the job comes to rest, and
-its workspace goes with it.
+only, and the pull request stays open. Either way the job comes to rest once
+both are read back from the tracker, and its workspace goes at once.
+
+A claim, a reply and a hand-back are each read back before the job moves on
+([`internal/owed`](../../internal/owed)). The runner commits a decision before
+it performs the effects, so a process killed between the two, or an effect
+that errors, would otherwise lose the effect for good, with its key reserved.
+A lost claim leaves the command looking unanswered for ever. A lost hand-back
+is a silent stop: the job has come to rest and did not fail, so nobody is told.
+What is owed waits in `<state dir>/owed/` until it has been read back. If the
+state directory is wiped in between, a claim is decided again from the
+tracker, and a hand-back rests without being made.
 
 The review is a `review` job the implement job makes due, never a `/review`
 comment (ADR 0001 §14). The review claims the request with a 👀 on the pull request's
@@ -106,7 +118,8 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 `--ci-rounds`, plus model choice as for review. `--implement-needs` is optional.
 
 - `--model-attempts` also bounds the rounds of a push, a pull request, a review
-  request or a hand-off label that never appears, as it does review's posts.
+  request, a hand-off label, a claim, a reply or a hand-back that never
+  appears, as it does review's posts.
 - `--ci-wait` is also how often a review not yet posted is looked for.
 - `--lease` must be longer than a model run, and than the gate.
 
@@ -116,7 +129,8 @@ Every step runs with no daemon present (ADR 0001 §4). With the parameters in
 the environment:
 
 ```bash
-afk run implement          --issue 7   # claim; -> implementing
+afk run implement          --issue 7   # claim; -> claiming
+afk run implement-claimed  --issue 7   # -> implementing, once the claim is read back
 afk run implement-run      --issue 7   # the model; -> gating
 afk run implement-gate     --issue 7   # -> pushing, or back to implementing
 afk run implement-push     --issue 7   # -> opening
@@ -126,10 +140,10 @@ afk run implement-review   --issue 7   # makes review-pr-<m> due; run the review
 afk run implement-hand-off --issue 7   # -> start, not scheduled: done
 ```
 
+A hand-back moves the job to `handing-back`, and `afk run implement-handed-back
+--issue 7` rests it once the comment and the label are both there.
+
 ## What is not done yet
 
-- A claim or a hand-back lost to a kill between its commit and its effect
-  stays lost, as review's claim does. The hand-off is read back; the others
-  are not yet: [#58](https://github.com/corygyarmathy/afk-agent/issues/58).
 - What CI catches that the local gate did not is not recorded (`dotfiles`
   ADR 0007 §8).

@@ -38,11 +38,11 @@ const (
 // process did to the pull request survives it the way GitHub would.
 //
 // The points are the ones where a kill changes what has to happen next: with
-// the claim made and nothing else, in the middle of the model run, between the
+// the claim decided and not yet made (#58), with the claim made and nothing else, in the middle of the model run, between the
 // commit that moves to verifying and the request that posts, and after the post
 // has landed but before the process knows it has.
 func TestKillingAReviewAnywhereStillPostsExactlyOne(t *testing.T) {
-	for _, at := range []string{"after-claim", "model", "before-post", "after-post"} {
+	for _, at := range []string{"before-claim", "after-claim", "model", "before-post", "after-post"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
 			ft := &fileTracker{path: filepath.Join(dir, "tracker.json")}
@@ -261,6 +261,7 @@ func (ft *fileTracker) Comment(_ context.Context, _ int, body string) (github.Co
 }
 
 func (ft *fileTracker) React(_ context.Context, id int64, content string) error {
+	ft.die("before-claim")
 	f, err := ft.load()
 	if err != nil {
 		return err
@@ -282,6 +283,8 @@ func (ft *fileTracker) IssueReactions(context.Context, int) ([]github.Reaction, 
 }
 
 func (ft *fileTracker) ReactToIssue(context.Context, int, string) error { return nil }
+
+func (ft *fileTracker) Label(context.Context, int, string) error { return nil }
 
 // killModel is a model that answers, unless this is the process to be killed
 // in the middle of a model run.
