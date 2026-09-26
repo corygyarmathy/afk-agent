@@ -47,9 +47,9 @@ The happy path publishes nothing at all.
 transiently, and the resume sends it back to try the tier again from its first
 model. A tier that recovers is a bad few minutes at a provider, and says
 nothing (ADR 0001 §10). A tier that does not - every enrolled model unknown to
-the provider, or an outage longer than the wait - would otherwise defer and
-resume indefinitely, and the only sign would be a job that is always in
-`deferred`.
+the provider, an outage longer than the wait, or work whose every run outlasts
+`--model-timeout` - would otherwise defer and resume indefinitely, and the only
+sign would be a job that is always in `deferred`.
 
 So the pool counts. An **episode** starts the first time a job's tier runs out,
 and ends the next time the job moves anywhere other than back to the model or

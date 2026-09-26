@@ -203,7 +203,8 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 		body += " until " + job.NextRunAt.Format(time.RFC3339)
 	}
 	body += " and will try the tier again, and keeps doing so until a model answers. " +
-		"Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, or the provider is down. " +
+		"Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, the provider is down, " +
+		"or every run is outlasting --model-timeout. " +
 		"This is not repeated while the tier stays exhausted."
 
 	if err := n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body); err != nil {
