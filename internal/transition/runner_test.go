@@ -609,3 +609,50 @@ func TestTheLeaseIsReleasedWhenAnEffectFails(t *testing.T) {
 		t.Errorf("job = %q, lease %+v; want verifying and released", got.State, got.Lease)
 	}
 }
+
+// The lease is renewed at the commit, so the effects are held for a whole
+// lease however long the transition took: a push that starts at the end of a
+// slow transition is not left with the few seconds it had left.
+func TestTheEffectsAreHeldForAWholeLeaseFromTheCommit(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	job := seed(t, s, store.KindReview, 12, "start")
+
+	// The transition takes most of the lease: the runner reads the clock once
+	// to take the lease and again to commit.
+	start := time.Now().Truncate(time.Nanosecond)
+	late := start.Add(50 * time.Second)
+	clock := []time.Time{start, late}
+
+	var during *store.Lease
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "post", Kind: store.KindReview, From: "start",
+		Run: func(_ context.Context, in transition.In) (transition.Result, error) {
+			return transition.Result{
+				State: "verifying",
+				RunAt: in.Now,
+				Effects: []transition.Effect{{Key: "k", Do: func(ctx context.Context) error {
+					j, err := s.Job(ctx, job.ID)
+					during = j.Lease
+					return err
+				}}},
+			}, nil
+		},
+	})
+	r := runner(s, reg, func(r *transition.Runner) {
+		r.Clock = func() time.Time {
+			now := clock[0]
+			if len(clock) > 1 {
+				clock = clock[1:]
+			}
+			return now
+		}
+	})
+
+	if _, err := r.Run(ctx, "post", job.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := late.Add(r.LeaseTTL); during == nil || !during.ExpiresAt.Equal(want) {
+		t.Errorf("lease during the effect = %+v; want it to run to %v, a whole lease from the commit", during, want)
+	}
+}
