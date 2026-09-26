@@ -35,7 +35,7 @@ func TestDeniedNamesEachPathOnce(t *testing.T) {
 }
 
 func TestAMalformedDenylistIsRefused(t *testing.T) {
-	for _, list := range [][]string{nil, {""}, {"/etc/passwd"}, {"src/[a"}} {
+	for _, list := range [][]string{nil, {""}, {"/etc/passwd"}, {"src/[a"}, {"secrets/"}, {"./flake.lock"}, {"a//b"}, {"../x"}, {"a/./b"}} {
 		if err := ValidDenylist(list); err == nil {
 			t.Errorf("ValidDenylist(%q) = nil, want a refusal", list)
 		}
@@ -58,7 +58,7 @@ func TestThePushEnvironmentCarriesTheTokenForTheRemoteOnly(t *testing.T) {
 			t.Errorf("environment does not contain %q:\n%s", want, env)
 		}
 	}
-	if env := strings.Join(pushEnv("/srv/remote.git", "ghs_secret"), "\n"); strings.Contains(env, "GIT_CONFIG") {
+	if env := strings.Join(pushEnv("/srv/remote.git", "ghs_secret"), "\n"); strings.Contains(env, "extraheader") {
 		t.Errorf("a local remote was given the token:\n%s", env)
 	}
 }
