@@ -280,6 +280,35 @@ func TestARequiredCheckThatNeverRegistersHandsBackAtTheCeiling(t *testing.T) {
 	f.handedBackOnThePR("had not finished", "`gate`, required on")
 }
 
+// A head whose runs have all finished, and one failed, is red, whether or not
+// every required check has registered: it goes back for a fix rather than
+// waiting out the ceiling for a check that may never start. The fix's head is
+// watched in its turn, required checks and all.
+func TestARedRunGoesBackForAFixBeforeEveryRequiredCheckRegisters(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"), commit("fix"))
+	f.tr.required = []string{"build", "gate"}
+	first := red()
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		runs := first(sha, call)
+		if runs[len(runs)-1].Conclusion == "failure" {
+			return runs
+		}
+		return append(runs, github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 2 {
+		t.Fatalf("the model was asked %d times, want 2: a fix for the red head", len(f.model.asked))
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+	f.caught("fixes so far 0:")
+}
+
 // A pull request a human closed while CI ran is their decision: the job rests
 // and says nothing.
 func TestAPullRequestClosedWhileWatchingIsLeftAlone(t *testing.T) {

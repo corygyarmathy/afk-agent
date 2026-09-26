@@ -30,7 +30,8 @@ const approval = "action_required"
 // alone are not enough: a check that registers late - a job that needs
 // others, a second workflow - is absent rather than unfinished, and without
 // the required checks a head whose early runs are green would read as green
-// before it has run.
+// before it has run. A missing required check only holds back green: once
+// every run there has finished and one has failed, the head is red.
 //
 // Waiting is a scheduled re-entry, never a process (ADR 0001 §3): a head whose
 // checks are not finished puts the job back to sleep for the CI wait. A head
@@ -74,7 +75,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	}
 	missing := absent(required, runs)
 	var failed, waiting []github.CheckRun
-	finished := len(runs) > 0 && len(missing) == 0
+	finished := len(runs) > 0
 	for _, r := range runs {
 		switch {
 		case r.Status != "completed":
@@ -85,6 +86,11 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		case !passing[r.Conclusion]:
 			failed = append(failed, r)
 		}
+	}
+	// A missing required check holds back green, never red: a failure is
+	// already something to fix, and the fix's head is watched in its turn.
+	if len(failed) == 0 && len(missing) > 0 {
+		finished = false
 	}
 	output := ciOutput(failed)
 
