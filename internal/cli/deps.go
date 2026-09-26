@@ -42,7 +42,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	}
 	return &review.Deps{
 		Tracker:       tr.client,
-		Model:         opencode.Command{Path: m.opencode},
+		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Store:         st,
 		Checkout:      review.Git{Remote: remote(tr)}.Checkout,
 		Resolve:       resolve,
@@ -89,7 +89,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 	}
 	return &implement.Deps{
 		Tracker:       tr.client,
-		Model:         opencode.Command{Path: m.opencode},
+		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Login:         login,
 		BranchPrefix:  ip.branchPrefix,
 		Remote:        remote(tr),

@@ -138,10 +138,18 @@ optional.
   it before the agent's first push, is handed back at once rather than made
   again: every later push would be refused the same way.
 - `--ci-wait` is also how often a review not yet posted is looked for.
-- `--lease` must be longer than a model run, than the gate, and than a push.
-  The lease is renewed when a transition commits and held until its effects
-  finish, and the push is one. An effect still running when the renewed lease
-  lapses is cancelled.
+- `--model-timeout` bounds each model run. One still going when it runs out is
+  killed with everything it started, and is a transient failure: the job
+  stays, and its next run tries the next candidate. `implement-run` can make
+  two runs, when the session it continues has gone, and each has the bound.
+- `--lease` should be longer than a model run, than the gate, and than a push.
+  A lease that lapses mid-run lets another worker take the job; the store
+  refuses the first run's commit, so the work is wasted rather than
+  duplicated. Nothing ties it to `--model-timeout`: a short lease takes a dead
+  holder's job back quickly, and a long bound lets a slow run finish. The lease
+  is renewed when a transition commits and held until its effects finish, and
+  the push is one. An effect still running when the renewed lease lapses is
+  cancelled.
 
 ## Running one by hand
 

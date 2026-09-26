@@ -75,6 +75,9 @@ Model choice, for afk run and afk work:
   --review-needs <caps> AFK_REVIEW_NEEDS    capabilities a review requires, comma-separated
   --model-attempts <n>  AFK_MODEL_ATTEMPTS  candidates tried before a tier is exhausted (required)
   --tier-wait <dur>     AFK_TIER_WAIT       how long an exhausted tier defers  (required)
+  --model-timeout <dur> AFK_MODEL_TIMEOUT   the longest one model run may take (required);
+                                            one still going is killed, and the next
+                                            run tries the next candidate
   --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
 
 What a job says on the tracker, for afk run and afk work:
@@ -166,6 +169,7 @@ type params struct {
 	reviewNeeds   string
 	modelAttempts string
 	tierWait      string
+	modelTimeout  string
 
 	effectRounds  string
 	handBackLabel string
@@ -618,6 +622,7 @@ func (p *params) bindModel(fs *flag.FlagSet) {
 	fs.StringVar(&p.reviewNeeds, "review-needs", "", "capabilities a review requires, comma-separated (AFK_REVIEW_NEEDS)")
 	fs.StringVar(&p.modelAttempts, "model-attempts", "", "candidates tried before a tier is exhausted (AFK_MODEL_ATTEMPTS)")
 	fs.StringVar(&p.tierWait, "tier-wait", "", "how long an exhausted tier defers (AFK_TIER_WAIT)")
+	fs.StringVar(&p.modelTimeout, "model-timeout", "", "the longest one model run may take (AFK_MODEL_TIMEOUT)")
 }
 
 // bindImplement binds what implementing an issue needs beyond the tracker.
@@ -745,6 +750,7 @@ type modelParams struct {
 	needs        []model.Capability
 	attempts     int
 	tierWait     time.Duration
+	timeout      time.Duration
 }
 
 // model resolves model choice for a review.
@@ -790,6 +796,13 @@ func (p *params) modelFor(tierValue, tierFlag, tierEnv, needsValue, needsEnv str
 		return modelParams{}, err
 	}
 	if m.tierWait, err = duration(wait, "tier-wait"); err != nil {
+		return modelParams{}, err
+	}
+	timeout, err := required(p.modelTimeout, "model-timeout", "AFK_MODEL_TIMEOUT")
+	if err != nil {
+		return modelParams{}, err
+	}
+	if m.timeout, err = duration(timeout, "model-timeout"); err != nil {
 		return modelParams{}, err
 	}
 	if v := optional(p.catalogueAge, "AFK_CATALOGUE_AGE"); v != "" {
