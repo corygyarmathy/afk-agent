@@ -154,9 +154,9 @@ type Commit struct {
 	Keys []string
 
 	// Release drops the lease as part of the same transaction. A transition
-	// that has finished its work releases; one that is handing over to its own
-	// next step keeps the lease and lets it expire on its own if the process
-	// dies.
+	// that has finished its work releases; one that still has effects to
+	// perform, or is handing over to its own next step, keeps the lease and
+	// lets it expire on its own if the process dies.
 	Release bool
 }
 

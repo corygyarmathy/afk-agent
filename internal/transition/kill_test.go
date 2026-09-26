@@ -19,6 +19,13 @@ import (
 const (
 	envStore = "AFK_KILL_TEST_STORE"
 	envReady = "AFK_KILL_TEST_READY"
+	envWhere = "AFK_KILL_TEST_WHERE" // stopInTransition or stopInEffect
+)
+
+// Where the helper stops and waits to be killed.
+const (
+	stopInTransition = "transition"
+	stopInEffect     = "effect"
 )
 
 // Killing the process mid-transition loses that transition and nothing else.
@@ -57,23 +64,7 @@ func TestKillingTheProcessMidTransitionLosesOnlyThatTransition(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperHoldsATransitionOpen$")
-	cmd.Env = append(os.Environ(), envStore+"="+dbPath, envReady+"="+readyPath)
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start the helper: %v", err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill() })
-
-	waitFor(t, readyPath)
-
-	// SIGKILL: no defer runs, no lease is released, nothing is flushed.
-	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
-		t.Fatalf("kill the helper: %v", err)
-	}
-	if err := cmd.Wait(); err == nil {
-		t.Fatal("the helper exited cleanly; it was supposed to be killed mid-transition")
-	}
+	killHelper(t, dbPath, readyPath, stopInTransition)
 
 	s, err = store.Open(dbPath)
 	if err != nil {
@@ -141,17 +132,115 @@ func TestKillingTheProcessMidTransitionLosesOnlyThatTransition(t *testing.T) {
 	}
 }
 
+// Killing the process mid-effect loses the effect, and the lease it still held
+// runs out as a dead process's does.
+//
+// The runner holds the lease until its effects finish (#64), so this is the
+// other place a kill can land with a lease standing. The state has moved and
+// the key is reserved - that is the commit, which happened - and the job is
+// nobody else's until the lease lapses, after which the next transition runs
+// with no operator.
+func TestKillingTheProcessMidEffectLetsTheJobGoWhenTheLeaseRunsOut(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	readyPath := filepath.Join(dir, "inside-the-effect")
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	victim := seed(t, s, store.KindReview, 12, "start")
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	killHelper(t, dbPath, readyPath, stopInEffect)
+
+	s, err = store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen the store after the kill: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.Job(ctx, victim.ID)
+	if err != nil {
+		t.Fatalf("Job after the kill: %v", err)
+	}
+	if got.State != "reviewed" {
+		t.Errorf("state = %q, want reviewed: the commit came before the effect", got.State)
+	}
+	if reserved, err := s.Reserved(ctx, helperKey); err != nil || !reserved {
+		t.Errorf("Reserved(%q) = %v, %v; want true: the key is reserved with the commit", helperKey, reserved, err)
+	}
+	if got.Lease == nil || got.Lease.Holder != "the-doomed-process" {
+		t.Fatalf("lease = %+v; want the killed process's still standing", got.Lease)
+	}
+	if _, ok, err := s.Acquire(ctx, victim.ID, "another-worker", time.Now(), time.Minute); err != nil || ok {
+		t.Errorf("Acquire while the lease stands = %v, %v; want false", ok, err)
+	}
+
+	after := got.Lease.ExpiresAt.Add(time.Second)
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "verify", Kind: store.KindReview, From: "reviewed",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			return transition.Result{State: "verified"}, nil
+		},
+	})
+	r := runner(s, reg, func(r *transition.Runner) {
+		r.Holder = "another-worker"
+		r.Clock = func() time.Time { return after }
+	})
+	if _, err := r.Run(ctx, "verify", victim.ID); err != nil {
+		t.Fatalf("running the reclaimed job: %v", err)
+	}
+	if got, _ := s.Job(ctx, victim.ID); got.State != "verified" {
+		t.Errorf("state = %q, want verified", got.State)
+	}
+}
+
+// killHelper starts the helper process, waits until it has stopped where it
+// was told to, and SIGKILLs it: no defer runs, no lease is released, nothing
+// is flushed.
+func killHelper(t *testing.T, dbPath, readyPath, where string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperHoldsATransitionOpen$")
+	cmd.Env = append(os.Environ(), envStore+"="+dbPath, envReady+"="+readyPath, envWhere+"="+where)
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start the helper: %v", err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+
+	waitFor(t, readyPath)
+
+	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("kill the helper: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatalf("the helper exited cleanly; it was supposed to be killed in its %s", where)
+	}
+}
+
 // helperKey is the idempotency key of the effect the helper's transition would
 // have performed, had it ever got that far.
 const helperKey = "review-pr-12-killed"
 
-// TestHelperHoldsATransitionOpen is not a test. It is the process the test
-// above kills: it takes a real lease on a real job through the real runner, and
-// then stops inside the transition, where being killed costs the most.
+// TestHelperHoldsATransitionOpen is not a test. It is the process the tests
+// above kill: it takes a real lease on a real job through the real runner, and
+// then stops inside the transition or inside its effect, as it is told.
 func TestHelperHoldsATransitionOpen(t *testing.T) {
-	dbPath, readyPath := os.Getenv(envStore), os.Getenv(envReady)
+	dbPath, readyPath, where := os.Getenv(envStore), os.Getenv(envReady), os.Getenv(envWhere)
 	if dbPath == "" {
-		t.Skip("helper process; run by TestKillingTheProcessMidTransitionLosesOnlyThatTransition")
+		t.Skip("helper process; run by the kill tests")
+	}
+
+	// Stopped, and staying there. A sleep rather than a bare channel receive,
+	// so the runtime's deadlock detector does not end the process before the
+	// test can.
+	stop := func() {
+		signal(t, readyPath)
+		<-time.After(time.Hour)
 	}
 
 	s, err := store.Open(dbPath)
@@ -163,14 +252,18 @@ func TestHelperHoldsATransitionOpen(t *testing.T) {
 	reg := transition.MustRegistry(transition.Transition{
 		Name: "review", Kind: store.KindReview, From: "start",
 		Run: func(ctx context.Context, in transition.In) (transition.Result, error) {
-			signal(t, readyPath)
-			// Mid-transition, and staying there. A sleep rather than a bare
-			// channel receive, so the runtime's deadlock detector does not
-			// end the process before the test can.
-			<-time.After(time.Hour)
+			if where == stopInTransition {
+				stop()
+			}
 			return transition.Result{
-				State:   "reviewed",
-				Effects: []transition.Effect{{Key: helperKey, Do: func(context.Context) error { return nil }}},
+				State: "reviewed",
+				RunAt: in.Now,
+				Effects: []transition.Effect{{Key: helperKey, Do: func(context.Context) error {
+					if where == stopInEffect {
+						stop()
+					}
+					return nil
+				}}},
 			}, nil
 		},
 	})
