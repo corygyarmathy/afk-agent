@@ -129,9 +129,12 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	n := in.Job.Subject.Number
-	p, err := d.workspace(ctx, in.Job.ID, n)
+	p, pushed, err := d.workspace(ctx, in.Job.ID, n)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	if pushed {
+		return d.lost(ctx, in)
 	}
 	ws := d.workspacePath(in.Job.ID)
 	if p.Session == "" && p.Failure == "" {
@@ -220,15 +223,22 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		// next run's workspace would not recognise the clone: it would start
 		// over with the gate's count at nothing, and the bound would never
 		// be reached.
-		return d.handBack(in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, branch), "")
+		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, branch), "")
 	}
 
-	made, err := commits(ctx, ws, p.Base)
+	// A fix round's work is what it adds to the agent's last push. An amend
+	// or a rebase of that push counts; the same head again would push nothing,
+	// and CI would read the same red run.
+	since, nothing := p.Base, "The session finished without committing anything, so there is nothing to push."
+	if p.Pushed != "" {
+		since, nothing = p.Pushed, fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", short(p.Pushed))
+	}
+	made, err := commits(ctx, ws, since)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	if made == 0 {
-		return d.handBack(in, p, "The session finished without committing anything, so there is nothing to push.", "")
+		return d.handBack(ctx, in, p, nothing, "")
 	}
 
 	var failure, why string
@@ -262,7 +272,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	p.Attempts++
 	p.Failure, p.Why = failure, why
 	if p.Attempts >= d.Attempts {
-		return d.handBack(in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, why), failure)
+		return d.handBack(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, why), failure)
 	}
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
@@ -276,14 +286,26 @@ func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, e
 	return transition.Result{State: Implementing, RunAt: in.Now}, nil
 }
 
-// handBack returns the issue to a human, before anything was pushed: a
-// comment saying what was tried, and the hand-back label, on the issue
-// (dotfiles ADR 0007 §2). The job comes to rest, and its workspace goes with
-// it.
+// handBack returns the work to a human: a comment saying what was tried, and
+// the hand-back label, on the issue before anything was pushed, and on the
+// pull request after (dotfiles ADR 0007 §2). The job comes to rest, and its
+// workspace goes with it.
 //
 // Keyed by the progress's nonce, so a replay says it once and a later
 // workspace that fails again says so again.
-func (d *Deps) handBack(in transition.In, p progress, reason, output string) (transition.Result, error) {
+func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reason, output string) (transition.Result, error) {
+	if p.Pushed != "" {
+		pr, ok, err := d.pullRequestFrom(ctx, p.Branch)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		if !ok {
+			// Closed by a human while the fix ran, as in watch: their
+			// decision, and nothing to say about it.
+			return transition.Result{State: Start}, d.clear(in.Job.ID)
+		}
+		return d.handBackPR(in, p, pr.Number, p.Nonce, reason, output)
+	}
 	n := in.Job.Subject.Number
 	body := handBackBody(n, p, "I stopped without opening a pull request. "+reason, output,
 		fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word))
@@ -324,37 +346,47 @@ func handBackBody(n int, p progress, stopped, output, next string) string {
 }
 
 // workspace is the job's workspace and its progress, made afresh unless both
-// are there and agree with each other.
-func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, error) {
+// are there and agree with each other - or pushed, if they were lost after the
+// push. A new workspace then would be a new branch beside the pull request.
+func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bool, error) {
 	ws := d.workspacePath(jobID)
 	p, err := d.load(jobID)
 	if err == nil && isDir(filepath.Join(ws, ".git")) {
 		if branch, err := branchOf(ctx, ws); err == nil && branch == p.Branch {
-			return p, nil
+			return p, false, nil
 		}
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return progress{}, err
+	switch {
+	case err == nil && p.Pushed != "":
+		return progress{}, true, nil
+	case errors.Is(err, os.ErrNotExist):
+		// The progress may have gone with the lease: the tracker still
+		// says whether the work reached a pull request.
+		if _, ok, err := d.open(ctx, n); err != nil || ok {
+			return progress{}, ok, err
+		}
+	case err != nil:
+		return progress{}, false, err
 	}
 
 	// Anything else left here is from a run that did not finish, and
 	// describes nothing that was pushed.
 	if err := d.clear(jobID); err != nil {
-		return progress{}, err
+		return progress{}, false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
-		return progress{}, err
+		return progress{}, false, err
 	}
 	branch, base, into, err := prepare(ctx, d.Remote, ws, d.BranchPrefix, n)
 	if err != nil {
-		return progress{}, err
+		return progress{}, false, err
 	}
 	nonce := make([]byte, 8)
 	if _, err := rand.Read(nonce); err != nil {
-		return progress{}, err
+		return progress{}, false, err
 	}
 	p = progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base, Into: into}
-	return p, d.save(jobID, p)
+	return p, false, d.save(jobID, p)
 }
 
 // spec writes the issue, and the instructions of the command that asked for

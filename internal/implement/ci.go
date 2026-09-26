@@ -15,6 +15,10 @@ import (
 // green: it passed, it said nothing either way, or it did not apply.
 var passing = map[string]bool{"success": true, "neutral": true, "skipped": true}
 
+// approval is the conclusion of a run that waits for a human to let it run: a
+// failure no session can fix.
+const approval = "action_required"
+
 // watch is `implement-watch`: CI's reading of the pushed head, which decides
 // correctness where the local gate only decided whether to push (dotfiles
 // ADR 0007 §3).
@@ -40,36 +44,56 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		// work, and there is nothing to say about it.
 		return transition.Result{State: Start}, d.clear(in.Job.ID)
 	}
+	// Someone else's push is theirs to see through. It cancels the run on the
+	// agent's head, which would read as red, and the lease would refuse every
+	// push a fix round made on top of it.
+	at, err := remoteHead(ctx, d.Remote, p.Branch)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if at != p.Pushed {
+		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
+	}
 
 	runs, err := d.Tracker.CheckRuns(ctx, p.Pushed)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	var failed []github.CheckRun
+	var failed, waiting []github.CheckRun
 	finished := len(runs) > 0
 	for _, r := range runs {
 		switch {
 		case r.Status != "completed":
 			finished = false
+		case r.Conclusion == approval:
+			waiting = append(waiting, r)
+			failed = append(failed, r)
 		case !passing[r.Conclusion]:
 			failed = append(failed, r)
 		}
 	}
+	output := ciOutput(failed)
 
 	if !finished {
 		if !in.Now.Before(p.PushedAt.Add(d.CICeiling)) {
-			return d.handBackPR(in, p, pr.Number, fmt.Sprintf("CI had not finished on `%s` %s after the push.", short(p.Pushed), d.CICeiling), "")
+			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", short(p.Pushed), d.CICeiling)
+			if len(failed) > 0 {
+				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
+			}
+			return d.handBackPR(in, p, pr.Number, p.Nonce, reason, output)
 		}
 		return transition.Result{State: Watching, RunAt: in.Now.Add(d.CIWait)}, nil
 	}
 	if len(failed) == 0 {
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
+	if len(waiting) > 0 {
+		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
+	}
 
-	output := ciOutput(failed)
 	p.Rounds++
 	if p.Rounds > d.CIRounds {
-		return d.handBackPR(in, p, pr.Number, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
+		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
 	}
 	// Back to the session that wrote the commit (dotfiles ADR 0007 §4),
 	// with a fresh count of gate attempts: a round is a new convergence on
@@ -83,33 +107,18 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	return transition.Result{State: Implementing, RunAt: in.Now}, nil
 }
 
-// lost is a watch whose progress went with the state directory. The workspace
-// went with it, so a red run could not go back to the session that wrote the
-// branch, and a fix round would start a new branch beside the pull request.
-// The pull request is handed back instead - once per head - or, if there is
-// none, the job rests.
+// lost is work past its push whose workspace or progress went with the state
+// directory: in a watch, or in a fix round. A red run could not go back to the
+// session that wrote the branch, and a fix round would start a new branch
+// beside the pull request. The pull request is handed back instead - once per
+// head - or, if there is none, the job rests.
 func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, error) {
-	n := in.Job.Subject.Number
-	pr, ok, err := d.open(ctx, n)
+	pr, ok, err := d.open(ctx, in.Job.Subject.Number)
 	if err != nil || !ok {
 		return transition.Result{State: Start}, errors.Join(err, d.clear(in.Job.ID))
 	}
-	body := handBackBody(n, progress{Branch: pr.HeadRef}, "I stopped before handing this pull request off. The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "",
-		fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, n))
-	effects := []transition.Effect{
-		{
-			Key: fmt.Sprintf("hand-back-pr-%d-lost-%s", pr.Number, pr.HeadSHA),
-			Do: func(ctx context.Context) error {
-				_, err := d.Tracker.Comment(ctx, pr.Number, body)
-				return err
-			},
-		},
-		{
-			Key: fmt.Sprintf("hand-back-label-pr-%d-lost-%s", pr.Number, pr.HeadSHA),
-			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, pr.Number, d.HandBackLabel) },
-		},
-	}
-	return transition.Result{State: Start, Effects: effects}, d.clear(in.Job.ID)
+	return d.handBackPR(in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
+		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
 }
 
 // ciOutput is what the failing check runs said, for the session that has to
@@ -144,19 +153,22 @@ func names(runs []github.CheckRun) string {
 // else, because by then the work and the failure are both the pull request's
 // (dotfiles ADR 0007 §2). Never the hand-off. The pull request stays open:
 // closing work a human may want is not the agent's to do.
-func (d *Deps) handBackPR(in transition.In, p progress, pr int, reason, output string) (transition.Result, error) {
+//
+// Keyed by what is said once: the progress's nonce, or the head a lost record
+// is handed back at.
+func (d *Deps) handBackPR(in transition.In, p progress, pr int, key, reason, output string) (transition.Result, error) {
 	body := handBackBody(in.Job.Subject.Number, p, "I stopped before handing this pull request off. "+reason, output,
 		fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, in.Job.Subject.Number))
 	effects := []transition.Effect{
 		{
-			Key: fmt.Sprintf("hand-back-pr-%d-%s", pr, p.Nonce),
+			Key: fmt.Sprintf("hand-back-pr-%d-%s", pr, key),
 			Do: func(ctx context.Context) error {
 				_, err := d.Tracker.Comment(ctx, pr, body)
 				return err
 			},
 		},
 		{
-			Key: fmt.Sprintf("hand-back-label-pr-%d-%s", pr, p.Nonce),
+			Key: fmt.Sprintf("hand-back-label-pr-%d-%s", pr, key),
 			Do:  func(ctx context.Context) error { return d.Tracker.Label(ctx, pr, d.HandBackLabel) },
 		},
 	}
