@@ -23,7 +23,7 @@ the model as instructions. The agent never merges.
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
 | `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
-| `implement-watch` | `watching` | Reads CI's check runs on the pushed head. Unfinished: looks again after `--ci-wait`. Green: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
+| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
@@ -94,6 +94,11 @@ description, and says the implement job asked for it
   | Pull requests | write | opening the pull request, its labels | confirmed on the App by the operator, 2026-09-25 |
   | Issues | write | the claim, replies, hand-backs and labels on the issue | by GitHub's documentation; not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
+
+  The base branch's required checks are read with Metadata: read, which the
+  App already has (by GitHub's documentation; not verified). Only rulesets
+  are read: a check required by legacy branch protection is not waited for,
+  and reading it would need Administration: read.
 
   A push that touches `.github/workflows/` would also need Workflows: write.
   The denylist is expected to stop such a push first.

@@ -48,6 +48,10 @@ type tracker struct {
 	checks func(sha string, call int) []github.CheckRun
 	asks   int
 
+	// required is the checks the base branch's rules require: none, unless
+	// a test says otherwise.
+	required []string
+
 	// open decides what happens to a pull request the agent opens: whether
 	// it is opened, and what the call reports.
 	open        func(call int) (opens bool, err error)
@@ -165,6 +169,12 @@ func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, 
 		return nil, nil
 	}
 	return tr.checks(sha, tr.asks), nil
+}
+
+func (tr *tracker) RequiredChecks(context.Context, string) ([]string, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.required, nil
 }
 
 func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullRequest) (github.PullRequest, error) {

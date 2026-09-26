@@ -94,6 +94,7 @@ type Tracker interface {
 	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
+	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 }
 
 // Model runs one model. opencode.Command is one.

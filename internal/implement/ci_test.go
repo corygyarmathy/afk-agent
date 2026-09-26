@@ -228,6 +228,87 @@ func TestCIThatNeverFinishesHandsBackAtTheCeiling(t *testing.T) {
 	f.caught()
 }
 
+// A required check that has not registered yet is waited for, however green
+// the runs already there are, and the head goes on once it has run.
+func TestARequiredCheckNotYetRegisteredIsWaitedFor(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		if call == 1 {
+			return green(sha, call)
+		}
+		return append(green(sha, call), github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching || !j.NextRunAt.Equal(now.Add(f.deps.CIWait)) {
+		t.Fatalf("job = %+v, want it watching again after the CI wait", j)
+	}
+
+	f.at = now.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+}
+
+// A required check that never registers is handed back at the ceiling, like
+// one that never finishes, and the hand-back names it.
+func TestARequiredCheckThatNeverRegistersHandsBackAtTheCeiling(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.required = []string{"build", "gate"}
+	f.tr.checks = green
+
+	for f.at.Before(now.Add(f.deps.CICeiling + f.deps.CIWait)) {
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if f.now().NextRunAt.IsZero() {
+			break
+		}
+		f.at = f.at.Add(f.deps.CIWait)
+	}
+	if f.at.Before(now.Add(f.deps.CICeiling)) {
+		t.Errorf("handed back at %s, before the ceiling", f.at.Sub(now))
+	}
+	f.handedBackOnThePR("had not finished", "`gate`, required on")
+}
+
+// A head whose runs have all finished, and one failed, is red, whether or not
+// every required check has registered: it goes back for a fix rather than
+// waiting out the ceiling for a check that may never start. The fix's head is
+// watched in its turn, required checks and all.
+func TestARedRunGoesBackForAFixBeforeEveryRequiredCheckRegisters(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"), commit("fix"))
+	f.tr.required = []string{"build", "gate"}
+	first := red()
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		runs := first(sha, call)
+		if runs[len(runs)-1].Conclusion == "failure" {
+			return runs
+		}
+		return append(runs, github.CheckRun{Name: "gate", Status: "completed", Conclusion: "success"})
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 2 {
+		t.Fatalf("the model was asked %d times, want 2: a fix for the red head", len(f.model.asked))
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Errorf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+	f.caught("fixes so far 0:")
+}
+
 // A pull request a human closed while CI ran is their decision: the job rests
 // and says nothing.
 func TestAPullRequestClosedWhileWatchingIsLeftAlone(t *testing.T) {
