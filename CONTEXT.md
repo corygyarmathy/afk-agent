@@ -50,7 +50,7 @@ _Avoid_: Trigger, directive
 
 **Request**:
 Something asking for a job's work: a command, or another job making this one due, as `implement` does for the `review` of its pull request. Each request is claimed with a 👀 on what asked - the command comment, or what the asking job posted - and the work says which asked. Unattended work taken through the eligibility label is not a request: nobody asked.
-_Avoid_: Trigger, ask, invocation
+_Avoid_: Trigger, invocation
 
 **Eligibility label**:
 The issue label that opts an issue in to unattended work: the agent may take it with nobody asking, producing the same job a command would. The single label the agent reads rather than writes, and a queue filter rather than an instruction: it says this issue _may_ be worked, never that a particular thing should happen to it. Not needed for work to start - a command starts work on any issue.
