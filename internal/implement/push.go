@@ -31,11 +31,12 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 
-	head, err := relay(ctx, ws, d.relayPath(in.Job.ID), p.Branch)
+	relayDir := d.relayPath(in.Job.ID)
+	head, err := relay(ctx, ws, relayDir, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	paths, err := touched(ctx, d.relayPath(in.Job.ID), p.Base, head)
+	paths, err := touched(ctx, relayDir, p.Base, head)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -51,7 +52,6 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
-	relayDir := d.relayPath(in.Job.ID)
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
 		token, err := d.token(ctx)
 		if err != nil {

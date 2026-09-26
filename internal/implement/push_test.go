@@ -144,6 +144,51 @@ func TestADeniedPathIsNeverPushed(t *testing.T) {
 	}
 }
 
+// A merge commit lists no paths of its own to `git log`, so a denied path the
+// merge itself adds is found by diffing it against each parent.
+func TestADeniedPathAddedInAMergeIsNeverPushed(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(func(dir string) error {
+		for _, args := range [][]string{
+			{"switch", "--quiet", "--create", "side"},
+			{"commit", "--quiet", "--allow-empty", "-m", "side"},
+			{"switch", "--quiet", "-"},
+		} {
+			if _, err := run(dir, "git", args...); err != nil {
+				return err
+			}
+		}
+		if err := commit("ok")(dir); err != nil {
+			return err
+		}
+		if _, err := run(dir, "git", "merge", "--quiet", "--no-ff", "--no-commit", "side"); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".github", "workflows", "steal.yml"), []byte("x\n"), 0o644); err != nil {
+			return err
+		}
+		if _, err := run(dir, "git", "add", ".github"); err != nil {
+			return err
+		}
+		_, err := run(dir, "git", "commit", "--quiet", "--no-edit")
+		return err
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if b := f.remoteBranches(); b != "main" {
+		t.Errorf("the remote has %q, want nothing pushed", b)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "`.github/workflows/steal.yml`") {
+		t.Fatalf("comments %+v, want one hand-back naming the denied path", posted)
+	}
+}
+
 // The workspace's .git is the model's to write. A hook it leaves there never
 // runs at the push, which carries the token.
 func TestTheWorkspacesHooksDoNotRunAtThePush(t *testing.T) {
@@ -188,6 +233,65 @@ func TestTheWorkspacesConfigurationDoesNotRedirectThePush(t *testing.T) {
 	}
 	if b, _ := run(elsewhere, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "" {
 		t.Errorf("the push went to the workspace's redirect: it has %q", b)
+	}
+	if b := f.remoteBranches(); !strings.Contains(b, "afk/7-1") {
+		t.Errorf("the remote has %q, want afk/7-1 pushed there", b)
+	}
+}
+
+// Nor does the agent user's own configuration, which a session running as that
+// user can write: the push, and the read of where it landed, take none.
+func TestTheGlobalConfigurationDoesNotRedirectThePush(t *testing.T) {
+	f := setup(t, newTracker())
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.git")
+	if _, err := run("", "git", "init", "--quiet", "--bare", elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	f.model.then(func(dir string) error {
+		if err := os.WriteFile(global, []byte("[url \""+elsewhere+"\"]\n\tinsteadOf = "+f.remote+"\n"), 0o644); err != nil {
+			return err
+		}
+		t.Setenv("GIT_CONFIG_GLOBAL", global)
+		return commit("ok")(dir)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if b, _ := run(elsewhere, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "" {
+		t.Errorf("the push went to the global redirect: it has %q", b)
+	}
+	if b := f.remoteBranches(); !strings.Contains(b, "afk/7-1") {
+		t.Errorf("the remote has %q, want afk/7-1 pushed there", b)
+	}
+}
+
+// A relay found already in place, which the agent did not make in this push,
+// is not trusted: its configuration could redirect the push as the
+// workspace's could.
+func TestARelayMadeBeforeThePushIsNotReused(t *testing.T) {
+	f := setup(t, newTracker())
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.git")
+	if _, err := run("", "git", "init", "--quiet", "--bare", elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	f.model.then(func(dir string) error {
+		planted := filepath.Join(f.deps.StateDir, "relays", f.job.ID+".git")
+		if _, err := run("", "git", "init", "--quiet", "--bare", planted); err != nil {
+			return err
+		}
+		if _, err := run(planted, "git", "config", "url."+elsewhere+".insteadOf", f.remote); err != nil {
+			return err
+		}
+		return commit("ok")(dir)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if b, _ := run(elsewhere, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "" {
+		t.Errorf("the push went to the planted relay's redirect: it has %q", b)
 	}
 	if b := f.remoteBranches(); !strings.Contains(b, "afk/7-1") {
 		t.Errorf("the remote has %q, want afk/7-1 pushed there", b)
