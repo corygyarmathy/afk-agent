@@ -48,7 +48,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	}
 	// Someone else's push is theirs to see through. It cancels the run on the
 	// agent's head, which would read as red, and the lease would refuse every
-	// push a fix round made on top of it.
+	// push a fix made on top of it.
 	at, err := remoteHead(ctx, d.Remote, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
@@ -92,16 +92,23 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	}
 	d.caught(in, pr.Number, p, failed)
 	if len(waiting) > 0 {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix round cannot give.", names(waiting)), output)
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is waiting for approval to run %s, which a fix cannot give.", names(waiting)), output)
 	}
 
-	p.Rounds++
-	if p.Rounds > d.CIRounds {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d rounds of fixes.", d.CIRounds), output)
+	// Counted once for each head, so a replay of this decision - its commit
+	// lost to a kill, or to the lease - does not count the same red run
+	// twice. A fix always pushes a new head: the gate hands back one
+	// that adds nothing.
+	if p.FixedHead != p.Pushed {
+		p.Fixes++
+		p.FixedHead = p.Pushed
+	}
+	if p.Fixes > d.CIFixes {
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI still failed after %d fixes.", d.CIFixes), output)
 	}
 	// Back to the session that wrote the commit (dotfiles ADR 0007 §4),
-	// with a fresh count of gate attempts: a round is a new convergence on
-	// the local gate, and CI rounds are bounded separately from it (§5).
+	// with a fresh count of gate attempts: a fix is a new convergence on
+	// the local gate, and fixes are bounded separately from it (§5).
 	p.Attempts = 0
 	p.Failure = output
 	p.Why = fmt.Sprintf("CI failed on `%s`, the head the agent pushed: %s.", git.Short(p.Pushed), names(failed))
@@ -112,8 +119,8 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 }
 
 // lost is work past its push whose workspace or progress went with the state
-// directory: in a watch, or in a fix round. A red run could not go back to the
-// session that wrote the branch, and a fix round would start a new branch
+// directory: in a watch, or in a fix. A red run could not go back to the
+// session that wrote the branch, and a fix would start a new branch
 // beside the pull request. The pull request is handed back instead - once per
 // head - or, if there is none, the job rests.
 func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, error) {
@@ -127,7 +134,7 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 
 // caught logs what CI caught that the local gate did not: every failed run on
 // a head the gate passed before the push (dotfiles ADR 0007 §8). Whether it
-// goes back for a fix round or is handed back - out of rounds, or at the
+// goes back for a fix or is handed back - out of fixes, or at the
 // ceiling with other runs unfinished - the catch is the same one. A run
 // waiting for approval is not one: it never ran.
 //
@@ -143,8 +150,8 @@ func (d *Deps) caught(in transition.In, pr int, p progress, failed []github.Chec
 	if d.Log == nil || len(ran) == 0 {
 		return
 	}
-	d.Log(fmt.Sprintf("%s: CI caught what the local gate passed, on pull request #%d at %s, fix rounds so far %d: %s",
-		in.Job.ID, pr, git.Short(p.Pushed), p.Rounds, conclusions(ran)))
+	d.Log(fmt.Sprintf("%s: CI caught what the local gate passed, on pull request #%d at %s, fixes so far %d: %s",
+		in.Job.ID, pr, git.Short(p.Pushed), p.Fixes, conclusions(ran)))
 }
 
 // conclusions is each failing run's name and how it failed.

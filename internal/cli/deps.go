@@ -27,6 +27,10 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
+	ep, err := p.effects()
+	if err != nil {
+		return nil, err
+	}
 	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
@@ -36,15 +40,17 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, err
 	}
 	return &review.Deps{
-		Tracker:  tr.client,
-		Model:    opencode.Command{Path: m.opencode},
-		Store:    st,
-		Checkout: review.Git{Remote: cloneURL(tr)}.Checkout,
-		Resolve:  resolve,
-		Bound:    m.attempts,
-		TierWait: m.tierWait,
-		Login:    login,
-		StateDir: stateDir,
+		Tracker:       tr.client,
+		Model:         opencode.Command{Path: m.opencode},
+		Store:         st,
+		Checkout:      review.Git{Remote: cloneURL(tr)}.Checkout,
+		Resolve:       resolve,
+		Bound:         m.attempts,
+		TierWait:      m.tierWait,
+		Rounds:        ep.rounds,
+		HandBackLabel: ep.handBackLabel,
+		Login:         login,
+		StateDir:      stateDir,
 	}, nil
 }
 
@@ -61,6 +67,10 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		return nil, err
 	}
 	m, err := p.implementModel()
+	if err != nil {
+		return nil, err
+	}
+	ep, err := p.effects()
 	if err != nil {
 		return nil, err
 	}
@@ -85,14 +95,15 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
+		Rounds:        ep.rounds,
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
-		HandBackLabel: ip.handBackLabel,
+		HandBackLabel: ep.handBackLabel,
 		HandOffLabel:  ip.handOffLabel,
 		Denylist:      ip.denylist,
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
-		CIRounds:      ip.ciRounds,
+		CIFixes:       ip.ciFixes,
 		// The installation token, minted and cached by the App the tracker
 		// uses: the push is the agent on the tracker like any other request
 		// (ADR 0005).

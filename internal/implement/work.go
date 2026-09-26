@@ -83,8 +83,10 @@ type progress struct {
 	// PushedAt is when that push was seen, which the CI ceiling runs from.
 	PushedAt time.Time `json:"pushed_at,omitzero"`
 
-	// Rounds is how many times CI has sent the work back to the session.
-	Rounds int `json:"rounds,omitempty"`
+	// Fixes is how many times CI has sent the work back to the session,
+	// and FixedHead the head the last of them was counted for.
+	Fixes     int    `json:"fixes,omitempty"`
+	FixedHead string `json:"fixed_head,omitempty"`
 
 	// Session is the opencode session that wrote the branch's commits, to
 	// continue with a failure. Empty until a run succeeds.
@@ -219,7 +221,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, branch), "")
 	}
 
-	// A fix round's work is what it adds to the agent's last push. An amend
+	// A fix's work is what it adds to the agent's last push. An amend
 	// or a rebase of that push counts; the same head again would push nothing,
 	// and CI would read the same red run.
 	since, nothing := p.Base, "The session finished without committing anything, so there is nothing to push."
@@ -299,10 +301,19 @@ func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reaso
 		}
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, reason, output)
 	}
+	return d.handBackIssue(ctx, in, p, reason, output)
+}
+
+// handBackIssue is the hand-back on the issue: before anything was pushed, or
+// after a push whose pull request never opened.
+func (d *Deps) handBackIssue(ctx context.Context, in transition.In, p progress, reason, output string) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	marker := handBackMarker(n, p, p.Nonce)
-	body := handBackBody(marker, "I stopped without opening a pull request. "+reason, output,
-		fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word))
+	next := fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word)
+	if p.Pushed != "" {
+		next = fmt.Sprintf("`%s` is on the remote at `%s`, with no pull request. Open one by hand, or `%s` again to start over on a new branch.", p.Branch, git.Short(p.Pushed), Word)
+	}
+	body := handBackBody(marker, "I stopped without opening a pull request. "+reason, output, next)
 
 	// Before the commit rather than after it. A commit that then fails
 	// leaves the job where it was with its workspace gone, and the gate
@@ -505,8 +516,15 @@ func (d *Deps) relayPath(jobID string) string {
 	return filepath.Join(d.StateDir, "relays", jobID+".git")
 }
 
-// clear removes a job's workspace, its relay and its progress. It refuses with no state
-// directory, where the paths would be relative to wherever the process is.
+// notePath is where an effect's last error waits for the decision that reads it
+// back (transition.Noting).
+func (d *Deps) notePath(jobID string) string {
+	return filepath.Join(d.StateDir, "notes", jobID+".json")
+}
+
+// clear removes a job's workspace, its relay, its progress and its note. It
+// refuses with no state directory, where the paths would be relative to
+// wherever the process is.
 func (d *Deps) clear(jobID string) error {
 	if d.StateDir == "" {
 		return errors.New("implement has no state directory")
@@ -517,8 +535,10 @@ func (d *Deps) clear(jobID string) error {
 	if err := os.RemoveAll(d.relayPath(jobID)); err != nil {
 		return err
 	}
-	if err := os.Remove(d.progressPath(jobID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	for _, path := range []string{d.progressPath(jobID), d.notePath(jobID)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }

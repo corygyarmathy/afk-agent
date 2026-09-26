@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -44,7 +45,14 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
 
-	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("push-%s-%s", p.Branch, head), d.Bound)
+	// The stem is new with each head, and a head is pushed only by the work
+	// that made it: out of rounds, the work is handed back, and a later
+	// command starts it over on a new branch.
+	stem := fmt.Sprintf("push-%s-%s", p.Branch, head)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		return d.handBack(ctx, in, p, fmt.Sprintf("The push of `%s` to `%s` was made %d times and never landed.", git.Short(head), p.Branch, spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
+	}
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -52,13 +60,13 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
-	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
+	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		token, err := d.token(ctx)
 		if err != nil {
 			return err
 		}
 		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed, token)
-	}}
+	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
@@ -67,7 +75,8 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 // It reads both back from the tracker rather than trusting the effect that
 // made them. The runner commits and then performs, so a process killed between
 // the two loses the effect with its key reserved; this is what notices, and
-// sends the job round again under the next key.
+// sends the job round again under the next key. A push the lease will always
+// refuse is not sent round: it is handed back.
 func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	p, err := d.load(in.Job.ID)
@@ -93,6 +102,13 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{}, err
 	}
 	if at != p.Head {
+		if at != p.Pushed {
+			// Neither the agent's push nor the lease it was pinned to:
+			// someone else pushed to the branch, or deleted it. Every push
+			// from here is refused by the lease, so none is made.
+			return d.handBack(ctx, in, p, fmt.Sprintf("Someone else changed `%s` before the agent's push of `%s` landed: %s, and the agent does not push over anyone else's work.", p.Branch, git.Short(p.Head), where(at, p.Pushed)),
+				transition.Noted(d.notePath(in.Job.ID), fmt.Sprintf("push-%s-%s", p.Branch, p.Head)))
+		}
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	}
 	if p.Pushed != at {
@@ -110,7 +126,14 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{State: Watching, RunAt: in.Now}, nil
 	}
 
-	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("pull-request-%s", p.Branch), d.Bound)
+	// New with each workspace, as the push's stem is with each head. The
+	// branch alone is not: its name is free again once it is gone from the
+	// remote, and an earlier job's rounds under it are not this job's.
+	stem := fmt.Sprintf("pull-request-%s-%s", p.Branch, p.Nonce)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		return d.handBackIssue(ctx, in, p, fmt.Sprintf("Its pull request was asked for %d times and never opened.", spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
+	}
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -119,7 +142,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{}, err
 	}
 	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: description(n, p)}
-	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
+	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		// The key stops this run opening two. The tracker is what stops a
 		// round that follows a slow success from opening another.
 		if _, ok, err := d.open(ctx, from(p.Branch)); err != nil || ok {
@@ -127,7 +150,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		}
 		_, err := d.Tracker.CreatePullRequest(ctx, req)
 		return err
-	}}
+	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
@@ -147,6 +170,18 @@ func description(n int, p progress) string {
 	}
 	b.WriteString("Written by the agent. CI decides whether it is correct; an advisory review will be posted here as a comment once CI is green. Merging is yours.\n")
 	return b.String()
+}
+
+// where says where a branch the agent was about to push is, when it is not
+// where the agent left it.
+func where(at, lease string) string {
+	switch {
+	case at == "":
+		return "it has been deleted"
+	case lease == "":
+		return fmt.Sprintf("it is at `%s`, which the agent did not push", git.Short(at))
+	}
+	return fmt.Sprintf("it is at `%s`, not at `%s` where the agent left it", git.Short(at), git.Short(lease))
 }
 
 func (d *Deps) token(ctx context.Context) (string, error) {
