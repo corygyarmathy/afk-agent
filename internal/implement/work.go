@@ -102,12 +102,12 @@ type progress struct {
 // run is `implement-run`: one candidate model does the work in the workspace,
 // or fixes what the gate said about the work already there.
 func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
-	// A gate failure moves the job to a new state, which clears the attempt
-	// count, so the retry starts again at the first candidate - which need
+	// A gate failure moves the job to a new state, which clears the stays,
+	// so the retry starts again at the first candidate - which need
 	// not be the model that wrote the session. That is intended: opencode
 	// continues a session under any model, and the tier's order is the
 	// preference (ADR 0001 §9).
-	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Attempts, d.Bound, in.Now, d.TierWait)
+	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -173,8 +173,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 	var transient *opencode.TransientError
 	if errors.As(err, &transient) {
-		// Stay, and the attempt count moves the next run to the next
-		// candidate (ADR 0001 §10).
+		// Stay, and the stay moves the next run to the next candidate
+		// (ADR 0001 §10). An error returned instead would not: it is an
+		// attempt, and every other error here is one that is not the
+		// model's.
 		return transition.Result{State: Implementing, RunAt: in.Now}, nil
 	}
 	if err != nil {
@@ -268,7 +270,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 }
 
 // resume is `implement-resume`: the wait is over, and the tier is tried again
-// from its first model. Moving state is what clears the attempt count.
+// from its first model. Moving state is what clears the stays.
 func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, error) {
 	return transition.Result{State: Implementing, RunAt: in.Now}, nil
 }

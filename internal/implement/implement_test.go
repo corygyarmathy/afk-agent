@@ -61,6 +61,9 @@ type tracker struct {
 	// failComments is how many of the agent's next comments fail, without
 	// landing.
 	failComments int
+
+	// failIssues is how many of the next issue reads fail.
+	failIssues int
 }
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -70,6 +73,10 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	if tr.failIssues > 0 {
+		tr.failIssues--
+		return github.Issue{}, &github.StatusError{Method: "GET", URL: "/issues/7", Code: 502, Status: "502 Bad Gateway"}
+	}
 	var labels []string
 	for i, on := range tr.labelledOn {
 		if on == n {

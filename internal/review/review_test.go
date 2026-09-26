@@ -60,6 +60,10 @@ type tracker struct {
 	// yet. The read after next sees it.
 	lateFirst bool
 	late      []github.Comment
+
+	// diffErr decides what the diff read returns, by call.
+	diffErr func(call int) error
+	diffs   int
 }
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -82,7 +86,21 @@ func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	return is, nil
 }
 
-func (tr *tracker) Diff(context.Context, int) (string, error) { return diff, nil }
+func (tr *tracker) Diff(context.Context, int) (string, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.diffs++
+	if tr.diffErr != nil {
+		if err := tr.diffErr(tr.diffs); err != nil {
+			return "", err
+		}
+	}
+	return diff, nil
+}
+
+func badGateway() error {
+	return &github.StatusError{Method: "GET", URL: "/pulls/12", Code: 502, Status: "502 Bad Gateway"}
+}
 
 func (tr *tracker) Comments(context.Context, int) ([]github.Comment, error) {
 	tr.mu.Lock()
@@ -465,6 +483,50 @@ func TestAnExhaustedTierDefersAndStartsOverAfterTheWait(t *testing.T) {
 	}
 	if len(f.tr.byAgent()) != 1 {
 		t.Errorf("%d reviews after the wait, want 1", len(f.tr.byAgent()))
+	}
+}
+
+// A tracker error before the model runs is not the model's, and does not move
+// the review on to the next candidate (#62).
+func TestAnErrorBeforeTheModelRunsKeepsTheCandidate(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.diffErr = func(call int) error {
+		if call == 1 {
+			return badGateway()
+		}
+		return nil
+	}
+	f := setup(t, tr, &reviewer{})
+	f.run.Backoff = func(int) (time.Time, bool) { return now, true }
+
+	if errs := f.drive(); len(errs) != 1 {
+		t.Fatalf("errors: %v, want the one 502", errs)
+	}
+	if got := fmt.Sprint(refs(f.model.asked)); got != fmt.Sprint([]model.Ref{first}) {
+		t.Errorf("asked %s, want the first candidate, once", got)
+	}
+	if posted := f.tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, first.String()) {
+		t.Errorf("agent comments = %+v, want one review naming %s", posted, first)
+	}
+}
+
+// An error that keeps coming back parks the review where it is, as any other
+// transition's does, rather than spend the tier and defer without end (#62).
+func TestAnErrorThatRecursParksTheReview(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.diffErr = func(int) error { return badGateway() }
+	f := setup(t, tr, &reviewer{})
+	f.run.Backoff = func(attempts int) (time.Time, bool) { return now, attempts < 3 }
+
+	if errs := f.drive(); len(errs) != 3 {
+		t.Fatalf("errors: %v, want three", errs)
+	}
+	j := f.now()
+	if j.State != review.Reviewing || !j.NextRunAt.IsZero() || j.Attempts != 3 {
+		t.Errorf("job = %+v, want it parked in %s after 3 attempts", j, review.Reviewing)
+	}
+	if len(f.model.asked) != 0 {
+		t.Errorf("asked %s, want no model run", refs(f.model.asked))
 	}
 }
 
