@@ -9,7 +9,9 @@ import (
 )
 
 // Armer makes jobs due under a lease of its own, for whatever asks for work
-// outside the job's own transitions: a command, or another job.
+// outside the job's own transitions: a command, which intake arms from its own
+// pass rather than from a transition, or another job, which arms through an
+// effect (see Effect), so the runner performs it after that job's commit.
 type Armer struct {
 	Store    store.Store
 	Holder   string
