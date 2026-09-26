@@ -25,6 +25,9 @@ type tracker struct {
 	reactions map[int64][]github.Reaction
 	broken    map[int]error
 
+	// refused is the comments whose reactions cannot be read.
+	refused map[int64]error
+
 	// updated is when each subject last changed. say moves it; a subject not
 	// in it was last changed at since.
 	updated map[int]time.Time
@@ -79,6 +82,9 @@ func (tr *tracker) Comments(_ context.Context, n int) ([]github.Comment, error) 
 
 func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, error) {
 	tr.asked = append(tr.asked, id)
+	if err := tr.refused[id]; err != nil {
+		return nil, err
+	}
 	return tr.reactions[id], nil
 }
 
@@ -404,9 +410,9 @@ func TestASubjectThatCannotBeReadDoesNotStopTheRest(t *testing.T) {
 	}
 }
 
-// A pass reads the comments of a subject that changed since the last pass read
-// it, and no other: a comments request per open subject per poll is a rate
-// limit the backlog grows into. A new comment moves the subject, so it is read.
+// A pass reads the comments of a subject that changed since passes settled it,
+// and no other: a comments request per open subject per poll is a rate limit
+// the backlog grows into. A new comment moves the subject, so it is read.
 func TestAPassReadsOnlyTheSubjectsThatChanged(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{
@@ -421,6 +427,13 @@ func TestAPassReadsOnlyTheSubjectsThatChanged(t *testing.T) {
 	pass(t, in)
 	if got := fmt.Sprint(tr.read); got != "[3 12 13]" {
 		t.Fatalf("the first pass read %s, want every open subject", got)
+	}
+	// One read does not settle a subject, so the second pass reads them all
+	// again.
+	tr.read = nil
+	pass(t, in)
+	if got := fmt.Sprint(tr.read); got != "[3 12 13]" {
+		t.Fatalf("the second pass read %s, want every open subject", got)
 	}
 
 	tr.read, tr.asked = nil, nil
@@ -461,8 +474,8 @@ func TestANewIntakeReadsEverySubject(t *testing.T) {
 	}
 }
 
-// A subject whose read failed is read again on the next pass, whatever part
-// of it failed.
+// A subject whose comments could not be read is read again on the next pass,
+// and on every pass until they can.
 func TestASubjectThatFailedIsReadAgain(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{
@@ -475,6 +488,10 @@ func TestASubjectThatFailedIsReadAgain(t *testing.T) {
 		t.Fatal("a pass with a broken subject returned no error")
 	}
 
+	// The second pass settles 2, and reads 1 again.
+	if _, err := in.Pass(context.Background()); err == nil {
+		t.Fatal("the next pass returned no error")
+	}
 	tr.read = nil
 	if _, err := in.Pass(context.Background()); err == nil {
 		t.Fatal("the next pass returned no error")
@@ -486,13 +503,40 @@ func TestASubjectThatFailedIsReadAgain(t *testing.T) {
 	delete(tr.broken, 1)
 	tr.read = nil
 	pass(t, in)
-	if got := fmt.Sprint(tr.read); got != "[1]" {
-		t.Errorf("read %s once it could be read, want [1]", got)
+	pass(t, in)
+	if got := fmt.Sprint(tr.read); got != "[1 1]" {
+		t.Errorf("read %s once it could be read, want [1 1], a read and the one that settles it", got)
 	}
 	tr.read = nil
 	pass(t, in)
 	if len(tr.read) != 0 {
-		t.Errorf("read %v after it had been read, want nothing", tr.read)
+		t.Errorf("read %v after it was settled, want nothing", tr.read)
+	}
+}
+
+// A subject whose comments were read but whose command's reactions were not is
+// not settled either: the command is neither armed nor answered.
+func TestASubjectWhoseReactionsFailedIsReadAgain(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		prs:      []int{12},
+		comments: map[int][]github.Comment{12: {comment(1, "alice", "OWNER", "/review")}},
+		refused:  map[int64]error{1: errors.New("502 Bad Gateway")},
+	}
+	in := intakeFor(t, s, tr)
+	for range 2 {
+		if _, err := in.Pass(context.Background()); err == nil {
+			t.Fatal("a pass whose reactions read failed returned no error")
+		}
+	}
+
+	delete(tr.refused, 1)
+	tr.read = nil
+	if got := ids(pass(t, in)); len(got) != 1 || got[0] != "review-pr-12" {
+		t.Errorf("made due %v once the reactions could be read, want [review-pr-12]", got)
+	}
+	if got := fmt.Sprint(tr.read); got != "[12]" {
+		t.Errorf("read %s, want [12]", got)
 	}
 }
 
@@ -532,8 +576,50 @@ func TestACommandLeftToARunIsReadAgainUntilSettled(t *testing.T) {
 
 	tr.read = nil
 	pass(t, in)
-	if len(tr.read) != 0 {
-		t.Errorf("read %v once its command was armed, want nothing", tr.read)
+	pass(t, in)
+	if got := fmt.Sprint(tr.read); got != "[12]" {
+		t.Errorf("read %s once its command was armed, want [12], the read that settles it", got)
+	}
+}
+
+// A read can miss a comment the listing's updated_at already covers: one
+// posted after the read but in the same second, which is updated_at's
+// resolution, or one a comments read lagging the listing did not have yet.
+// Either way updated_at does not move again, and the next pass reads the
+// subject anyway, because one read at an updated_at does not settle it.
+func TestACommentTheReadMissedIsReadOnTheNextPass(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{12}}
+	in := intakeFor(t, s, tr)
+	pass(t, in)
+	pass(t, in)
+
+	// The subject changes, and the pass that lists the change reads it
+	// without the comment.
+	tr.updated = map[int]time.Time{12: since.Add(time.Minute)}
+	pass(t, in)
+	tr.comments = map[int][]github.Comment{12: {comment(1, "alice", "OWNER", "/review")}}
+
+	tr.read = nil
+	if got := ids(pass(t, in)); len(got) != 1 || got[0] != "review-pr-12" {
+		t.Errorf("made due %v, want [review-pr-12]", got)
+	}
+	if got := fmt.Sprint(tr.read); got != "[12]" {
+		t.Errorf("read %s, want [12]", got)
+	}
+}
+
+// A zero updated_at says nothing about whether a subject changed, so a subject
+// listed with one is read on every pass.
+func TestASubjectWithNoUpdatedAtIsReadEveryPass(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{12}, updated: map[int]time.Time{12: {}}}
+	in := intakeFor(t, s, tr)
+	for range 3 {
+		pass(t, in)
+	}
+	if got := fmt.Sprint(tr.read); got != "[12 12 12]" {
+		t.Errorf("read %s over three passes, want [12 12 12]", got)
 	}
 }
 

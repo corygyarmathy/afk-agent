@@ -13,11 +13,18 @@
 // ahead of the claim, then a park - would be made due on every pass, which is
 // a retry loop with no bound that nobody configured.
 //
-// A pass reads a subject's comments only when the subject has changed since a
-// pass last read it, going by the listing's updated_at. A comments request
-// per open subject per poll is a rate limit the backlog grows into, and a new
-// comment moves updated_at. What a pass remembers of that is in memory and
-// nowhere else: a restart reads everything, so no command is missed.
+// A pass reads a subject's comments only when the subject has changed since
+// passes last settled it, going by the listing's updated_at. A comments
+// request per open subject per poll is a rate limit the backlog grows into,
+// and a new comment moves updated_at. It takes two passes in a row reading the
+// same updated_at to settle a subject: one read can miss a comment that does
+// not move updated_at past what the listing showed - posted in the same
+// second, which is updated_at's resolution, or not yet in a comments read
+// that lags the listing - and the next pass, a poll later, does not. What a
+// pass remembers is in memory and nowhere else: a restart reads everything. A
+// comment that becomes a command without moving updated_at - its author given
+// write access afterwards, say - waits for the subject's next change or a
+// restart.
 package intake
 
 import (
@@ -84,10 +91,21 @@ type Intake struct {
 	// Clock is the time source. Nil means time.Now.
 	Clock func() time.Time
 
-	// settled is each open subject's updated_at as of the last pass that read
-	// it and left nothing to come back for: no error, and every command on it
-	// armed or answered.
-	settled map[int]time.Time
+	// seen is each open subject's updated_at as of the last pass that read it
+	// and left nothing to come back for: no error, and every command on it
+	// armed or answered. It is keyed by number, which issues and pull
+	// requests share.
+	seen map[int]reading
+}
+
+// reading is what passes last made of a subject's updated_at.
+type reading struct {
+	at time.Time
+
+	// settled is whether two passes in a row read the subject at at, so that
+	// neither a comment in the same second nor a lagging read can have hidden
+	// a command from both.
+	settled bool
 }
 
 // Key is the idempotency key a command's arming is reserved under.
@@ -99,7 +117,7 @@ func Key(commentID int64) string {
 //
 // A subject that cannot be read does not stop the rest: its error is returned
 // alongside whatever the pass did manage, and the next pass tries it again.
-// A subject that has not changed since a pass settled it is not read at all.
+// A subject that has not changed since passes settled it is not read at all.
 //
 // Making a job due is all a pass does. Whether that job starts is admission's
 // decision (ADR 0001 §11), and a pass never runs anything.
@@ -115,14 +133,16 @@ func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	}
 
 	var (
-		made    []store.Job
-		errs    []error
-		settled = make(map[int]time.Time, len(open))
+		made []store.Job
+		errs []error
+		next = make(map[int]reading, len(open))
 	)
 	for _, is := range open {
+		last, ok := in.seen[is.Number]
 		// A zero updated_at says nothing about whether the subject changed.
-		if at, ok := in.settled[is.Number]; ok && !is.UpdatedAt.IsZero() && at.Equal(is.UpdatedAt) {
-			settled[is.Number] = at
+		unchanged := ok && !is.UpdatedAt.IsZero() && last.at.Equal(is.UpdatedAt)
+		if unchanged && last.settled {
+			next[is.Number] = last
 			continue
 		}
 		subject := store.Subject{Type: store.SubjectIssue, Number: is.Number}
@@ -136,13 +156,13 @@ func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 			errs = append(errs, fmt.Errorf("%s %d: %w", name, is.Number, err))
 		}
 		// The listing's updated_at, not a later one: a comment posted after
-		// the listing moves it past this, and the next pass reads it.
+		// the listing's second moves it past this, and the next pass reads it.
 		if done && err == nil {
-			settled[is.Number] = is.UpdatedAt
+			next[is.Number] = reading{at: is.UpdatedAt, settled: unchanged}
 		}
 	}
 	// Built afresh from the open listing, so a closed subject is forgotten.
-	in.settled = settled
+	in.seen = next
 	return made, errors.Join(errs...)
 }
 
