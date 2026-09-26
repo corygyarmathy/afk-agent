@@ -86,6 +86,9 @@ func (a Armer) arm(ctx context.Context, job store.Job, start string, now time.Ti
 		NextRunAt: job.NextRunAt,
 		Keys:      keys,
 		Release:   true,
+		// The work starts afresh, and so does the tier: an episode carried
+		// over would count this work's first exhaustion into an older one.
+		EndEpisode: true,
 	})
 	if err != nil {
 		return store.Job{}, false, errors.Join(err, a.Store.Release(context.WithoutCancel(ctx), job.ID, a.Holder))
