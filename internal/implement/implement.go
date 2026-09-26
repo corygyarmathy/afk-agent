@@ -3,29 +3,40 @@
 //
 // An issue's whole way to a pull request handed off for review (#49-#53):
 //
-//	start        --implement-------->  implementing  claim every unanswered command
-//	implementing --implement-run---->  gating        one candidate model, in the workspace
-//	gating       --implement-gate--->  pushing       the local gate passed
-//	                                   implementing  it failed: back to the session that wrote it
-//	                                   start         hand-back on the issue, at rest
-//	pushing      --implement-push--->  opening       the denylist, then the push
-//	                                   start         a denied path: hand-back on the issue
-//	opening      --implement-open--->  watching      the push is on the remote, and so is the pull request
-//	                                   opening       the pull request, under the next key
-//	                                   pushing       the push is not on the remote: again
-//	watching     --implement-watch-->  reviewing     CI is green on the pushed head
-//	                                   watching      not finished: again after the CI wait
-//	                                   implementing  red: back to the session, with what CI said
-//	                                   start         out of rounds, or past the ceiling: hand-back on the pull request
-//	reviewing    --implement-review->  handing-off   the review is on the pull request
-//	                                   reviewing     the review job made due, or still on its way
-//	handing-off  --implement-hand-off> start         the hand-off label is on the pull request: at rest
-//	                                   handing-off   applied under the next key
-//	deferred     --implement-resume->  implementing  the tier again, from its first model
+//	start        --implement-------------->  claiming      claim every unanswered command
+//	claiming     --implement-claimed------>  implementing  the claims, and any reply, are on the tracker
+//	                                         start         ... and a pull request is open already: at rest
+//	                                         claiming      made again, under the next key
+//	implementing --implement-run---------->  gating        one candidate model, in the workspace
+//	gating       --implement-gate--------->  pushing       the local gate passed
+//	                                         implementing  it failed: back to the session that wrote it
+//	                                         handing-back  hand-back on the issue
+//	pushing      --implement-push--------->  opening       the denylist, then the push
+//	                                         handing-back  a denied path: hand-back on the issue
+//	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
+//	                                         opening       the pull request, under the next key
+//	                                         pushing       the push is not on the remote: again
+//	watching     --implement-watch-------->  reviewing     CI is green on the pushed head
+//	                                         watching      not finished: again after the CI wait
+//	                                         implementing  red: back to the session, with what CI said
+//	                                         handing-back  out of rounds, or past the ceiling: hand-back on the pull request
+//	reviewing    --implement-review------->  handing-off   the review is on the pull request
+//	                                         reviewing     the review job made due, or still on its way
+//	handing-off  --implement-hand-off----->  start         the hand-off label is on the pull request: at rest
+//	                                         handing-off   applied under the next key
+//	handing-back --implement-handed-back-->  start         the hand-back's comment and label are on the tracker: at rest
+//	                                         handing-back  whichever is not, made again under the next key
+//	deferred     --implement-resume------->  implementing  the tier again, from its first model
 //
 // The claim is its own transition for the reason review's is: it is committed
 // before anything can fail. A job that failed ahead of its claim would come to
 // rest with its command unanswered, and intake arms a command only once.
+//
+// A claim and a hand-back are each read back from the tracker before the job
+// moves on from them (package owed). The runner commits and then performs, so
+// either could be lost with its key reserved: a claim lost that way leaves the
+// command looking unanswered for ever, and a hand-back lost that way is a
+// silent stop - the job is at rest, and it did not fail, so nobody is told.
 //
 // The gate is its own transition, and the agent's rather than the model's. The
 // session is told to run it, and its word that it did is not the gate. Two
@@ -43,14 +54,15 @@ package implement
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -58,6 +70,7 @@ import (
 // The implement kind's states.
 const (
 	Start        = "start"
+	Claiming     = "claiming"
 	Implementing = "implementing"
 	Gating       = "gating"
 	Deferred     = "deferred"
@@ -66,6 +79,7 @@ const (
 	Watching     = "watching"
 	Reviewing    = "reviewing"
 	HandingOff   = "handing-off"
+	HandingBack  = "handing-back"
 )
 
 // Word is the command that asks for an issue to be implemented.
@@ -73,13 +87,8 @@ const Word = "/implement"
 
 // Tracker is what the implement kind reads and writes. *github.Client is one.
 type Tracker interface {
-	Issue(ctx context.Context, number int) (github.Issue, error)
+	owed.Tracker
 	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
-	Comments(ctx context.Context, number int) ([]github.Comment, error)
-	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
-	Comment(ctx context.Context, number int, body string) (github.Comment, error)
-	React(ctx context.Context, commentID int64, content string) error
-	Label(ctx context.Context, number int, label string) error
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 }
@@ -162,6 +171,7 @@ type Deps struct {
 func Transitions(d *Deps) []transition.Transition {
 	return []transition.Transition{
 		{Name: "implement", Kind: store.KindImplement, From: Start, Run: d.claim},
+		{Name: "implement-claimed", Kind: store.KindImplement, From: Claiming, Run: d.claimed},
 		{Name: "implement-run", Kind: store.KindImplement, From: Implementing, Tokens: []string{transition.HeavyBuild}, Run: d.run},
 		{Name: "implement-gate", Kind: store.KindImplement, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
 		{Name: "implement-push", Kind: store.KindImplement, From: Pushing, Run: d.pushTransition},
@@ -169,6 +179,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "implement-watch", Kind: store.KindImplement, From: Watching, Run: d.watch},
 		{Name: "implement-review", Kind: store.KindImplement, From: Reviewing, Run: d.awaitReview},
 		{Name: "implement-hand-off", Kind: store.KindImplement, From: HandingOff, Run: d.handOff},
+		{Name: "implement-handed-back", Kind: store.KindImplement, From: HandingBack, Run: d.handedBack},
 		{Name: "implement-resume", Kind: store.KindImplement, From: Deferred, Run: d.resume},
 	}
 }
@@ -190,20 +201,21 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	commands, err := d.unanswered(ctx, comments)
+	book := d.book()
+	commands, err := book.Unanswered(ctx, comments, Word)
 	if err != nil {
 		return transition.Result{}, err
 	}
 
-	var effects []transition.Effect
+	var items []owed.Item
 	for _, c := range commands {
-		effects = append(effects, d.react(c))
+		items = append(items, owed.Claim(c))
 	}
 
 	if is.State != "open" {
 		// Nothing to implement, and nothing to say: the claims are
 		// enough to stop the commands being armed again.
-		return transition.Result{State: Start, Effects: effects}, nil
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 	pr, ok, err := d.open(ctx, n)
 	if err != nil {
@@ -211,34 +223,36 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	}
 	if ok {
 		for _, c := range commands {
-			effects = append(effects, d.already(n, c, pr))
+			items = append(items, already(n, c, pr))
 		}
-		return transition.Result{State: Start, Effects: effects}, nil
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 	// Whatever an earlier run left is from work that was handed back or
 	// never finished, and this is a fresh start.
 	if err := d.clear(in.Job.ID); err != nil {
 		return transition.Result{}, err
 	}
-	return transition.Result{State: Implementing, RunAt: in.Now, Effects: effects}, nil
+	return book.Owe(ctx, in, Claiming, owed.Record{Next: Implementing, Due: true, Items: items})
 }
 
-// unanswered is the implement commands among comments that nobody has claimed.
-func (d *Deps) unanswered(ctx context.Context, comments []github.Comment) ([]github.Comment, error) {
-	var out []github.Comment
-	for _, c := range comments {
-		if !intake.IsCommand(c, d.Login, Word) {
-			continue
-		}
-		reactions, err := d.Tracker.Reactions(ctx, c.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !intake.Claimed(reactions, d.Login) {
-			out = append(out, c)
-		}
-	}
-	return out, nil
+// claimed is `implement-claimed`: on to what the claim decided, once its
+// claims and replies are on the tracker. A record lost with the state
+// directory sends the job back to claim, which reads the commands afresh.
+func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result, error) {
+	return d.book().Settle(ctx, in, transition.Result{State: Start, RunAt: in.Now})
+}
+
+// handedBack is `implement-handed-back`: at rest, once the hand-back's comment
+// and its label are both on the tracker. A record lost with the state
+// directory rests all the same. Claiming again from there would start the
+// work over with nobody asking for it.
+func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Result, error) {
+	return d.book().Settle(ctx, in, transition.Result{State: Start})
+}
+
+// book is the implement kind's way to what it owes the tracker.
+func (d *Deps) book() *owed.Book {
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Bound: d.Bound, Dir: filepath.Join(d.StateDir, "owed")}
 }
 
 // open finds the agent's open pull request for issue n, if it has one. It is
@@ -293,19 +307,8 @@ func digits(s string) bool {
 	return true
 }
 
-func (d *Deps) react(c github.Comment) transition.Effect {
-	return transition.Effect{
-		Key: fmt.Sprintf("claim-comment-%d", c.ID),
-		Do:  func(ctx context.Context) error { return d.Tracker.React(ctx, c.ID, intake.Claim) },
-	}
-}
-
-func (d *Deps) already(n int, c github.Comment, pr github.PullRequest) transition.Effect {
-	return transition.Effect{
-		Key: fmt.Sprintf("open-pr-comment-%d", c.ID),
-		Do: func(ctx context.Context) error {
-			_, err := d.Tracker.Comment(ctx, n, fmt.Sprintf("Already implemented in #%d, which is still open. Comment on that pull request, or close it and `%s` again to start over.", pr.Number, Word))
-			return err
-		},
-	}
+// already is the reply to a command on an issue whose pull request is open.
+func already(n int, c github.Comment, pr github.PullRequest) owed.Item {
+	return owed.Reply(fmt.Sprintf("open-pr-comment-%d", c.ID), n, c,
+		fmt.Sprintf("Already implemented in #%d, which is still open. Comment on that pull request, or close it and `%s` again to start over.", pr.Number, Word))
 }

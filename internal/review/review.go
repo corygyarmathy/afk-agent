@@ -1,15 +1,18 @@
 // Package review is the review job kind's transitions: advise on a pull
 // request, once per head, and never gate it.
 //
-// A review is five transitions rather than one, because the work is five
+// A review is six transitions rather than one, because the work is six
 // things that fail differently and a transition is the unit that fails
 // (ADR 0001 §2):
 //
-//	start     --review-------->  reviewing   claim every unanswered request
-//	reviewing --review-run---->  posting     one candidate model, in a checkout
-//	posting   --review-post--->  verifying   post the reply, under a numbered key
-//	verifying --review-verify->  start       at rest, once the reply is on the PR
-//	deferred  --review-resume->  reviewing   the tier again, from its first model
+//	start     --review--------->  claiming    claim every unanswered request
+//	claiming  --review-claimed->  reviewing   the claims, and any reply, are on the tracker
+//	                              start       ... and the head was reviewed already: at rest
+//	                              claiming    made again, under the next key
+//	reviewing --review-run----->  posting     one candidate model, in a checkout
+//	posting   --review-post---->  verifying   post the reply, under a numbered key
+//	verifying --review-verify-->  start       at rest, once the reply is on the PR
+//	deferred  --review-resume-->  reviewing   the tier again, from its first model
 //
 // A request is a /review command, or the implement job making this job due
 // for the pull request it opened (ADR 0001 §14, as amended for #40). The
@@ -18,11 +21,16 @@
 // with a 👀 on the pull request's description, which it wrote, so the claim is
 // on what asked and never on anything a human wrote.
 //
-// Two of the transitions exist for reasons worth stating where the states are.
+// Three of the transitions exist for reasons worth stating where the states
+// are.
 //
 // The claim is its own transition so that it is committed before anything can
 // fail. A job that failed ahead of its claim would come to rest with its
 // command unanswered, and intake arms a command only once.
+//
+// review-claimed reads the claim back, for the reason review-verify reads the
+// review back (package owed): a 👀 lost between the commit and the reaction
+// would leave the command looking unanswered for ever.
 //
 // Verify exists because the runner commits and then performs the effect. A
 // process killed between the two loses the comment, and by then the command is
@@ -50,6 +58,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -57,6 +66,7 @@ import (
 // The review kind's states.
 const (
 	Start     = "start"
+	Claiming  = "claiming"
 	Reviewing = "reviewing"
 	Posting   = "posting"
 	Verifying = "verifying"
@@ -73,15 +83,9 @@ var prompt = template.Must(template.New("review").Parse(promptText))
 
 // Tracker is what the review reads and writes. *github.Client is one.
 type Tracker interface {
+	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
-	Issue(ctx context.Context, number int) (github.Issue, error)
 	Diff(ctx context.Context, number int) (string, error)
-	Comments(ctx context.Context, number int) ([]github.Comment, error)
-	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
-	Comment(ctx context.Context, number int, body string) (github.Comment, error)
-	React(ctx context.Context, commentID int64, content string) error
-	IssueReactions(ctx context.Context, number int) ([]github.Reaction, error)
-	ReactToIssue(ctx context.Context, number int, content string) error
 }
 
 // Model runs one model. opencode.Command is one.
@@ -99,8 +103,8 @@ type Deps struct {
 	Tracker Tracker
 	Model   Model
 
-	// Store is read, never written: review-post asks it which posting round is
-	// next. Writing is the runner's.
+	// Store is read, never written: review-post and review-claimed ask it
+	// which round is next. Writing is the runner's.
 	Store store.Store
 
 	Checkout Checkout
@@ -111,8 +115,8 @@ type Deps struct {
 	Resolve func(ctx context.Context) (model.Candidates, error)
 
 	// Bound is the attempt bound: how many candidates a review tries before
-	// the tier counts as exhausted, and how many times a reply is posted
-	// before a reply that never appears is handed back. A parameter.
+	// the tier counts as exhausted, and how many times a reply or a claim is
+	// made before one that never appears is an error. A parameter.
 	Bound int
 
 	// TierWait is how long an exhausted tier defers the job. A parameter: the
@@ -133,6 +137,7 @@ type Deps struct {
 func Transitions(d *Deps) []transition.Transition {
 	return []transition.Transition{
 		{Name: "review", Kind: store.KindReview, From: Start, Run: d.claim},
+		{Name: "review-claimed", Kind: store.KindReview, From: Claiming, Run: d.claimed},
 		{Name: "review-run", Kind: store.KindReview, From: Reviewing, Run: d.run},
 		{Name: "review-post", Kind: store.KindReview, From: Posting, Run: d.post},
 		{Name: "review-verify", Kind: store.KindReview, From: Verifying, Run: d.verify},
@@ -159,36 +164,34 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	commands, err := d.unanswered(ctx, comments)
+	book := d.book()
+	commands, err := book.Unanswered(ctx, comments, Word)
 	if err != nil {
 		return transition.Result{}, err
 	}
 
-	var effects []transition.Effect
+	var items []owed.Item
 	for _, c := range commands {
-		effects = append(effects, d.react(c))
+		items = append(items, owed.Claim(c))
 	}
 	asked, err := d.askedByJob(ctx, pr)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	if asked {
-		effects = append(effects, transition.Effect{
-			Key: fmt.Sprintf("claim-pr-%d", n),
-			Do:  func(ctx context.Context) error { return d.Tracker.ReactToIssue(ctx, n, intake.Claim) },
-		})
+		items = append(items, owed.ClaimPullRequest(n))
 	}
 
 	if pr.State != "open" {
 		// Nothing to review on a closed pull request, and nothing to say:
 		// the claims are enough to stop the commands being armed again.
-		return transition.Result{State: Start, Effects: effects}, nil
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 	if d.reviewed(comments, pr.HeadSHA) {
 		for _, c := range commands {
-			effects = append(effects, d.already(n, c, pr.HeadSHA))
+			items = append(items, already(n, c, pr.HeadSHA))
 		}
-		return transition.Result{State: Start, Effects: effects}, nil
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 	if asked {
 		// Recorded here, where the request is taken, for the review to say
@@ -198,7 +201,19 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 			return transition.Result{}, err
 		}
 	}
-	return transition.Result{State: Reviewing, RunAt: in.Now, Effects: effects}, nil
+	return book.Owe(ctx, in, Claiming, owed.Record{Next: Reviewing, Due: true, Items: items})
+}
+
+// claimed is `review-claimed`: on to what the claim decided, once its claims
+// and replies are on the tracker. A record lost with the state directory sends
+// the job back to claim, which reads the requests afresh.
+func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result, error) {
+	return d.book().Settle(ctx, in, transition.Result{State: Start, RunAt: in.Now})
+}
+
+// book is the review's way to what it owes the tracker.
+func (d *Deps) book() *owed.Book {
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Bound: d.Bound, Dir: filepath.Join(d.StateDir, "owed")}
 }
 
 // run is `review-run`: one candidate model, in a fresh checkout of the head.
@@ -303,9 +318,9 @@ func (d *Deps) post(ctx context.Context, in transition.In) (transition.Result, e
 	}
 
 	n := in.Job.Subject.Number
-	key, err := d.round(ctx, n, p.Head)
+	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("review-pr-%d-%s", n, p.Head), d.Bound)
 	if err != nil {
-		return transition.Result{}, err
+		return transition.Result{}, fmt.Errorf("the review of %s never appeared on pull request %d: %w", short(p.Head), n, err)
 	}
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
 		// The key stops this run posting twice. The tracker is what stops a
@@ -388,24 +403,6 @@ func (d *Deps) askedByJob(ctx context.Context, pr github.PullRequest) (bool, err
 	return !intake.Claimed(reactions, d.Login), nil
 }
 
-// unanswered is the review commands among comments that nobody has claimed.
-func (d *Deps) unanswered(ctx context.Context, comments []github.Comment) ([]github.Comment, error) {
-	var out []github.Comment
-	for _, c := range comments {
-		if !intake.IsCommand(c, d.Login, Word) {
-			continue
-		}
-		reactions, err := d.Tracker.Reactions(ctx, c.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !intake.Claimed(reactions, d.Login) {
-			out = append(out, c)
-		}
-	}
-	return out, nil
-}
-
 // reviewed reports whether the agent has posted a review of head.
 func (d *Deps) reviewed(comments []github.Comment, head string) bool {
 	marker := Marker(head)
@@ -417,42 +414,10 @@ func (d *Deps) reviewed(comments []github.Comment, head string) bool {
 	return false
 }
 
-func (d *Deps) react(c github.Comment) transition.Effect {
-	return transition.Effect{
-		Key: fmt.Sprintf("claim-comment-%d", c.ID),
-		Do:  func(ctx context.Context) error { return d.Tracker.React(ctx, c.ID, intake.Claim) },
-	}
-}
-
-func (d *Deps) already(n int, c github.Comment, head string) transition.Effect {
-	return transition.Effect{
-		Key: fmt.Sprintf("already-comment-%d", c.ID),
-		Do: func(ctx context.Context) error {
-			_, err := d.Tracker.Comment(ctx, n, fmt.Sprintf("Already reviewed at `%s`; nothing has changed since. Push a new commit and `%s` again for another review.", short(head), Word))
-			return err
-		},
-	}
-}
-
-// round is the key for the next posting of head's review: the first of
-// review-pr-<n>-<head>-<i> not yet reserved. Deterministic across replays of
-// the same round, and new for a round that follows one whose post was lost.
-func (d *Deps) round(ctx context.Context, n int, head string) (string, error) {
-	bound := d.Bound
-	if bound < 1 {
-		bound = 1
-	}
-	for i := range bound {
-		key := fmt.Sprintf("review-pr-%d-%s-%d", n, head, i)
-		reserved, err := d.Store.Reserved(ctx, key)
-		if err != nil {
-			return "", err
-		}
-		if !reserved {
-			return key, nil
-		}
-	}
-	return "", fmt.Errorf("the review of %s was posted %d times and never appeared on pull request %d", short(head), bound, n)
+// already is the reply to a command for a head that has its review.
+func already(n int, c github.Comment, head string) owed.Item {
+	return owed.Reply(fmt.Sprintf("already-comment-%d", c.ID), n, c,
+		fmt.Sprintf("Already reviewed at `%s`; nothing has changed since. Push a new commit and `%s` again for another review.", short(head), Word))
 }
 
 // body is the comment a review is posted as. On the implement job's pull

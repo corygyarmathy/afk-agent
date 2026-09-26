@@ -44,7 +44,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
 
-	key, err := d.round(ctx, fmt.Sprintf("push-%s-%s", p.Branch, head))
+	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("push-%s-%s", p.Branch, head), d.Bound)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -110,7 +110,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{State: Watching, RunAt: in.Now}, nil
 	}
 
-	key, err := d.round(ctx, fmt.Sprintf("pull-request-%s", p.Branch))
+	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("pull-request-%s", p.Branch), d.Bound)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -161,27 +161,6 @@ func (d *Deps) pullRequestFrom(ctx context.Context, branch string) (github.PullR
 		}
 	}
 	return github.PullRequest{}, false, nil
-}
-
-// round is the key for the next attempt at an effect: the first of
-// <stem>-<i> not yet reserved. Deterministic across replays of the same
-// round, and new for a round that follows one whose effect was lost.
-func (d *Deps) round(ctx context.Context, stem string) (string, error) {
-	bound := d.Bound
-	if bound < 1 {
-		bound = 1
-	}
-	for i := range bound {
-		key := fmt.Sprintf("%s-%d", stem, i)
-		reserved, err := d.Store.Reserved(ctx, key)
-		if err != nil {
-			return "", err
-		}
-		if !reserved {
-			return key, nil
-		}
-	}
-	return "", fmt.Errorf("%s was tried %d times and never took effect", stem, bound)
 }
 
 func (d *Deps) token(ctx context.Context) (string, error) {

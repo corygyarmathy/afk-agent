@@ -50,7 +50,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 		return transition.Result{}, err
 	}
 	if at != p.Pushed {
-		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
 	}
 
 	comments, err := d.Tracker.Comments(ctx, pr.Number)
@@ -74,13 +74,13 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	case rj.State != review.Start:
 		// Parked where it failed. Starting it over would throw its state
 		// away, and it is the operator's to look at.
-		return d.handBackPR(in, p, pr.Number, p.Nonce, fmt.Sprintf("The review job for this pull request failed and stopped in `%s`, so no review of `%s` is coming.", rj.State, short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("The review job for this pull request failed and stopped in `%s`, so no review of `%s` is coming.", rj.State, short(p.Pushed)), "")
 	}
 
 	// No review job, or one at rest with no review of this head to show
 	// for it. Asked for again under the next key, so a request lost to a
 	// kill is made again, and one that keeps coming to nothing runs out.
-	key, err := d.round(ctx, fmt.Sprintf("review-asked-pr-%d-%s", pr.Number, p.Pushed))
+	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("review-asked-pr-%d-%s", pr.Number, p.Pushed), d.Bound)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -119,7 +119,7 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 			return transition.Result{State: Start}, d.clear(in.Job.ID)
 		}
 	}
-	key, err := d.round(ctx, fmt.Sprintf("hand-off-pr-%d-%s", pr.Number, p.Pushed))
+	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("hand-off-pr-%d-%s", pr.Number, p.Pushed), d.Bound)
 	if err != nil {
 		return transition.Result{}, err
 	}

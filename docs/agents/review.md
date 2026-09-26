@@ -30,7 +30,8 @@ on it.
 
 | transition | from | does |
 | --- | --- | --- |
-| `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
+| `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
+| `review-claimed` | `claiming` | reads the claims and replies back, makes any that are missing again, and once all of them are there moves on to `reviewing` or rests |
 | `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
 | `review-post` | `posting` | posts the reply, under a key numbered by posting round |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
@@ -48,7 +49,10 @@ description, and the report says so.
 
 A review is recognised on the tracker by a hidden `<!-- afk:review head=<sha> -->`
 line in the agent's comment, and a command as answered by the agent's 👀
-reaction. Neither is kept in the store, so deleting the store costs dedup
+reaction. The claims and the "Already reviewed" replies are read back before
+the job moves on, as the review itself is, because a kill between the commit
+and the reaction would otherwise leave a command looking unanswered for ever
+([`internal/owed`](../../internal/owed)). Neither is kept in the store, so deleting the store costs dedup
 history and never a second review of a head already reviewed.
 
 ## What it needs on the host
@@ -129,8 +133,8 @@ before choosing values:
   another worker take the job; the store refuses the first run's commit, so the
   work is wasted rather than duplicated, but it is still wasted.
 - `--model-attempts` bounds two things: the candidates tried before a tier is
-  exhausted, and the times a reply is posted before a reply that never appears
-  is handed back.
+  exhausted, and the times a reply or a claim is made before one that never
+  appears is an error.
 
 ## Running one by hand
 
@@ -142,10 +146,11 @@ environment:
 afk intake
 
 # Then each transition in turn, reading the state each one prints.
-afk run review        --pr 12   # claim; -> reviewing, or "already reviewed" and rest
-afk run review-run    --pr 12   # the model run; -> posting
-afk run review-post   --pr 12   # -> verifying
-afk run review-verify --pr 12   # -> start, not scheduled: done
+afk run review         --pr 12   # claim; -> claiming
+afk run review-claimed --pr 12   # -> reviewing, or rest after "already reviewed"
+afk run review-run     --pr 12   # the model run; -> posting
+afk run review-post    --pr 12   # -> verifying
+afk run review-verify  --pr 12   # -> start, not scheduled: done
 ```
 
 `afk run review --pr 12` works without `afk intake` too: naming the subject

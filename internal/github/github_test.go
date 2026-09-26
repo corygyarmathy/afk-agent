@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -88,10 +89,10 @@ func TestAPullRequestWithNoDescriptionHasAnEmptyBody(t *testing.T) {
 	}
 }
 
-func TestIssueReadsItsTitleBodyAndState(t *testing.T) {
+func TestIssueReadsItsTitleBodyStateAndLabels(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/issues/7", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":7,"title":"Jobs are reserved","body":"A job is reserved before it runs.","state":"open"}`)
+			fmt.Fprint(w, `{"number":7,"title":"Jobs are reserved","body":"A job is reserved before it runs.","state":"open","labels":[{"name":"needs-decision"}]}`)
 		}
 	})
 
@@ -99,7 +100,7 @@ func TestIssueReadsItsTitleBodyAndState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (github.Issue{Number: 7, State: "open", Title: "Jobs are reserved", Body: "A job is reserved before it runs."}); is != want {
+	if want := (github.Issue{Number: 7, State: "open", Title: "Jobs are reserved", Body: "A job is reserved before it runs.", Labels: []string{"needs-decision"}}); !reflect.DeepEqual(is, want) {
 		t.Errorf("got %+v, want %+v", is, want)
 	}
 }

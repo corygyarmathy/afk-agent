@@ -68,6 +68,10 @@ _Avoid_: Completion, ready state
 The agent declaring it cannot proceed and returning the subject to the human, with what it tried.
 _Avoid_: Stuck path, failure
 
+**Owed**:
+What a transition has decided to say on the tracker (a claim, a reply to a command, a hand-back's comment and label) and has not yet seen there. The job does not move on from something owed until the tracker shows it: an owed thing lost is made again, never given up on quietly.
+_Avoid_: Pending, outbox, queued
+
 **Resource token**:
 A named, capacity-limited permit a transition must hold to run, expressing a host constraint rather than a logical one. A transition that builds holds the heavy-build token; one that calls an API holds nothing.
 _Avoid_: Semaphore, slot, concurrency limit
