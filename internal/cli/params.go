@@ -68,10 +68,15 @@ Model choice, for afk run and afk work:
   --enrolment <path>    AFK_ENROLMENT       the enrolment file                 (required)
   --review-tier <name>  AFK_REVIEW_TIER     the tier a review draws from       (required)
   --review-needs <caps> AFK_REVIEW_NEEDS    capabilities a review requires, comma-separated
-  --model-attempts <n>  AFK_MODEL_ATTEMPTS  candidates tried before a tier is exhausted,
-                                            and posts before a reply is handed back (required)
+  --model-attempts <n>  AFK_MODEL_ATTEMPTS  candidates tried before a tier is exhausted (required)
   --tier-wait <dur>     AFK_TIER_WAIT       how long an exhausted tier defers  (required)
   --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
+
+What a job says on the tracker, for afk run and afk work:
+
+  --effect-rounds <n>   AFK_EFFECT_ROUNDS    times a push, a pull request, a comment or a label
+                                             is made before it counts as never landing (required)
+  --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies (required)
 
 Implementing an issue, for afk run and afk work:
 
@@ -81,7 +86,6 @@ Implementing an issue, for afk run and afk work:
   --gate-attempts <n>   AFK_GATE_ATTEMPTS    sessions the gate may fail before a hand-back
   --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
   --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
-  --hand-back-label <l> AFK_HAND_BACK_LABEL  the label a hand-back applies
   --hand-off-label <l>  AFK_HAND_OFF_LABEL   the label the hand-off applies
   --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
                                              ** spans directories, * stays in one
@@ -91,7 +95,7 @@ Implementing an issue, for afk run and afk work:
   --ci-rounds <n>       AFK_CI_ROUNDS        red runs sent back to the session, then a hand-back
 
 All but --implement-needs are required to implement, with the model choice
-parameters above; implementing also needs the heavy-build token's capacity.
+parameters and the two above; implementing also needs the heavy-build token's capacity.
 
 The tracker, for afk intake, afk run and afk work:
 
@@ -142,7 +146,6 @@ type params struct {
 	implementTier  string
 	implementNeeds string
 	gateAttempts   string
-	handBackLabel  string
 	handOffLabel   string
 	denylist       string
 	ciWait         string
@@ -156,6 +159,9 @@ type params struct {
 	reviewNeeds   string
 	modelAttempts string
 	tierWait      string
+
+	effectRounds  string
+	handBackLabel string
 }
 
 func (p *params) bindStore(fs *flag.FlagSet) {
@@ -602,7 +608,6 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.gateAttempts, "gate-attempts", "", "sessions the gate may fail before a hand-back (AFK_GATE_ATTEMPTS)")
 	fs.StringVar(&p.implementTier, "implement-tier", "", "the tier implementing draws from (AFK_IMPLEMENT_TIER)")
 	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
-	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
 	fs.StringVar(&p.handOffLabel, "hand-off-label", "", "the label the hand-off applies (AFK_HAND_OFF_LABEL)")
 	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
 	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
@@ -610,17 +615,51 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.ciRounds, "ci-rounds", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_ROUNDS)")
 }
 
+// bindEffects binds what both job kinds need to say things on the tracker: how
+// many rounds an effect has before it counts as never landing, and the label a
+// hand-back applies when one runs out.
+func (p *params) bindEffects(fs *flag.FlagSet) {
+	fs.StringVar(&p.effectRounds, "effect-rounds", "", "times an effect is made before it counts as never landing (AFK_EFFECT_ROUNDS)")
+	fs.StringVar(&p.handBackLabel, "hand-back-label", "", "the label a hand-back applies (AFK_HAND_BACK_LABEL)")
+}
+
+// effectParams is what a job says on the tracker, resolved.
+type effectParams struct {
+	rounds        int
+	handBackLabel string
+}
+
+// effects resolves what a job says on the tracker. Both are required rather
+// than defaulted: an unset bound would be one post and no recovery from a lost
+// one.
+func (p *params) effects() (effectParams, error) {
+	var (
+		ep  effectParams
+		err error
+	)
+	v, err := required(p.effectRounds, "effect-rounds", "AFK_EFFECT_ROUNDS")
+	if err != nil {
+		return effectParams{}, err
+	}
+	if ep.rounds, err = count(v, "effect-rounds"); err != nil {
+		return effectParams{}, err
+	}
+	if ep.handBackLabel, err = required(p.handBackLabel, "hand-back-label", "AFK_HAND_BACK_LABEL"); err != nil {
+		return effectParams{}, err
+	}
+	return ep, nil
+}
+
 // implementParams is implementing an issue, resolved, beyond model choice.
 type implementParams struct {
-	branchPrefix  string
-	gate          string
-	attempts      int
-	handBackLabel string
-	handOffLabel  string
-	denylist      []string
-	ciWait        time.Duration
-	ciCeiling     time.Duration
-	ciRounds      int
+	branchPrefix string
+	gate         string
+	attempts     int
+	handOffLabel string
+	denylist     []string
+	ciWait       time.Duration
+	ciCeiling    time.Duration
+	ciRounds     int
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -639,9 +678,6 @@ func (p *params) implement() (implementParams, error) {
 		return implementParams{}, err
 	}
 	if ip.attempts, err = count(attempts, "gate-attempts"); err != nil {
-		return implementParams{}, err
-	}
-	if ip.handBackLabel, err = required(p.handBackLabel, "hand-back-label", "AFK_HAND_BACK_LABEL"); err != nil {
 		return implementParams{}, err
 	}
 	if ip.handOffLabel, err = required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL"); err != nil {
@@ -705,9 +741,8 @@ func (p *params) implementModel() (modelParams, error) {
 
 // modelFor resolves model choice for one job kind's tier and capabilities.
 //
-// The attempt bound is required rather than defaulting to the tier's length:
-// it also bounds how many times a reply that never appears is posted, and an
-// unset bound there would be one post and no recovery from a lost one.
+// The attempt bound is required rather than defaulting to the tier's length,
+// which is a value chosen here like any other.
 func (p *params) modelFor(tierValue, tierFlag, tierEnv, needsValue, needsEnv string) (modelParams, error) {
 	var (
 		m   modelParams

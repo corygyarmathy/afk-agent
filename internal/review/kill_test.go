@@ -131,11 +131,13 @@ func TestHelperRunsAReview(t *testing.T) {
 		Checkout: func(_ context.Context, ws string, _ int) (string, error) {
 			return head, os.MkdirAll(filepath.Join(ws, ".git"), 0o755)
 		},
-		Resolve:  func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
-		Bound:    2,
-		TierWait: time.Hour,
-		Login:    agent,
-		StateDir: dir,
+		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+		Bound:         2,
+		Rounds:        2,
+		HandBackLabel: "needs-decision",
+		TierWait:      time.Hour,
+		Login:         agent,
+		StateDir:      dir,
 	}
 	reg := transition.MustRegistry(review.Transitions(d)...)
 

@@ -202,6 +202,7 @@ func runCmd(args []string, stdout io.Writer) error {
 	p.bindTracker(fs)
 	p.bindModel(fs)
 	p.bindBudget(fs)
+	p.bindEffects(fs)
 	p.bindImplement(fs)
 
 	// The transition name is positional and comes first, so that the flags
@@ -303,6 +304,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	p.bindNotify(fs)
 	p.bindModel(fs)
 	p.bindTracker(fs)
+	p.bindEffects(fs)
 	p.bindImplement(fs)
 
 	if err := fs.Parse(args); err != nil {

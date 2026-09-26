@@ -245,6 +245,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Remote:        remote,
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         2,
+		Rounds:        2,
 		TierWait:      time.Hour,
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,

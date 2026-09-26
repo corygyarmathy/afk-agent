@@ -102,9 +102,10 @@ description, and says the implement job asked for it
 
 The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
-`relays/<job>.git` (the copy pushes are made from) and `progress/<job>.json`
+`relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session, attempts and rounds, the last failure, the pushed
-head). All of it is disposable. Lost before the push, the work starts over.
+head) and `notes/<job>.json` (the last error of a push, a pull request, a
+review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
 branch.
 
@@ -113,13 +114,20 @@ branch.
 `afk help` lists them, and the NixOS module sets them
 ([`domain.md`](domain.md)). Without `--branch-prefix`, `afk work` neither runs
 implement jobs nor answers `/implement`. With it, all of these are required:
-`--gate`, `--gate-attempts`, `--implement-tier`, `--hand-back-label`,
-`--hand-off-label`, `--denylist`, `--ci-wait`, `--ci-ceiling` and
-`--ci-rounds`, plus model choice as for review. `--implement-needs` is optional.
+`--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
+`--denylist`, `--ci-wait`, `--ci-ceiling` and `--ci-rounds`, plus model choice,
+`--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` is
+optional.
 
-- `--model-attempts` also bounds the rounds of a push, a pull request, a review
-  request, a hand-off label, a claim, a reply or a hand-back that never
-  appears, as it does review's posts.
+- `--effect-rounds` bounds the rounds of a push, a pull request, a review
+  request or a hand-off label that never appears. Out of rounds, the work is
+  handed back - on the issue while there is no pull request, and on the pull
+  request once there is - with the last error, and the job rests. A claim, a
+  reply or a hand-back out of rounds is a failed attempt instead, as it is for
+  review.
+- A push the lease refuses because someone else pushed to the branch, or made
+  it before the agent's first push, is handed back at once rather than made
+  again: every later push would be refused the same way.
 - `--ci-wait` is also how often a review not yet posted is looked for.
 - `--lease` must be longer than a model run, and than the gate.
 

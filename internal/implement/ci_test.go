@@ -1,6 +1,7 @@
 package implement_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +119,30 @@ func mustHead(t *testing.T, f *fixture) string {
 		t.Fatal(err)
 	}
 	return head
+}
+
+// A red run is one CI round however many times its decision is made. A
+// commit lost after the decision - a kill, or a lost lease - replays it, and
+// the replay counts nothing new.
+func TestARedRunReplayedIsCountedOnce(t *testing.T) {
+	f := watched(t)
+	f.deps.CIRounds = 1
+	f.tr.checks = red()
+
+	for i := range 2 {
+		// The replay: the decision is made again from watching, with the
+		// progress the first one saved.
+		f.setState(implement.Watching)
+		if _, err := f.run.Run(context.Background(), "implement-watch", f.job.ID); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if j := f.now(); j.State != implement.Implementing {
+			t.Fatalf("run %d: job in %q, want %q: the one round is not spent yet", i, j.State, implement.Implementing)
+		}
+	}
+	if len(f.tr.byAgent()) != 0 {
+		t.Errorf("the agent said %+v, want nothing", f.tr.byAgent())
+	}
 }
 
 // Running out of CI rounds hands back on the pull request, and only there,

@@ -653,10 +653,11 @@ func TestTheLoginIsReadOnce(t *testing.T) {
 	}
 }
 
-// Review and intake reach the tracker through the one the command built, so a
-// process has one token and one login (ADR 0005 §5).
-func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS"} {
+// A review is read from its parameters, and review and intake reach the
+// tracker through the one the command built, so a process has one token and
+// one login (ADR 0005 §5).
+func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
+	for _, env := range []string{"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS", "AFK_EFFECT_ROUNDS", "AFK_HAND_BACK_LABEL"} {
 		t.Setenv(env, "")
 	}
 	// A login already read, so nothing here reaches a network.
@@ -668,11 +669,30 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 		reviewTier:    "review",
 		modelAttempts: "3",
 		tierWait:      "30m",
+		effectRounds:  "4",
+		handBackLabel: "needs-decision",
 	}
 
 	deps, err := reviewDeps(context.Background(), p, nil, tr)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if deps.Bound != 3 || deps.Rounds != 4 || deps.HandBackLabel != "needs-decision" {
+		t.Errorf("deps = %+v, want the attempt bound, the rounds and the hand-back label read from the parameters", deps)
+	}
+	for _, tc := range []struct {
+		spoil func(*params)
+		want  string
+	}{
+		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
+		{func(p *params) { p.effectRounds = "0" }, "--effect-rounds"},
+		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
+	} {
+		spoilt := p
+		tc.spoil(&spoilt)
+		if _, err := reviewDeps(context.Background(), spoilt, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("err = %v, want it to contain %q", err, tc.want)
+		}
 	}
 	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute)
 	if err != nil {
@@ -689,7 +709,7 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_ROUNDS", "AFK_EFFECT_ROUNDS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT"} {
 		t.Setenv(env, "")
 	}
@@ -711,6 +731,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		ciWait:        "5m",
 		ciCeiling:     "2h",
 		ciRounds:      "2",
+		effectRounds:  "4",
 	}
 
 	d, err := implementDeps(context.Background(), full, nil, tr)
@@ -724,7 +745,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
 		d.HandOffLabel != "needs-review" || d.AskReview == nil ||
 		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIRounds != 2 ||
-		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
+		d.Bound != 3 || d.Rounds != 4 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
 	}
 
@@ -746,6 +767,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.ciWait = "" }, "--ci-wait is required"},
 		{func(p *params) { p.ciCeiling = "soon" }, "--ci-ceiling"},
 		{func(p *params) { p.ciRounds = "0" }, "--ci-rounds"},
+		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
 		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 	} {
 		p := full
@@ -814,6 +836,7 @@ func standaloneDeps(t *testing.T) *deps {
 				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
 			},
 			Bound:    1,
+			Rounds:   1,
 			TierWait: time.Hour,
 			Login:    "afk-bot",
 			StateDir: t.TempDir(),
@@ -826,6 +849,7 @@ func standaloneDeps(t *testing.T) *deps {
 			},
 			BranchPrefix:  "afk/",
 			Bound:         1,
+			Rounds:        1,
 			TierWait:      time.Hour,
 			Gate:          "false",
 			Attempts:      1,
