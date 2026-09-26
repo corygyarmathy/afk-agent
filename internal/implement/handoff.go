@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -149,7 +148,7 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 // ReviewAsker is Deps.AskReview, asking under a's lease. A job already queued
 // or held is left alone: that run will review the head. So is one parked away
 // from start, which awaitReview hands back.
-func ReviewAsker(a intake.Armer) func(ctx context.Context, pr store.Subject, now time.Time) error {
+func ReviewAsker(a transition.Armer) func(ctx context.Context, pr store.Subject, now time.Time) error {
 	return func(ctx context.Context, pr store.Subject, now time.Time) error {
 		return a.Ask(ctx, store.KindReview, pr, review.Start, now)
 	}

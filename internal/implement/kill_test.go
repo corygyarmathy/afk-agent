@@ -236,7 +236,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		CICeiling: 48 * time.Hour,
 		CIFixes:   1,
 		Store:     askStore{s, ft},
-		AskReview: implement.ReviewAsker(intake.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		AskReview: implement.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:  filepath.Join(dir, "state"),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
