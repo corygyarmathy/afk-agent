@@ -58,8 +58,11 @@ history and never a second review of a head already reviewed.
 ## What it needs on the host
 
 - **git**, on `PATH`. The head is fetched shallow from
-  `https://github.com/<owner>/<name>.git` with no credentials: a private
-  repository cannot be reviewed yet.
+  `https://github.com/<owner>/<name>.git`, with an installation token in that
+  one `git` process's environment and none of the agent user's global or
+  system `git` configuration, so a private repository is reviewed as a public
+  one is. The App needs Contents: read for it
+  ([The App's permissions](#the-apps-permissions)).
 - **opencode**, at `--opencode`, with credentials for every provider enrolled in
   the review tier.
 - **The GitHub App**, `--app-id`, with its private key in the file at
@@ -85,6 +88,7 @@ The smallest set, by the names and levels on the App's settings page:
 | permission | level |
 | --- | --- |
 | Metadata | read |
+| Contents | read |
 | Pull requests | write |
 | Issues | read |
 
@@ -105,11 +109,11 @@ installation's grants:
 | reading the issues a pull request closes | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
 | reading reactions | Issues: read | not verified: served with Metadata only |
+| the `git` fetch of the pull request's head | Contents: read | by GitHub's documentation; not verified. A public repository serves it with no credentials at all |
 
 Metadata is granted to every App and cannot be withheld. The App's own
 requests (`GET /app`, finding the installation, minting a token) use its JWT
-and need no installation permission. The review's `git` fetch sends no
-credentials.
+and need no installation permission.
 
 Pull requests: read with Issues: write also covers every row, by the header
 and the table, but Issues: write was not observed on the claim without Pull
@@ -120,8 +124,8 @@ Two things GitHub's documentation does not say:
 - The claim's header, and GitHub's permissions table, name Issues: write only.
   GitHub accepted Pull requests: write for it.
 - A public repository serves every read without its grant, so a missing read
-  grant shows up only on a private one - which the review's credential-less
-  `git` fetch cannot review yet.
+  grant shows up only on a private one. No private repository has been
+  reviewed yet.
 
 ## Parameters
 
