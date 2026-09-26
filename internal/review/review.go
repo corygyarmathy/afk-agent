@@ -369,9 +369,6 @@ func (d *Deps) handBack(ctx context.Context, in transition.In, p pending, rounds
 		fmt.Fprintf(&b, "\nThe last error:\n\n````\n%s\n````\n", noted)
 	}
 	fmt.Fprintf(&b, "\nPush a new commit and `%s` again for another review.\n", Word)
-	if err := d.forget(in.Job.ID); err != nil {
-		return transition.Result{}, err
-	}
 	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
 		owed.Comment(fmt.Sprintf("review-hand-back-pr-%d-%s", n, p.Head), n, marker, b.String()),
 		owed.Label(fmt.Sprintf("review-hand-back-label-pr-%d-%s", n, p.Head), n, d.HandBackLabel),
@@ -381,8 +378,16 @@ func (d *Deps) handBack(ctx context.Context, in transition.In, p pending, rounds
 // handedBack is `review-handed-back`: at rest, once the hand-back's comment
 // and its label are on the pull request. A record lost with the state
 // directory rests all the same.
+//
+// The reply is forgotten here rather than when the hand-back is decided. A
+// commit lost between the two would otherwise replay the post with no reply,
+// and pay for the review again rather than hand it back.
 func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Result, error) {
-	return d.book().Settle(ctx, in, transition.Result{State: Start})
+	res, err := d.book().Settle(ctx, in, transition.Result{State: Start})
+	if err != nil || res.State != Start {
+		return res, err
+	}
+	return res, d.forget(in.Job.ID)
 }
 
 // HandBackMarker is the hidden line the hand-back of head's review carries. It
