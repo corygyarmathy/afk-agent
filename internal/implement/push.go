@@ -126,8 +126,10 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{State: Watching, RunAt: in.Now}, nil
 	}
 
-	// New with each branch, as the push's stem is with each head.
-	stem := fmt.Sprintf("pull-request-%s", p.Branch)
+	// New with each workspace, as the push's stem is with each head. The
+	// branch alone is not: its name is free again once it is gone from the
+	// remote, and an earlier job's rounds under it are not this job's.
+	stem := fmt.Sprintf("pull-request-%s-%s", p.Branch, p.Nonce)
 	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
 	if spent, ok := transition.Spent(err); ok {
 		return d.handBackIssue(ctx, in, p, fmt.Sprintf("Its pull request was asked for %d times and never opened.", spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
@@ -177,7 +179,7 @@ func where(at, lease string) string {
 	case at == "":
 		return "it has been deleted"
 	case lease == "":
-		return fmt.Sprintf("it was made, at `%s`, before the agent's first push", git.Short(at))
+		return fmt.Sprintf("it is at `%s`, which the agent did not push", git.Short(at))
 	}
 	return fmt.Sprintf("it is at `%s`, not at `%s` where the agent left it", git.Short(at), git.Short(lease))
 }

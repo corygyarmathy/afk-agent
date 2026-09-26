@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
 // Work that passes the gate is pushed once, and opens one pull request that
@@ -101,6 +103,35 @@ func TestAPullRequestIsOpenedOnce(t *testing.T) {
 				t.Errorf("%d pull requests open after %d calls, want 1 after %d", len(f.tr.opened), f.tr.opens, tc.want)
 			}
 		})
+	}
+}
+
+// A branch name comes back once its branch is gone from the remote, and an
+// earlier job's pull requests under that name do not spend this job's rounds.
+func TestAReusedBranchNameStillAsksForItsPullRequest(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.Rounds = 1
+	ctx := context.Background()
+	earlier, err := f.store.Ensure(ctx, store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: 99}, implement.Start, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.store.Acquire(ctx, earlier.ID, "earlier", now, time.Minute); err != nil || !ok {
+		t.Fatalf("acquire: %v, %v", ok, err)
+	}
+	if err := f.store.Commit(ctx, store.Commit{JobID: earlier.ID, Holder: "earlier", State: implement.Start, Keys: []string{"pull-request-afk/7-1-0"}, Release: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.model.then(commit("ok"))
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
+	}
+	if len(f.tr.opened) != 1 {
+		t.Errorf("%d pull requests opened, want 1", len(f.tr.opened))
 	}
 }
 
@@ -423,7 +454,7 @@ func TestABranchMadeByAnyoneElseBeforeTheFirstPushHandsBack(t *testing.T) {
 		t.Error("a pull request was opened")
 	}
 	posted := f.tr.byAgent()
-	if len(posted) != 1 || f.tr.commentedOn[0] != issue || !strings.Contains(posted[0].Body, "before the agent's first push") {
+	if len(posted) != 1 || f.tr.commentedOn[0] != issue || !strings.Contains(posted[0].Body, "which the agent did not push") {
 		t.Fatalf("comments %+v on %v, want one hand-back on the issue saying the branch was made first", posted, f.tr.commentedOn)
 	}
 	if strings.Join(f.tr.labels, ",") != "needs-decision" {
