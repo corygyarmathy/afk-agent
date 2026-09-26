@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 )
@@ -164,7 +165,7 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 
 	t.Run("open issues", func(t *testing.T) {
 		c, srv := serve(t, pages("/repos/o/n/issues",
-			`[{"number":7,"state":"open","title":"An issue"}]`,
+			`[{"number":7,"state":"open","title":"An issue","updated_at":"2026-09-13T12:00:00Z"}]`,
 			`[{"number":12,"state":"open","title":"A pull request","pull_request":{"url":"https://api.github.com/repos/o/n/pulls/12"}}]`))
 		srvURL = srv.URL
 
@@ -173,7 +174,7 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []github.Issue{
-			{Number: 7, State: "open", Title: "An issue"},
+			{Number: 7, State: "open", Title: "An issue", UpdatedAt: time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)},
 			{Number: 12, State: "open", Title: "A pull request", PullRequest: true},
 		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
