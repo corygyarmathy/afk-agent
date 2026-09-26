@@ -24,7 +24,7 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
   it needs on the host, and how to run one by hand.
 - [`docs/agents/implement.md`](docs/agents/implement.md) - what `/implement`
   does, what it needs on the host, and how to run one by hand.
-- [`docs/agents/notification.md`](docs/agents/notification.md) - the two
+- [`docs/agents/notification.md`](docs/agents/notification.md) - the
   conditions that reach the operator, and everything that deliberately does not.
 - [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what
   protects `master`, and what that means for you.

@@ -64,7 +64,7 @@ type Dispatcher struct {
 
 	// Notify is the operator's interrupt channel (ADR 0001 §13). Nil is no
 	// notification at all, which is the shape of an unconfigured channel and is
-	// safe: both conditions it carries are also states the operator can query,
+	// safe: every condition it carries is also a state the operator can query,
 	// and a pool with no notifier is one that must be looked at rather than one
 	// that goes wrong.
 	//
@@ -87,6 +87,26 @@ type Dispatcher struct {
 	// does not notify (ADR 0001 §13), and this is a log rather than a
 	// notification channel.
 	Log func(msg string)
+
+	// episodes is each job whose model tier is exhausted and has not yet got
+	// past the model, by job id: see exhausted.
+	//
+	// In memory, like the notifier's own suppression, and for the same
+	// reason: it decides only what is told, and the job's state is in the
+	// store either way. A restart starts every episode again, so a tier that
+	// is still out is told again once it has run out Notify.TierAfter more
+	// times - the operator may not have seen the first one.
+	mu       sync.Mutex
+	episodes map[string]*episode
+}
+
+// episode is one job's tier staying exhausted, and the two states it moves
+// between while it does. Any move outside those two is the job getting past
+// the model, which ends it.
+type episode struct {
+	notify.Episode
+	running  string // the state the model runs from
+	deferred string // the state an exhausted tier waits in
 }
 
 func (d *Dispatcher) now() time.Time {
@@ -105,8 +125,9 @@ func (d *Dispatcher) logf(format string, a ...any) {
 // notify publishes one condition, best effort.
 //
 // A notification that could not be sent is a log line and changes nothing: the
-// park is already in the store and the budget is already readable with `afk
-// budget`, so the event it reports survives the channel failing to carry it.
+// park or the deferral is already in the store and the budget is already
+// readable with `afk budget`, so the event it reports survives the channel
+// failing to carry it.
 //
 // Without the caller's cancellation, for the reason the runner's commit is: a
 // SIGTERM arriving between the store write and this must not be what turns a
@@ -146,6 +167,8 @@ func (d *Dispatcher) validate() error {
 		return fmt.Errorf("resource token wait %s is not shorter than the lease %s: a worker could still be queuing for a permit after its lease has lapsed", d.TokenWait, d.LeaseTTL)
 	case d.Budget != nil && d.Budget.MaxAge <= 0:
 		return errors.New("budget observation has no maximum age: every job dispatched would be a request to the usage endpoint")
+	case d.Notify != nil && d.Notify.TierAfter < 1:
+		return errors.New("notifier has no count of exhaustions before an exhausted tier is told")
 	}
 	for _, t := range d.Registry.All() {
 		if err := d.Pool.Known(t.Tokens); err != nil {
@@ -276,6 +299,55 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 	if err != nil && out.Parked {
 		d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Parked(c, out.Job, err) })
 	}
+	d.exhausted(ctx, holder, out)
+}
+
+// exhausted follows a job's episodes of an exhausted model tier, and tells the
+// operator about one that has gone on long enough (ADR 0001 §10).
+//
+// The episode is here rather than in the store or the transition because what
+// ends it is not one run: an exhausted tier defers, the resume moves the job
+// back to the model with its stays cleared, and the tier is tried from the top
+// again. Every run in that loop is a move or a stay between the same two
+// states, so the episode is those two, and the first run to leave them - the
+// model answered, or something else moved the job on - is the end of it. That
+// needs no knowledge of which states a job kind has, and a failed run, which
+// leaves the job where it was, is inside the episode rather than an end to it.
+//
+// Nothing is followed without a notifier: an episode exists only to be told.
+func (d *Dispatcher) exhausted(ctx context.Context, holder string, out transition.Outcome) {
+	if d.Notify == nil || out.Transition == "" {
+		// No outcome is a run that never reached a commit - the lease was
+		// held, the job was in another state - and says nothing about the
+		// job's tier either way.
+		return
+	}
+
+	d.mu.Lock()
+	ep, ok := d.episodes[out.Job.ID]
+	if out.Exhausted == nil {
+		if ok && out.To != ep.running && out.To != ep.deferred {
+			delete(d.episodes, out.Job.ID)
+		}
+		d.mu.Unlock()
+		return
+	}
+	if !ok {
+		ep = &episode{running: out.From, deferred: out.To}
+		ep.Since = d.now()
+		if d.episodes == nil {
+			d.episodes = map[string]*episode{}
+		}
+		d.episodes[out.Job.ID] = ep
+	}
+	ep.Times++
+	told := ep.Episode
+	d.mu.Unlock()
+
+	// Every exhaustion is offered, not only the one that reaches the count:
+	// the notifier publishes an episode once, and a publish that failed is
+	// tried again on the next one rather than lost.
+	d.notify(ctx, holder, func(c context.Context) error { return d.Notify.TierExhausted(c, out.Job, told, out.Exhausted) })
 }
 
 // admit consults the budget before a job starts, and gives the job back if it

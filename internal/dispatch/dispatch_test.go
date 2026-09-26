@@ -638,7 +638,7 @@ func (p *published) silent(t *testing.T) {
 
 // notifier wires a dispatcher to p.
 func notifier(p *published) *notify.Notifier {
-	return &notify.Notifier{URL: "https://ntfy.example/afk-agent", Post: p.post}
+	return &notify.Notifier{URL: "https://ntfy.example/afk-agent", Post: p.post, TierAfter: 1}
 }
 
 // failing is a transition that never succeeds, which is how a test reaches the
@@ -936,6 +936,125 @@ func TestAHandBackWhoseEffectFailedReachesTheOperator(t *testing.T) {
 	}
 	if !strings.Contains(got[0], "502 Bad Gateway") {
 		t.Errorf("the notification does not say what failed:\n%s", got[0])
+	}
+}
+
+// tier is a job kind whose model tier behaves as script says, one letter per
+// run of the model: x the tier is exhausted and the job defers, s a candidate
+// failed transiently and the job stays for the next, g a model answered and
+// the job moves past it - to a state that leads back to the model, the way a
+// gate that failed does - and d a model answered and the job is done.
+//
+// It has the shape review and implement have: a state the model runs from, a
+// state an exhausted tier waits in, and a resume from one to the other that
+// starts the tier again (#76).
+func tier(script string) *transition.Registry {
+	var (
+		mu   sync.Mutex
+		next int
+	)
+	now := func() time.Time { return time.Now().Add(-time.Second) }
+	step := func(state string) transition.Transition {
+		return transition.Transition{
+			Name: state, Kind: store.KindReview, From: state,
+			Run: func(context.Context, transition.In) (transition.Result, error) {
+				return transition.Result{State: "running", RunAt: now()}, nil
+			},
+		}
+	}
+	return transition.MustRegistry(
+		step("start"), step("deferred"), step("gated"),
+		transition.Transition{
+			Name: "run", Kind: store.KindReview, From: "running",
+			Run: func(context.Context, transition.In) (transition.Result, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				c := byte('d')
+				if next < len(script) {
+					c = script[next]
+				}
+				next++
+				switch c {
+				case 'x':
+					return transition.Result{State: "deferred", RunAt: now(), Exhausted: errors.New("tier exhausted: all 2 enrolled models tried")}, nil
+				case 's':
+					return transition.Result{State: "running", RunAt: now()}, nil
+				case 'g':
+					return transition.Result{State: "gated", RunAt: now()}, nil
+				}
+				return transition.Result{State: "done"}, nil
+			},
+		},
+	)
+}
+
+// runTier runs one job through script with a notifier that tells an exhausted
+// tier after two exhaustions, and returns what was published.
+func runTier(t *testing.T, script string) []string {
+	t.Helper()
+	s := openStore(t)
+	ids := queue(t, s, 1)
+	p := &published{}
+
+	d := dispatcher(t, s, tier(script), pool(t, nil), 1)
+	d.Notify = notifier(p)
+	d.Notify.TierAfter = 2
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until(t, s, ids[0], "finish", func(j store.Job) bool { return j.State == "done" })
+	}()
+	runUntil(t, d, done)
+	return p.all()
+}
+
+// The acceptance criterion of #76: a tier that stays exhausted across resumes
+// reaches the operator, and once. Each resume clears the stays and starts the
+// tier again, so the episode is what spans them; a candidate failing on the
+// way is inside it rather than an end to it.
+func TestATierThatStaysExhaustedReachesTheOperatorOnce(t *testing.T) {
+	got := runTier(t, "xsxxxsxx")
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one episode of an exhausted tier, want 1:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	for _, want := range []string{"review-pr-1", "all 2 enrolled models tried"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("the notification does not mention %q:\n%s", want, got[0])
+		}
+	}
+}
+
+// A tier that recovers on resume is a bad few minutes at a provider, and
+// ADR 0001 §10 says that must not generate work for the operator.
+func TestATierThatRecoversOnResumeIsSilent(t *testing.T) {
+	if got := runTier(t, "xsd"); len(got) != 0 {
+		t.Fatalf("%d notifications for a tier that came back, want none:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+}
+
+// An episode ends when the job gets past the model. Exhaustions either side of
+// that are two episodes, neither long enough alone to be told - and a tier that
+// runs out again for long enough afterwards is told again.
+func TestAnEpisodeEndsWhenTheJobGetsPastTheModel(t *testing.T) {
+	if got := runTier(t, "xgxgxd"); len(got) != 0 {
+		t.Fatalf("%d notifications for three short episodes, want none:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	if got := runTier(t, "xxgxxd"); len(got) != 2 {
+		t.Fatalf("%d notifications for two long episodes, want 2:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+}
+
+// A notifier with no count is a half-made channel, refused at startup rather
+// than read as "tell on the zeroth exhaustion".
+func TestADispatcherRefusesANotifierWithNoExhaustionCount(t *testing.T) {
+	s := openStore(t)
+	d := dispatcher(t, s, transition.MustRegistry(), pool(t, nil), 1)
+	d.Notify = &notify.Notifier{URL: "https://ntfy.example/afk-agent", Post: (&published{}).post}
+
+	err := d.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exhaust") {
+		t.Fatalf("Run = %v, want a refusal naming the missing count", err)
 	}
 }
 

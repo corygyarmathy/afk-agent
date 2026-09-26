@@ -495,6 +495,9 @@ func TestAnExhaustedTierDefersAndStartsOverAfterTheWait(t *testing.T) {
 	if j.State != review.Deferred || !j.NextRunAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("job = %+v, want it deferred for the tier wait", j)
 	}
+	if f.last.Exhausted == nil {
+		t.Errorf("last run = %+v; want it to say the tier is exhausted, which dispatch tells the operator about (#76)", f.last)
+	}
 	if len(f.tr.byAgent()) != 0 {
 		t.Error("an exhausted tier posted something")
 	}
@@ -567,6 +570,9 @@ func TestALimitedBudgetDefersToTheReset(t *testing.T) {
 	}
 	if j := f.now(); j.State != review.Deferred || !j.NextRunAt.Equal(reset) {
 		t.Errorf("job = %+v, want it deferred to %s", j, reset)
+	}
+	if f.last.Exhausted != nil {
+		t.Errorf("last run says the tier is exhausted (%v); a limited budget is told at admission, not as a tier", f.last.Exhausted)
 	}
 	if len(f.model.asked) != 0 {
 		t.Error("a limited budget still ran a model")

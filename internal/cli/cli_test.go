@@ -476,15 +476,16 @@ func TestTheNotifyTokenIsReadFromItsFile(t *testing.T) {
 		want  string // substring of the error
 		token string // the token expected on the notifier
 	}{
-		{name: "read and trimmed", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: token}, token: "tk_secret"},
-		{name: "a topic anyone may publish to", p: params{notifyURL: "https://ntfy.example/afk"}},
-		{name: "no such file", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: filepath.Join(dir, "absent")}, want: "--notify-key:"},
-		{name: "a token with nowhere to publish", p: params{notifyKey: token}, want: "needs --notify-url"},
+		{name: "read and trimmed", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: token, tierNotifyAfter: "3"}, token: "tk_secret"},
+		{name: "a topic anyone may publish to", p: params{notifyURL: "https://ntfy.example/afk", tierNotifyAfter: "3"}},
+		{name: "no such file", p: params{notifyURL: "https://ntfy.example/afk", notifyKey: filepath.Join(dir, "absent"), tierNotifyAfter: "3"}, want: "--notify-key:"},
+		{name: "a token with nowhere to publish", p: params{notifyKey: token}, want: "need --notify-url"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("AFK_NOTIFY_URL", "")
 			t.Setenv("AFK_NOTIFY_KEY", "")
+			t.Setenv("AFK_TIER_NOTIFY_AFTER", "")
 
 			n, err := tt.p.notifier()
 			if tt.want != "" {
@@ -512,6 +513,7 @@ func TestTheNotifyTokenIsReadFromItsFile(t *testing.T) {
 func TestNoNotifyParametersIsNoNotifier(t *testing.T) {
 	t.Setenv("AFK_NOTIFY_URL", "")
 	t.Setenv("AFK_NOTIFY_KEY", "")
+	t.Setenv("AFK_TIER_NOTIFY_AFTER", "")
 
 	var p params
 	n, err := p.notifier()
@@ -528,14 +530,54 @@ func TestNoNotifyParametersIsNoNotifier(t *testing.T) {
 func TestTheNotifyURLComesFromTheEnvironmentToo(t *testing.T) {
 	t.Setenv("AFK_NOTIFY_URL", "https://ntfy.example/from-the-unit")
 	t.Setenv("AFK_NOTIFY_KEY", "")
+	t.Setenv("AFK_TIER_NOTIFY_AFTER", "4")
 
 	var p params
 	n, err := p.notifier()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n == nil || n.URL != "https://ntfy.example/from-the-unit" {
-		t.Fatalf("notifier = %+v, want the URL from the environment", n)
+	if n == nil || n.URL != "https://ntfy.example/from-the-unit" || n.TierAfter != 4 {
+		t.Fatalf("notifier = %+v, want the URL and the exhaustion count from the environment", n)
+	}
+}
+
+// How many times a tier is exhausted before the operator hears is the
+// deployment's call (#76), so a channel is refused without one rather than
+// given a number chosen here.
+func TestTheTierExhaustionCountIsRequiredWithAChannel(t *testing.T) {
+	tests := []struct {
+		name string
+		p    params
+		want string // substring of the error; empty is a notifier with this count
+		n    int
+	}{
+		{name: "given", p: params{notifyURL: "https://ntfy.example/afk", tierNotifyAfter: "3"}, n: 3},
+		{name: "missing", p: params{notifyURL: "https://ntfy.example/afk"}, want: "needs --tier-notify-after"},
+		{name: "zero", p: params{notifyURL: "https://ntfy.example/afk", tierNotifyAfter: "0"}, want: "--tier-notify-after:"},
+		{name: "not a number", p: params{notifyURL: "https://ntfy.example/afk", tierNotifyAfter: "few"}, want: "--tier-notify-after:"},
+		{name: "a count with nowhere to publish", p: params{tierNotifyAfter: "3"}, want: "need --notify-url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AFK_NOTIFY_URL", "")
+			t.Setenv("AFK_NOTIFY_KEY", "")
+			t.Setenv("AFK_TIER_NOTIFY_AFTER", "")
+
+			n, err := tt.p.notifier()
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.TierAfter != tt.n {
+				t.Fatalf("TierAfter = %d, want %d", n.TierAfter, tt.n)
+			}
+		})
 	}
 }
 

@@ -513,6 +513,9 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 	if j := g.now(); j.State != implement.Deferred || !j.NextRunAt.Equal(now.Add(g.deps.TierWait)) {
 		t.Errorf("job = %+v, want it deferred by the tier wait", j)
 	}
+	if g.last.Exhausted == nil {
+		t.Errorf("last run = %+v; want it to say the tier is exhausted, which dispatch tells the operator about (#76)", g.last)
+	}
 	if _, err := g.run.Run(context.Background(), "implement-resume", g.job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -636,6 +639,9 @@ func TestALimitedBudgetDefersToTheReset(t *testing.T) {
 	}
 	if j := f.now(); j.State != implement.Deferred || !j.NextRunAt.Equal(reset) {
 		t.Errorf("job = %+v, want it deferred to %s", j, reset)
+	}
+	if f.last.Exhausted != nil {
+		t.Errorf("last run says the tier is exhausted (%v); a limited budget is told at admission, not as a tier", f.last.Exhausted)
 	}
 	if len(f.model.asked) != 0 {
 		t.Error("a model ran on a limited budget")

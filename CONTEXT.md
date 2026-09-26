@@ -25,7 +25,7 @@ A local, exclusive, expiring hold on a job, held by the process executing a tran
 _Avoid_: Lock, claim
 
 **Defer**:
-A job rescheduled to an absolute timestamp something else gave, rather than to an interval this agent chose. What waiting for a rate-limit window is: the provider says when it reopens, and the job is due then. The opposite of a park - a deferred job comes back on its own.
+A job rescheduled to wait out something outside it, rather than to retry an error. What waiting for a rate-limit window is: the provider says when it reopens, and the job is due then. Where nothing says when - an exhausted tier, or a limit reported with no reset - the job is due after a wait the deployment configured, which is a guess rather than a timestamp. The opposite of a park - a deferred job comes back on its own.
 _Avoid_: Backoff, sleep, snooze
 
 **Park**:

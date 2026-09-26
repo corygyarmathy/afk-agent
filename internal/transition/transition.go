@@ -122,6 +122,14 @@ type Result struct {
 	// Effects are the actions outside the job's own commit that this
 	// transition is about to perform.
 	Effects []Effect
+
+	// Exhausted reports that the job is waiting because every candidate in its
+	// model tier has failed, and is why; nil for anything else. Not a state:
+	// the job waits in whatever State says, like any other deferral. It is
+	// carried to Outcome because an exhausted tier is a human-facing event
+	// (ADR 0001 §10), and it is the pool, not the transition, that decides
+	// whether this one is worth telling the operator about.
+	Exhausted error
 }
 
 // keys is the idempotency keys of the effects, in order.
