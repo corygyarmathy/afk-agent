@@ -117,17 +117,39 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 	meet, gaveUp := context.WithTimeout(context.Background(), 10*time.Second)
 	defer gaveUp()
 
+	// The first build holds its token until another build has been either let
+	// in beside it or turned away. While it holds on, the other builds stay due
+	// and the other workers keep taking due jobs, so one of them takes a second
+	// build: a pool that ignores the capacity runs it, and the peak is two every
+	// time. A pool that keeps to it makes that worker give the job back, which
+	// the dispatcher says in its log. The builds after the first run straight
+	// through: the one check is enough, and the last build has nobody left to
+	// wait for.
+	var (
+		first   atomic.Bool
+		crowded = make(chan struct{})
+		crowd   sync.Once
+		refused = make(chan struct{})
+		refuse  sync.Once
+	)
+
 	reg := transition.MustRegistry(
 		transition.Transition{
 			Name: "build", Kind: store.KindImplement, From: "start",
 			Tokens: []string{"heavy-build"},
-			Run: func(context.Context, transition.In) (transition.Result, error) {
+			Run: func(ctx context.Context, _ transition.In) (transition.Result, error) {
 				defer finish()
-				track(&heavyNow, &heavyPeak)
-				// Long enough that a second build let in beside it would still
-				// be running. The capacity is an upper bound, so a build that
-				// happens to run alone cannot make this test fail.
-				time.Sleep(20 * time.Millisecond)
+				if track(&heavyNow, &heavyPeak) >= 2 {
+					crowd.Do(func() { close(crowded) })
+				}
+				if first.CompareAndSwap(false, true) {
+					select {
+					case <-crowded:
+					case <-refused:
+					case <-meet.Done():
+					case <-ctx.Done():
+					}
+				}
 				heavyNow.Add(-1)
 				return transition.Result{State: "built"}, nil
 			},
@@ -157,7 +179,17 @@ func TestWorkerParallelismAndTokenCapacityAreSeparateLimits(t *testing.T) {
 		storetest.Seed(t, s, store.KindReview, 200+i, "start")
 	}
 
-	runUntil(t, dispatcher(t, s, reg, pool(t, map[string]int{"heavy-build": 1}), workers), done)
+	d := dispatcher(t, s, reg, pool(t, map[string]int{"heavy-build": 1}), workers)
+	// Short, so a turned-away build comes back quickly. How short decides only
+	// how long the test takes: nothing above waits for it to pass.
+	d.TokenWait = 50 * time.Millisecond
+	d.Log = func(msg string) {
+		t.Log(msg)
+		if strings.Contains(msg, "giving it back") {
+			refuse.Do(func() { close(refused) })
+		}
+	}
+	runUntil(t, d, done)
 
 	if got := heavyPeak.Load(); got != 1 {
 		t.Errorf("%d builds at once; the heavy-build token's capacity is 1", got)

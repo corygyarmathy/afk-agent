@@ -250,6 +250,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, runner *transition.Runner, ho
 		// Give the job back untouched. It is still due, so it is not lost;
 		// something else is using the permit, and holding a lease while
 		// queuing for it only stops another worker from getting there first.
+		// Said, unless the pool is stopping: a job that keeps going back
+		// otherwise looks like one nothing is picking up.
+		if ctx.Err() == nil {
+			d.logf("%s: %s: %v; giving it back", holder, job.ID, err)
+		}
 		d.release(ctx, holder, job)
 		d.wait(ctx)
 		return
