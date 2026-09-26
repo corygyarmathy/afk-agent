@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
+	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
 // reviewDeps builds what the review's transitions reach, from the parameters and
@@ -110,7 +110,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Token: tr.app.Token,
 		Store: st,
 		// A holder of its own: it leases the review job, never this one.
-		AskReview: implement.ReviewAsker(intake.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		AskReview: implement.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		StateDir:  stateDir,
 	}, nil
 }

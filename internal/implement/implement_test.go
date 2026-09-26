@@ -259,7 +259,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		CICeiling:     2 * time.Hour,
 		CIFixes:       2,
 		Store:         s,
-		AskReview:     implement.ReviewAsker(intake.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
+		AskReview:     implement.ReviewAsker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
