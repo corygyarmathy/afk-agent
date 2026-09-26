@@ -167,14 +167,14 @@ func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
 
 // apply runs the transition and commits what it decided. Every path out of it
 // that still holds the lease gives it back exactly once: through the commit's
-// own release when there is nothing to perform, or through abandon - once the
+// own release when there is nothing to perform, or through release - once the
 // effects have run, or on a path that returns without a commit.
 func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now time.Time) (out Outcome, err error) {
 	if job.Kind != t.Kind {
-		return Outcome{}, r.abandon(ctx, job, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind))
+		return Outcome{}, r.release(ctx, job, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind))
 	}
 	if job.State != t.From {
-		return Outcome{}, r.abandon(ctx, job, fmt.Errorf("%w: %s is in state %q, transition %q runs from %q", ErrWrongState, job.ID, job.State, t.Name, t.From))
+		return Outcome{}, r.release(ctx, job, fmt.Errorf("%w: %s is in state %q, transition %q runs from %q", ErrWrongState, job.ID, job.State, t.Name, t.From))
 	}
 
 	res, err := r.decide(ctx, t, job, now)
@@ -231,12 +231,12 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Release:   len(todo) == 0,
 	}
 	if err := r.Store.Commit(done, c); err != nil {
-		return Outcome{}, r.abandon(ctx, job, err)
+		return Outcome{}, r.release(ctx, job, err)
 	}
 
 	committed, err := r.Store.Job(done, job.ID)
 	if err != nil {
-		return Outcome{}, r.abandon(ctx, job, err)
+		return Outcome{}, r.release(ctx, job, err)
 	}
 	out = Outcome{
 		Transition: t.Name,
@@ -252,20 +252,20 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 	// the comment is not there.
 	for _, e := range todo {
 		if err := e.Do(ctx); err != nil {
-			return out, r.abandon(ctx, job, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err))
+			return out, r.release(ctx, job, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err))
 		}
 		out.Performed = append(out.Performed, e.Key)
 	}
-	return out, r.abandon(ctx, job, nil)
+	return out, r.release(ctx, job, nil)
 }
 
-// abandon gives the lease back on a run that ends without a commit or whose
+// release gives the lease back on a run that ends without a commit or whose
 // effects have finished, and returns the cause, which is nil for a run that
 // succeeded. The store's Release is its own guard: it drops only this holder's
 // lease, so a commit that already released makes this a no-op rather than a
 // double release, and a lease that ran out mid-effect and was taken by another
 // worker stays with that worker.
-func (r *Runner) abandon(ctx context.Context, job store.Job, cause error) error {
+func (r *Runner) release(ctx context.Context, job store.Job, cause error) error {
 	// Release rather than let the lease run out: the job is going back on the
 	// queue, and making the next worker wait out a full TTL for a job this
 	// process has finished with is time spent for nothing.
@@ -311,12 +311,12 @@ func (r *Runner) fail(ctx context.Context, t Transition, job store.Job, now time
 	}
 	done := finishing(ctx)
 	if err := r.Store.Commit(done, c); err != nil {
-		return Outcome{}, r.abandon(ctx, job, errors.Join(cause, err))
+		return Outcome{}, r.release(ctx, job, errors.Join(cause, err))
 	}
 
 	committed, err := r.Store.Job(done, job.ID)
 	if err != nil {
-		return Outcome{}, r.abandon(ctx, job, errors.Join(cause, err))
+		return Outcome{}, r.release(ctx, job, errors.Join(cause, err))
 	}
 	out := Outcome{
 		Transition: t.Name,
