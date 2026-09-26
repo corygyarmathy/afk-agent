@@ -537,12 +537,28 @@ func TestNoOtherWorkerRunsTheJobWhileAnEffectIsInFlight(t *testing.T) {
 	first := runner(s, reg, func(r *transition.Runner) { r.Holder = "first" })
 	second := runner(s, reg, func(r *transition.Runner) { r.Holder = "second" })
 
+	// Let the effect go on every way out of the test, so a failure below does
+	// not leave the first worker's goroutine blocked behind it.
+	t.Cleanup(func() {
+		select {
+		case <-letGo:
+		default:
+			close(letGo)
+		}
+	})
+
 	done := make(chan error, 1)
 	go func() {
 		_, err := first.Run(ctx, "post", job.ID)
 		done <- err
 	}()
-	<-inside
+	select {
+	case <-inside:
+	case err := <-done:
+		t.Fatalf("Run returned before its effect ran: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the effect never started")
+	}
 
 	// Committed, due, and still not the second worker's to take.
 	got, _ := s.Job(ctx, job.ID)
