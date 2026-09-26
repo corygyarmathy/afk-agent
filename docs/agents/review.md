@@ -133,9 +133,9 @@ before choosing values:
 - `--lease` must be longer than a model run, and than posting the reply. A
   lease that lapses mid-run lets another worker take the job; the store refuses
   the first run's commit, so the work is wasted rather than duplicated, but it
-  is still wasted. The lease is held until a transition's effects finish, so
-  one that lapses mid-post lets a verify look for the reply before it lands,
-  and post it again.
+  is still wasted. The lease is renewed when a transition commits and held
+  until its effects finish, so one that lapses mid-post lets a verify look for
+  the reply before it lands, and post it again.
 - `--model-attempts` bounds the candidates tried before a tier is exhausted.
   Only a model run that failed transiently moves on to the next candidate. Any
   other error in a run - the tracker, the checkout - counts against
