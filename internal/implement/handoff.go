@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -33,7 +34,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	if err != nil {
 		return transition.Result{}, err
 	}
-	pr, ok, err := d.pullRequestFrom(ctx, p.Branch)
+	pr, ok, err := d.open(ctx, from(p.Branch))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -50,14 +51,14 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 		return transition.Result{}, err
 	}
 	if at != p.Pushed {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed)), "")
 	}
 
 	comments, err := d.Tracker.Comments(ctx, pr.Number)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if d.hasReview(comments, p.Pushed) {
+	if review.Reviewed(comments, d.Login, p.Pushed) {
 		return transition.Result{State: HandingOff, RunAt: in.Now}, nil
 	}
 
@@ -74,7 +75,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	case rj.State != review.Start:
 		// Parked where it failed. Starting it over would throw its state
 		// away, and it is the operator's to look at.
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("The review job for this pull request failed and stopped in `%s`, so no review of `%s` is coming.", rj.State, short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("The review job for this pull request failed and stopped in `%s`, so no review of `%s` is coming.", rj.State, git.Short(p.Pushed)), "")
 	}
 
 	// No review job, or one at rest with no review of this head to show
@@ -86,7 +87,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	}
 	now := in.Now
 	wait.Effects = []transition.Effect{{Key: key, Do: func(ctx context.Context) error {
-		return d.askReview(ctx, subject, now)
+		return d.AskReview(ctx, subject, now)
 	}}}
 	return wait, nil
 }
@@ -107,7 +108,7 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 	if err != nil {
 		return transition.Result{}, err
 	}
-	pr, ok, err := d.pullRequestFrom(ctx, p.Branch)
+	pr, ok, err := d.open(ctx, from(p.Branch))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -128,41 +129,12 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 	return transition.Result{State: HandingOff, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
-// hasReview reports whether the agent has posted a review of head.
-func (d *Deps) hasReview(comments []github.Comment, head string) bool {
-	marker := review.Marker(head)
-	for _, c := range comments {
-		if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-// askReview makes the pull request's review job due now, creating it if it is
-// not there. A job already queued or held is left alone: that run will review
-// the head. So is one parked away from start, which awaitReview hands back. The one store write a transition's effect makes, and it is to
-// another job: this one's own state is the runner's to write.
-func (d *Deps) askReview(ctx context.Context, subject store.Subject, now time.Time) error {
-	job, err := d.Store.Ensure(ctx, store.KindReview, subject, review.Start, now)
-	if err != nil {
+// ReviewAsker is Deps.AskReview, arming under a's lease. A job already queued
+// or held is left alone: that run will review the head. So is one parked away
+// from start, which awaitReview hands back.
+func ReviewAsker(a intake.Armer) func(ctx context.Context, pr store.Subject, now time.Time) error {
+	return func(ctx context.Context, pr store.Subject, now time.Time) error {
+		_, _, err := a.Arm(ctx, store.KindReview, pr, review.Start, now, nil, false)
 		return err
 	}
-	if !job.NextRunAt.IsZero() || job.State != review.Start {
-		return nil
-	}
-	job, ok, err := d.Store.Acquire(ctx, job.ID, d.Holder, now, d.LeaseTTL)
-	if err != nil || !ok {
-		return err
-	}
-	if !job.NextRunAt.IsZero() || job.State != review.Start {
-		return d.Store.Release(ctx, job.ID, d.Holder)
-	}
-	err = d.Store.Commit(context.WithoutCancel(ctx), store.Commit{
-		JobID: job.ID, Holder: d.Holder, State: review.Start, NextRunAt: now, Release: true,
-	})
-	if err != nil {
-		return errors.Join(err, d.Store.Release(context.WithoutCancel(ctx), job.ID, d.Holder))
-	}
-	return nil
 }

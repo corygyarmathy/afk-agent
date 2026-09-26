@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -36,7 +37,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	pr, ok, err := d.pullRequestFrom(ctx, p.Branch)
+	pr, ok, err := d.open(ctx, from(p.Branch))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -53,7 +54,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		return transition.Result{}, err
 	}
 	if at != p.Pushed {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, short(at), short(p.Pushed)), "")
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed)), "")
 	}
 
 	runs, err := d.Tracker.CheckRuns(ctx, p.Pushed)
@@ -77,7 +78,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 
 	if !finished {
 		if !in.Now.Before(p.PushedAt.Add(d.CICeiling)) {
-			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", short(p.Pushed), d.CICeiling)
+			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", git.Short(p.Pushed), d.CICeiling)
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
 			}
@@ -101,7 +102,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	// the local gate, and CI rounds are bounded separately from it (§5).
 	p.Attempts = 0
 	p.Failure = output
-	p.Why = fmt.Sprintf("CI failed on `%s`, the head the agent pushed: %s.", short(p.Pushed), names(failed))
+	p.Why = fmt.Sprintf("CI failed on `%s`, the head the agent pushed: %s.", git.Short(p.Pushed), names(failed))
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
@@ -114,7 +115,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 // beside the pull request. The pull request is handed back instead - once per
 // head - or, if there is none, the job rests.
 func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, error) {
-	pr, ok, err := d.open(ctx, in.Job.Subject.Number)
+	pr, ok, err := d.open(ctx, d.forIssue(in.Job.Subject.Number))
 	if err != nil || !ok {
 		return transition.Result{State: Start}, errors.Join(err, d.clear(in.Job.ID))
 	}
@@ -168,11 +169,4 @@ func (d *Deps) handBackPR(ctx context.Context, in transition.In, p progress, pr 
 		owed.Comment(fmt.Sprintf("hand-back-pr-%d-%s", pr, key), pr, marker, body),
 		owed.Label(fmt.Sprintf("hand-back-label-pr-%d-%s", pr, key), pr, d.HandBackLabel),
 	}})
-}
-
-func short(sha string) string {
-	if len(sha) > 12 {
-		return sha[:12]
-	}
-	return sha
 }

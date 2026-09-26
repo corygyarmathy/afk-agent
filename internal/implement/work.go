@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,11 +16,13 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -101,32 +102,17 @@ type progress struct {
 // run is `implement-run`: one candidate model does the work in the workspace,
 // or fixes what the gate said about the work already there.
 func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
-	candidates, err := d.Resolve(ctx)
-	var limited *model.LimitedError
-	if errors.As(err, &limited) {
-		at := limited.ResetsAt
-		if at.IsZero() {
-			at = in.Now.Add(d.TierWait)
-		}
-		return transition.Result{State: Deferred, RunAt: at}, nil
-	}
-	if err != nil {
-		// A capability no enrolled model has, or a tier nobody enrolled: a
-		// configuration mistake, and a human's (ADR 0001 §10).
-		return transition.Result{}, err
-	}
 	// A gate failure moves the job to a new state, which clears the attempt
 	// count, so the retry starts again at the first candidate - which need
 	// not be the model that wrote the session. That is intended: opencode
 	// continues a session under any model, and the tier's order is the
 	// preference (ADR 0001 §9).
-	ref, err := candidates.Attempt(in.Job.Attempts, d.Bound)
-	var exhausted *model.ExhaustedError
-	if errors.As(err, &exhausted) {
-		return transition.Result{State: Deferred, RunAt: in.Now.Add(d.TierWait)}, nil
-	}
+	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Attempts, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	if !until.IsZero() {
+		return transition.Result{State: Deferred, RunAt: until}, nil
 	}
 
 	n := in.Job.Subject.Number
@@ -232,7 +218,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	// and CI would read the same red run.
 	since, nothing := p.Base, "The session finished without committing anything, so there is nothing to push."
 	if p.Pushed != "" {
-		since, nothing = p.Pushed, fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", short(p.Pushed))
+		since, nothing = p.Pushed, fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", git.Short(p.Pushed))
 	}
 	made, err := commits(ctx, ws, since)
 	if err != nil {
@@ -253,7 +239,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		// unread: a session runs the gate itself, and what that leaves
 		// behind is not the work. A file the work needed but nobody added
 		// goes too, and the gate says so.
-		if _, err := git(ctx, ws, "clean", "--quiet", "--force", "-d"); err != nil {
+		if _, err := git.Run(ctx, ws, "clean", "--quiet", "--force", "-d"); err != nil {
 			return transition.Result{}, err
 		}
 		passed, output, err := runGate(ctx, ws, d.Gate)
@@ -296,7 +282,7 @@ func (d *Deps) resume(_ context.Context, in transition.In) (transition.Result, e
 // workspace that fails again says so again.
 func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reason, output string) (transition.Result, error) {
 	if p.Pushed != "" {
-		pr, ok, err := d.pullRequestFrom(ctx, p.Branch)
+		pr, ok, err := d.open(ctx, from(p.Branch))
 		if err != nil {
 			return transition.Result{}, err
 		}
@@ -360,7 +346,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bo
 	case errors.Is(err, os.ErrNotExist):
 		// The progress may have gone with the lease: the tracker still
 		// says whether the work reached a pull request.
-		if _, ok, err := d.open(ctx, n); err != nil || ok {
+		if _, ok, err := d.open(ctx, d.forIssue(n)); err != nil || ok {
 			return progress{}, ok, err
 		}
 	case err != nil:
@@ -531,31 +517,18 @@ func (d *Deps) clear(jobID string) error {
 	return nil
 }
 
-// save writes the progress atomically, so a crash leaves the old file or the
-// new one and never half of one.
+// save writes the progress.
 func (d *Deps) save(jobID string, p progress) error {
-	path := d.progressPath(jobID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return statefile.Save(d.progressPath(jobID), p)
 }
 
 func (d *Deps) load(jobID string) (progress, error) {
-	b, err := os.ReadFile(d.progressPath(jobID))
-	if err != nil {
+	var p progress
+	err := statefile.Load(d.progressPath(jobID), &p)
+	if errors.Is(err, os.ErrNotExist) {
 		return progress{}, err
 	}
-	var p progress
-	if err := json.Unmarshal(b, &p); err != nil {
+	if err != nil {
 		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
 	}
 	if p.Nonce == "" || p.Branch == "" || p.Base == "" || p.Into == "" {

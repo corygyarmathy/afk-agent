@@ -722,7 +722,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Token == nil ||
-		d.HandOffLabel != "needs-review" || d.LeaseTTL != 10*time.Minute || d.Holder == "" ||
+		d.HandOffLabel != "needs-review" || d.AskReview == nil ||
 		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIRounds != 2 ||
 		d.Bound != 3 || d.TierWait != 30*time.Minute || d.Remote != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)

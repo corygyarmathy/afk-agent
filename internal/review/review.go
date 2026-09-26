@@ -43,7 +43,6 @@ package review
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -54,11 +53,13 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -218,28 +219,12 @@ func (d *Deps) book() *owed.Book {
 
 // run is `review-run`: one candidate model, in a fresh checkout of the head.
 func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
-	candidates, err := d.Resolve(ctx)
-	var limited *model.LimitedError
-	if errors.As(err, &limited) {
-		at := limited.ResetsAt
-		if at.IsZero() {
-			at = in.Now.Add(d.TierWait)
-		}
-		return transition.Result{State: Deferred, RunAt: at}, nil
-	}
-	if err != nil {
-		// A capability no enrolled model has, or a tier nobody enrolled: a
-		// configuration mistake, and a human's (ADR 0001 §10).
-		return transition.Result{}, err
-	}
-
-	ref, err := candidates.Attempt(in.Job.Attempts, d.Bound)
-	var exhausted *model.ExhaustedError
-	if errors.As(err, &exhausted) {
-		return transition.Result{State: Deferred, RunAt: in.Now.Add(d.TierWait)}, nil
-	}
+	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Attempts, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	if !until.IsZero() {
+		return transition.Result{State: Deferred, RunAt: until}, nil
 	}
 
 	ws := filepath.Join(d.StateDir, "workspaces", in.Job.ID)
@@ -320,7 +305,7 @@ func (d *Deps) post(ctx context.Context, in transition.In) (transition.Result, e
 	n := in.Job.Subject.Number
 	key, err := transition.Round(ctx, d.Store, fmt.Sprintf("review-pr-%d-%s", n, p.Head), d.Bound)
 	if err != nil {
-		return transition.Result{}, fmt.Errorf("the review of %s never appeared on pull request %d: %w", short(p.Head), n, err)
+		return transition.Result{}, fmt.Errorf("the review of %s never appeared on pull request %d: %w", git.Short(p.Head), n, err)
 	}
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
 		// The key stops this run posting twice. The tracker is what stops a
@@ -405,9 +390,15 @@ func (d *Deps) askedByJob(ctx context.Context, pr github.PullRequest) (bool, err
 
 // reviewed reports whether the agent has posted a review of head.
 func (d *Deps) reviewed(comments []github.Comment, head string) bool {
+	return Reviewed(comments, d.Login, head)
+}
+
+// Reviewed reports whether login, the agent's account, has posted a review of
+// head among comments.
+func Reviewed(comments []github.Comment, login, head string) bool {
 	marker := Marker(head)
 	for _, c := range comments {
-		if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
+		if strings.EqualFold(c.Login, login) && strings.Contains(c.Body, marker) {
 			return true
 		}
 	}
@@ -417,7 +408,7 @@ func (d *Deps) reviewed(comments []github.Comment, head string) bool {
 // already is the reply to a command for a head that has its review.
 func already(n int, c github.Comment, head string) owed.Item {
 	return owed.Reply(fmt.Sprintf("already-comment-%d", c.ID), n, c,
-		fmt.Sprintf("Already reviewed at `%s`; nothing has changed since. Push a new commit and `%s` again for another review.", short(head), Word))
+		fmt.Sprintf("Already reviewed at `%s`; nothing has changed since. Push a new commit and `%s` again for another review.", git.Short(head), Word))
 }
 
 // body is the comment a review is posted as. On the implement job's pull
@@ -428,7 +419,7 @@ func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
 		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
 	}
 	return fmt.Sprintf("%s\n**Advisory review** of `%s`. This does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n",
-		Marker(head), short(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
+		Marker(head), git.Short(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
 }
 
 // pending is a reply written and not yet seen on the tracker.
@@ -443,33 +434,16 @@ func (d *Deps) pendingPath(jobID string) string {
 
 // save writes the pending reply.
 func (d *Deps) save(jobID string, p pending) error {
-	return writeJSON(d.pendingPath(jobID), p)
-}
-
-// writeJSON writes v to path atomically, so a crash leaves the old file or the
-// new one and never half of one.
-func writeJSON(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return statefile.Save(d.pendingPath(jobID), p)
 }
 
 func (d *Deps) load(jobID string) (pending, error) {
-	b, err := os.ReadFile(d.pendingPath(jobID))
-	if err != nil {
+	var p pending
+	err := statefile.Load(d.pendingPath(jobID), &p)
+	if errors.Is(err, os.ErrNotExist) {
 		return pending{}, err
 	}
-	var p pending
-	if err := json.Unmarshal(b, &p); err != nil {
+	if err != nil {
 		return pending{}, fmt.Errorf("pending reply for %s: %w", jobID, err)
 	}
 	if p.Head == "" || p.Body == "" {
@@ -490,29 +464,19 @@ func (d *Deps) askedPath(jobID string) string {
 }
 
 func (d *Deps) saveAsked(jobID string, issue int) error {
-	return writeJSON(d.askedPath(jobID), asked{Issue: issue})
+	return statefile.Save(d.askedPath(jobID), asked{Issue: issue})
 }
 
 // askedFor is the issue whose implement job asked for this review, or zero if
 // nothing but a command did.
 func (d *Deps) askedFor(jobID string) (int, error) {
-	b, err := os.ReadFile(d.askedPath(jobID))
+	var a asked
+	err := statefile.Load(d.askedPath(jobID), &a)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, err
-	}
-	var a asked
-	if err := json.Unmarshal(b, &a); err != nil {
 		return 0, fmt.Errorf("the request for %s: %w", jobID, err)
 	}
 	return a.Issue, nil
-}
-
-func short(sha string) string {
-	if len(sha) > 12 {
-		return sha[:12]
-	}
-	return sha
 }

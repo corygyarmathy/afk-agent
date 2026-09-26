@@ -238,13 +238,12 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Attempts:      3,
 		HandBackLabel: "needs-decision",
 		HandOffLabel:  "needs-review",
-		Holder:        "implement-test",
-		LeaseTTL:      time.Minute,
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
 		CIRounds:      2,
 		Store:         s,
+		AskReview:     implement.ReviewAsker(intake.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)

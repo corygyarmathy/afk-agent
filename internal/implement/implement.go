@@ -154,13 +154,15 @@ type Deps struct {
 	// token. Nil pushes with none, which is a local remote in a test.
 	Token func(ctx context.Context) (string, error)
 
-	// Store is read to learn which round of an effect is next, and written
-	// only by the effect that makes the pull request's review job due -
-	// another job, under Holder's lease for LeaseTTL. This job's own state
-	// is the runner's to write.
-	Store    store.Store
-	Holder   string
-	LeaseTTL time.Duration
+	// Store is read, never written: which round of an effect is next, and
+	// where the pull request's review job is. This job's own state is the
+	// runner's to write.
+	Store store.Store
+
+	// AskReview makes the pull request's review job due now, under a lease
+	// of its own: the one store write an effect makes, and it is to another
+	// job. ReviewAsker makes one.
+	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 
 	// StateDir is where workspaces and their progress live - beside the
 	// store, never in it (ADR 0001 §5).
@@ -217,7 +219,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		// enough to stop the commands being armed again.
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
-	pr, ok, err := d.open(ctx, n)
+	pr, ok, err := d.open(ctx, d.forIssue(n))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -255,23 +257,33 @@ func (d *Deps) book() *owed.Book {
 	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Bound: d.Bound, Dir: filepath.Join(d.StateDir, "owed")}
 }
 
-// open finds the agent's open pull request for issue n, if it has one. It is
-// recognised by its author and its branch, which is read from the tracker
-// rather than remembered in the store (ADR 0001 §5).
-func (d *Deps) open(ctx context.Context, n int) (github.PullRequest, bool, error) {
+// open finds the agent's open pull request that match accepts, if it has one.
+// It is recognised by its author and its branch, which are read from the
+// tracker rather than remembered in the store (ADR 0001 §5).
+func (d *Deps) open(ctx context.Context, match func(github.PullRequest) bool) (github.PullRequest, bool, error) {
 	prs, err := d.Tracker.OpenPullRequests(ctx)
 	if err != nil {
 		return github.PullRequest{}, false, err
 	}
 	for _, pr := range prs {
-		if !strings.EqualFold(pr.Login, d.Login) {
-			continue
-		}
-		if issue, ok := IssueOf(d.BranchPrefix, pr.HeadRef); ok && issue == n {
+		if strings.EqualFold(pr.Login, d.Login) && match(pr) {
 			return pr, true, nil
 		}
 	}
 	return github.PullRequest{}, false, nil
+}
+
+// forIssue matches a pull request from any branch the agent pushed for issue n.
+func (d *Deps) forIssue(n int) func(github.PullRequest) bool {
+	return func(pr github.PullRequest) bool {
+		issue, ok := IssueOf(d.BranchPrefix, pr.HeadRef)
+		return ok && issue == n
+	}
+}
+
+// from matches a pull request from branch.
+func from(branch string) func(github.PullRequest) bool {
+	return func(pr github.PullRequest) bool { return pr.HeadRef == branch }
 }
 
 // IssueOf is the issue a branch the agent pushed is for: `<prefix><n>-<k>`,
