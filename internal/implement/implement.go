@@ -41,8 +41,8 @@
 // The gate is its own transition, and the agent's rather than the model's. The
 // session is told to run it, and its word that it did is not the gate. Two
 // counts bound the work, and they are kept apart: the job's stays move a
-// model run that failed transiently to the next candidate, and the progress file
-// beside the workspace counts the gate's failures. A candidate that fails
+// model run that failed transiently to the next candidate, and the progress
+// file beside the workspace counts the gate's failures. A candidate that fails
 // transiently has not had a go at the work, and a gate failure is not a
 // model's fault.
 //

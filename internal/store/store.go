@@ -108,11 +108,12 @@ type Job struct {
 	State    string
 	Attempts int
 
-	// Stays is how many runs in a row decided to stay in State. A run that
-	// returned an error is an attempt and not a stay, and a move sets both
-	// back to zero. The review and implement kinds choose their candidate
-	// model by it, so an error that is not the model's - the tracker, a
-	// clone - leaves the next run on the same candidate (#62).
+	// Stays is how many runs have decided to stay in State since the job
+	// entered it. A run that returned an error is an attempt and not a stay,
+	// and leaves the count where it was; a move sets both back to zero. The
+	// review and implement kinds choose their candidate model by it, so an
+	// error that is not the model's - the tracker, a clone - leaves the next
+	// run on the same candidate (#62).
 	Stays int
 
 	// NextRunAt is when the job becomes due for re-entry. Zero means the job

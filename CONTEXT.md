@@ -33,7 +33,7 @@ A job left in its persisted state with nothing scheduled - no lease, no next run
 _Avoid_: Stuck, suspended, dropped
 
 **Stay**:
-A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a stay also counts as an attempt, but a run that returned an error is an attempt and not a stay - it decided nothing. A job counts its stays in a row, and a move to another state starts the count again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
+A transition that ran and decided to leave its job in the same state, scheduled again. Distinct from an attempt: a stay also counts as an attempt, but a run that returned an error is an attempt and not a stay - it decided nothing. A job counts its stays since it entered its state - an error in between does not break the count - and a move to another state starts it again. The count is what picks the candidate model, because the one stay a model-running transition makes is a model that failed transiently; an error that is not the model's, such as the tracker or a clone, leaves the next run on the same candidate.
 _Avoid_: Retry, skip, candidate index
 
 **Budget observation**:
