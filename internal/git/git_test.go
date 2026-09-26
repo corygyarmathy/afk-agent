@@ -3,6 +3,7 @@ package git_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,5 +57,32 @@ func TestARemoteWithoutATokenSendsNone(t *testing.T) {
 	}}
 	if _, err := failing.Run(context.Background(), "", "ls-remote", failing.URL); err == nil || !strings.Contains(err.Error(), "502") {
 		t.Errorf("err = %v, want the mint's", err)
+	}
+}
+
+// A read given no directory does not take one from the agent's own: a
+// repository around the agent's working directory has a configuration that
+// neither the global nor the system one shuts out, and it could send the read,
+// and its token, elsewhere.
+func TestAReadWithNoDirectoryTakesNoRepositoryItIsIn(t *testing.T) {
+	root := t.TempDir()
+	src, elsewhere, around := filepath.Join(root, "src.git"), filepath.Join(root, "elsewhere.git"), filepath.Join(root, "around")
+	for _, args := range [][]string{
+		{"init", "--quiet", "--bare", src},
+		{"init", "--quiet", "--bare", elsewhere},
+		{"init", "--quiet", around},
+		{"-C", around, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "elsewhere"},
+		{"-C", around, "push", "--quiet", elsewhere, "HEAD:refs/heads/elsewhere"},
+		{"-C", around, "config", "url." + elsewhere + ".insteadOf", src},
+	} {
+		if _, err := git.RunEnv(context.Background(), "", git.Isolated, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(around)
+
+	r := git.Remote{URL: src}
+	if heads, err := r.Run(context.Background(), "", "ls-remote", r.URL); err != nil || heads != "" {
+		t.Errorf("ls-remote = %q, %v: want the empty remote's nothing", heads, err)
 	}
 }

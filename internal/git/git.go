@@ -63,10 +63,18 @@ type Remote struct {
 // global and system configuration, with the token for the remote's URL. The
 // command names the remote by its URL: a name would be looked up in a
 // configuration the session may have written.
+//
+// An empty dir is the root, not the agent's own directory: git takes the
+// configuration of whatever repository it runs in, which isolation does not
+// shut out, and a repository around the agent's directory could send the
+// token elsewhere. A path in args is therefore absolute.
 func (r Remote) Run(ctx context.Context, dir string, args ...string) (string, error) {
 	env, err := r.Env(ctx)
 	if err != nil {
 		return "", err
+	}
+	if dir == "" {
+		dir = "/"
 	}
 	return RunEnv(ctx, dir, env, args...)
 }
@@ -74,7 +82,7 @@ func (r Remote) Run(ctx context.Context, dir string, args ...string) (string, er
 // Env is the environment a git process that reaches the remote runs with: git's
 // own configuration-by-environment, so the token is not an argument (visible in
 // ps to everyone) or a file. The header is scoped to the remote's URL, so a
-// redirect elsewhere does not carry it.
+// request to any other URL does not carry it.
 func (r Remote) Env(ctx context.Context) ([]string, error) {
 	env := append([]string{"GIT_TERMINAL_PROMPT=0"}, Isolated...)
 	if r.Token == nil {

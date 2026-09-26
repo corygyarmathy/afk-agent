@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -26,7 +27,11 @@ import (
 // and nothing of it is left in dir: what the clone writes there is the model's
 // to read.
 func prepare(ctx context.Context, remote git.Remote, dir, prefix string, issue int) (branch, base, into string, err error) {
-	if _, err := remote.Run(ctx, "", "clone", "--quiet", "--no-tags", remote.URL, dir); err != nil {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", "", err
+	}
+	if _, err := remote.Run(ctx, "", "clone", "--quiet", "--no-tags", remote.URL, abs); err != nil {
 		return "", "", "", err
 	}
 	into, err = git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
