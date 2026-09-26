@@ -41,7 +41,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 	if bad := denied(d.Denylist, paths); len(bad) > 0 {
-		return d.handBack(in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
+		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
 
 	key, err := d.round(ctx, fmt.Sprintf("push-%s-%s", p.Branch, head))

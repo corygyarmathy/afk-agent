@@ -1,6 +1,8 @@
 package implement_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -206,5 +208,204 @@ func TestAWatchThatLostItsRecordHandsBack(t *testing.T) {
 	posted := f.tr.byAgent()
 	if len(posted) != 1 || f.tr.commentedOn[0] != 40 || !strings.Contains(posted[0].Body, "lost its record") {
 		t.Fatalf("comments %+v on %v, want one hand-back on #40", posted, f.tr.commentedOn)
+	}
+}
+
+// watched drives the first run to a pushed head that CI has not finished on,
+// with the pull request open as #101.
+func watched(t *testing.T) *fixture {
+	t.Helper()
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
+	}
+	return f
+}
+
+// handedBackOnThePR checks for one hand-back, on #101 and nowhere else,
+// saying each of want, and a job at rest.
+func (f *fixture) handedBackOnThePR(want ...string) {
+	f.t.Helper()
+	posted := f.tr.byAgent()
+	if len(posted) != 1 || f.tr.commentedOn[0] != 101 {
+		f.t.Fatalf("comments %+v on %v, want one hand-back on #101", posted, f.tr.commentedOn)
+	}
+	for _, w := range append([]string{"before handing this pull request off", "stays open"}, want...) {
+		if !strings.Contains(posted[0].Body, w) {
+			f.t.Errorf("the hand-back does not say %q:\n%s", w, posted[0].Body)
+		}
+	}
+	if strings.Contains(posted[0].Body, "Nothing was pushed") {
+		f.t.Errorf("the hand-back on the pull request says nothing was pushed:\n%s", posted[0].Body)
+	}
+	if len(f.tr.labelledOn) != 1 || f.tr.labelledOn[0] != 101 || f.tr.labels[0] != "needs-decision" {
+		f.t.Errorf("labels %v on %v, want the hand-back label on #101 only", f.tr.labels, f.tr.labelledOn)
+	}
+	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
+		f.t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// A fix round goes through the same gate and denylist as the first push, and
+// what stops it there is handed back on the pull request, not on the issue:
+// by then the work is the pull request's. Nothing more reaches the remote.
+func TestAFixThatIsStoppedBeforeItsPushHandsBackOnThePullRequest(t *testing.T) {
+	unok := func(dir string) error {
+		if _, err := run(dir, "git", "rm", "--quiet", "ok"); err != nil {
+			return err
+		}
+		_, err := run(dir, "git", "commit", "--quiet", "-m", "drop ok")
+		return err
+	}
+	denied := func(dir string) error {
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			return err
+		}
+		return commit(".github/workflows/ci.yml")(dir)
+	}
+	for _, tc := range []struct {
+		name  string
+		turns []func(string) error
+		want  string
+	}{
+		{"the gate runs out", []func(string) error{unok, commit("a"), commit("b")}, "3 attempts"},
+		{"the denylist", []func(string) error{denied}, "`.github/workflows/ci.yml`"},
+		{"no new commit", nil, "nothing since"},
+		{"another branch", []func(string) error{func(dir string) error {
+			_, err := run(dir, "git", "switch", "--quiet", "--create", "elsewhere")
+			return err
+		}}, "left `afk/7-1`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t, newTracker())
+			f.model.then(commit("ok"))
+			f.model.then(tc.turns...)
+			f.tr.checks = red()
+
+			if errs := f.drive(); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			first, _ := run(f.remote, "git", "rev-parse", "main")
+			if n, _ := run(f.remote, "git", "rev-list", "--count", first+"..afk/7-1"); n != "1" {
+				t.Errorf("%s commits on the pushed branch, want only the first push", n)
+			}
+			f.handedBackOnThePR(tc.want)
+		})
+	}
+}
+
+// Someone else's push to the branch while CI runs is theirs: the agent hands
+// the pull request back rather than fix a run their push cancelled, and never
+// asks the model.
+func TestAPushByAnyoneElseWhileWatchingHandsBack(t *testing.T) {
+	f := watched(t)
+	human := filepath.Join(t.TempDir(), "human")
+	if _, err := run("", "git", "clone", "--quiet", "--branch", "afk/7-1", f.remote, human); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit("review-fix")(human); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(human, "git", "push", "--quiet", "origin", "afk/7-1"); err != nil {
+		t.Fatal(err)
+	}
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{{Name: "test", Status: "completed", Conclusion: "cancelled"}}
+	}
+
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
+	}
+	f.handedBackOnThePR("Someone else pushed")
+}
+
+// A run waiting for a human's approval is not something a session can fix:
+// it is handed back, and the model is not asked.
+func TestARunWaitingForApprovalHandsBack(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{
+			{Name: "build", Status: "completed", Conclusion: "success"},
+			{Name: "deploy", Status: "completed", Conclusion: "action_required"},
+		}
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
+	}
+	f.handedBackOnThePR("waiting for approval", "`deploy`")
+}
+
+// A head with a failed run and another that never finishes waits out the
+// ceiling like any unfinished head, and the hand-back quotes the failure.
+func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"))
+	f.tr.checks = func(string, int) []github.CheckRun {
+		return []github.CheckRun{
+			{Name: "test", Status: "completed", Conclusion: "failure", Text: "--- FAIL: TestReserve"},
+			{Name: "slow", Status: "queued"},
+		}
+	}
+
+	for {
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if f.now().NextRunAt.IsZero() {
+			break
+		}
+		f.at = f.at.Add(f.deps.CIWait)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want only the first run", len(f.model.asked))
+	}
+	f.handedBackOnThePR("had not finished", "--- FAIL: TestReserve")
+}
+
+// A workspace lost during a fix round is not a new start: the branch is
+// pushed and the pull request open, so a new branch would be a second pull
+// request. It is handed back on the one there is.
+func TestAWorkspaceLostInAFixRoundHandsBackOnThePullRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lose string
+	}{
+		{"the workspace", "workspaces"},
+		{"the whole state directory", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t, newTracker())
+			f.model.then(commit("ok"), func(dir string) error {
+				if err := commit("fix")(dir); err != nil {
+					return err
+				}
+				return os.RemoveAll(filepath.Join(f.deps.StateDir, tc.lose))
+			})
+			f.tr.checks = red()
+
+			if errs := f.drive(); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			if b := f.remoteBranches(); b != "afk/7-1\nmain" {
+				t.Errorf("the remote has %q, want only the one branch beside main", b)
+			}
+			if len(f.tr.opened) != 1 {
+				t.Errorf("%d pull requests, want 1", len(f.tr.opened))
+			}
+			f.handedBackOnThePR("lost its record")
+		})
 	}
 }
