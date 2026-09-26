@@ -18,11 +18,11 @@
 //   - A TransientError is anything opencode reported: an error event, a
 //     non-zero exit, a run that said nothing. So is a run still going when
 //     its bound runs out, which is opencode stuck on a provider as often as
-//     anything. Throttles, provider hiccups, a
-//     spent pay-as-you-go balance and a model the provider does not recognise
-//     all arrive that way and are not distinguishable through the harness -
-//     an unknown model's event reads "Unexpected server error" - so they are
-//     not distinguished. The caller retries at the next enrolled model.
+//     anything. Throttles, provider hiccups, a spent pay-as-you-go balance
+//     and a model the provider does not recognise all arrive that way and
+//     are not distinguishable through the harness - an unknown model's event
+//     reads "Unexpected server error" - so they are not distinguished. The
+//     caller retries at the next enrolled model.
 //   - A SessionGoneError is a run that named a session opencode does not have
 //   - deleted, or lost with its data directory. The caller starts a new one.
 //   - A FatalError is a failure this process can see for itself: the binary
@@ -195,13 +195,29 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	// group outlives its leader for as long as anything in it does.
 	killGroup(cmd.Process.Pid)
 
+	// Once the bound has run out, Wait blames it for any run whose group the
+	// kill reached - including one that had already exited on its own, and
+	// left something behind holding its stdout. Whether the run was killed
+	// is in how it ended.
+	killed := false
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
+		killed = ws.Signaled()
+	}
+	if bounded.Err() != nil && !killed {
+		waitErr = nil
+		if !cmd.ProcessState.Success() {
+			waitErr = &exec.ExitError{ProcessState: cmd.ProcessState}
+		}
+	}
+
 	switch {
 	case ctx.Err() != nil:
 		return Reply{}, ctx.Err()
-	case bounded.Err() != nil && waitErr != nil:
+	case bounded.Err() != nil && killed:
 		// Before the stream is judged: a run killed mid-line leaves half an
 		// event, which is the kill's doing rather than opencode's. A run that
-		// exited cleanly as the bound ran out finished, and is not thrown away.
+		// exited as the bound ran out is judged as it would have been without
+		// one.
 		return Reply{}, c.transient(req, fmt.Errorf("the run was still going after %s, and was killed", c.Timeout), &stderr)
 	case decodeErr != nil:
 		return Reply{}, &FatalError{fmt.Errorf("%s did not write an event stream: %w", c.Path, decodeErr)}
