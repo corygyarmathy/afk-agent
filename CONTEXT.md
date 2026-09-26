@@ -77,7 +77,7 @@ What a transition has decided to say on the tracker (a claim, a reply to a comma
 _Avoid_: Pending, outbox, queued
 
 **Effect**:
-Something a transition does outside the job store - a push, a pull request, a comment, a reaction, a label - performed only after the transition's state change is committed, and under an idempotency key that commit reserved. May be lost between the two; is never made twice under one key.
+Something a transition does outside its job's own commit - a push, a pull request, a comment, a reaction, a label, another job made due - performed only after the transition's state change is committed, and under an idempotency key that commit reserved. May be lost between the two; is never made twice under one key.
 _Avoid_: Side effect, action, write
 
 **Round**:
