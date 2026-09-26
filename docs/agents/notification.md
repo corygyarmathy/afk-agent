@@ -59,12 +59,13 @@ on the way, or a run that errored and was rescheduled, is inside the episode.
 The operator is told once, on the `--tier-notify-after`th exhaustion of an
 episode; a later episode of the same job is told again.
 
-The count is in memory, like the suppression below. A restart starts every
-episode again, so a tier that is still out is told again once it has run out
-`--tier-notify-after` more times; whether it should survive a restart is #91.
-Only a move the pool makes ends an episode: a job moved on by a hand-run
-`afk run`, or by an edit to the store, keeps its episode until the process
-restarts, so a later exhaustion of that job is counted into it.
+The episode is kept in the store, so a restart carries on counting it
+([ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md), amended
+for #91). What a restart forgets is having told, like the rest of the
+suppression below: an episode already told is told again the next time its
+tier runs out. Only a move the pool makes ends an episode: a job moved on by a
+hand-run `afk run`, or by an edit to the store, keeps its episode, so a later
+exhaustion of that job is counted into it.
 
 ## Repeats
 
