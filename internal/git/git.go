@@ -84,7 +84,7 @@ type Remote struct {
 // git reports no HTTP status, and its message for a 401 is not one about
 // authentication: with no terminal to prompt on, it says it could not read a
 // username. What it does do on a 401, and on nothing else, is ask a credential
-// helper for a username and password. The helper Env configures for the
+// helper for a username and password. The helper env configures for the
 // remote's URL gives none; it prints this, so a refusal is read from a line the
 // agent wrote rather than from git's wording, in whatever language git speaks.
 const refused = "afk: the remote refused the token"
@@ -116,18 +116,14 @@ func (r Remote) Run(ctx context.Context, dir string, args ...string) (string, er
 	return out, err
 }
 
-// Env is the environment a git process that reaches the remote runs with: git's
-// own configuration-by-environment, so the token is not an argument (visible in
-// ps to everyone) or a file. The header is scoped to the remote's URL, so a
-// request to any other URL does not carry it. So is the credential helper that
-// reports a refusal of it (refused): it supplies no credential, and is asked
-// only when the remote has answered the header with a 401.
-func (r Remote) Env(ctx context.Context) ([]string, error) {
-	env, _, err := r.env(ctx)
-	return env, err
-}
-
-// env is Env, and the token it carries: empty if none.
+// env is the environment a git process that reaches the remote runs with, and
+// the token it carries: empty if none. It is git's own
+// configuration-by-environment, so the token is not an argument (visible in ps
+// to everyone) or a file. The header is scoped to the remote's URL, so a request
+// to any other URL does not carry it. So is the credential helper that reports a
+// refusal of it (refused): it supplies no credential, and is asked only when the
+// remote has answered the header with a 401. Unexported, so that nothing runs git
+// with the token except Run, which acts on that report.
 func (r Remote) env(ctx context.Context) ([]string, string, error) {
 	env := append([]string{"GIT_TERMINAL_PROMPT=0"}, Isolated...)
 	if r.Token == nil {
