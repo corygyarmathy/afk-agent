@@ -15,9 +15,10 @@ import (
 
 const agent = "afk-bot"
 
-// tracker is a fixture tracker: pull requests, their comments, and the
-// reactions on those comments.
+// tracker is a fixture tracker: open issues and pull requests, their
+// comments, and the reactions on those comments.
 type tracker struct {
+	issues    []int
 	prs       []int
 	comments  map[int][]github.Comment
 	reactions map[int64][]github.Reaction
@@ -27,12 +28,15 @@ type tracker struct {
 	asked []int64
 }
 
-func (tr *tracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
-	var prs []github.PullRequest
-	for _, n := range tr.prs {
-		prs = append(prs, github.PullRequest{Number: n, State: "open"})
+func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
+	var out []github.Issue
+	for _, n := range tr.issues {
+		out = append(out, github.Issue{Number: n, State: "open"})
 	}
-	return prs, nil
+	for _, n := range tr.prs {
+		out = append(out, github.Issue{Number: n, State: "open", PullRequest: true})
+	}
+	return out, nil
 }
 
 func (tr *tracker) Comments(_ context.Context, n int) ([]github.Comment, error) {
@@ -56,9 +60,12 @@ var now = time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 func intakeFor(t *testing.T, s store.Store, tr *tracker) *intake.Intake {
 	t.Helper()
 	return &intake.Intake{
-		Tracker:  tr,
-		Store:    s,
-		Commands: []intake.Command{{Word: "/review", Kind: store.KindReview, Start: "start"}},
+		Tracker: tr,
+		Store:   s,
+		Commands: []intake.Command{
+			{Word: "/review", On: store.SubjectPR, Kind: store.KindReview, Start: "start"},
+			{Word: "/implement", On: store.SubjectIssue, Kind: store.KindImplement, Start: "start"},
+		},
 		Login:    agent,
 		Holder:   "intake-test",
 		LeaseTTL: time.Minute,
@@ -127,6 +134,35 @@ func TestAReviewCommandMakesAReviewJobDue(t *testing.T) {
 	}
 	if jobs, _ := s.Jobs(context.Background()); len(jobs) != 1 {
 		t.Errorf("%d jobs in the store, want 1", len(jobs))
+	}
+}
+
+// A command is issued on an issue or on a pull request, and each word is on
+// one of them: /implement on the issue it implements, /review on the pull
+// request it reviews. Both are read in the same pass.
+func TestACommandIsReadOnTheKindOfSubjectItIsIssuedOn(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues: []int{7, 8},
+		prs:    []int{12, 13},
+		comments: map[int][]github.Comment{
+			7:  {comment(1, "alice", "OWNER", "/implement")},
+			8:  {comment(2, "alice", "OWNER", "/review")},
+			12: {comment(3, "alice", "OWNER", "/review")},
+			13: {comment(4, "alice", "OWNER", "/implement")},
+		},
+	}
+
+	made := pass(t, intakeFor(t, s, tr))
+	if got, want := strings.Join(ids(made), " "), "implement-issue-7 review-pr-12"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+	// The word on the wrong kind of subject is not a command, so its
+	// reactions are not worth a request.
+	for _, id := range tr.asked {
+		if id == 2 || id == 4 {
+			t.Errorf("read the reactions of comment %d, a command on the wrong kind of subject", id)
+		}
 	}
 }
 
@@ -315,13 +351,14 @@ func TestWipingTheStoreReDerivesTheSameJobs(t *testing.T) {
 	}
 }
 
-// A pull request that cannot be read does not stop the others.
-func TestAPullRequestThatCannotBeReadDoesNotStopTheRest(t *testing.T) {
+// A subject that cannot be read does not stop the others.
+func TestASubjectThatCannotBeReadDoesNotStopTheRest(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{
+		issues:   []int{3},
 		prs:      []int{1, 2},
 		comments: map[int][]github.Comment{2: {comment(1, "alice", "OWNER", "/review")}},
-		broken:   map[int]error{1: errors.New("502 Bad Gateway")},
+		broken:   map[int]error{1: errors.New("502 Bad Gateway"), 3: errors.New("503 Service Unavailable")},
 	}
 
 	made, err := intakeFor(t, s, tr).Pass(context.Background())
@@ -330,6 +367,9 @@ func TestAPullRequestThatCannotBeReadDoesNotStopTheRest(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "pull request 1") || !strings.Contains(err.Error(), "502") {
 		t.Errorf("err = %v, want it to name pull request 1 and what went wrong", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "issue 3") || !strings.Contains(err.Error(), "503") {
+		t.Errorf("err = %v, want it to name issue 3 and what went wrong", err)
 	}
 }
 
@@ -343,6 +383,7 @@ func TestAnIntakeThatCannotWorkIsRefused(t *testing.T) {
 		{"no lease", func(in *intake.Intake) { in.LeaseTTL = 0 }, "lease"},
 		{"a command that is not a word", func(in *intake.Intake) { in.Commands[0].Word = "review" }, "starting with /"},
 		{"a command for no kind", func(in *intake.Intake) { in.Commands[0].Kind = "deploy" }, "unknown job kind"},
+		{"a command on no subject", func(in *intake.Intake) { in.Commands[0].On = "" }, "unknown subject type"},
 		{"a command with no start", func(in *intake.Intake) { in.Commands[0].Start = "" }, "no start state"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

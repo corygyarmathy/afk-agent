@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
@@ -79,6 +80,44 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Login:    login,
 		StateDir: stateDir,
 	}, nil
+}
+
+// implementDeps builds what the implement kind's transitions reach, from the
+// parameters and the command's tracker.
+//
+// A variable for the reason reviewDeps is.
+var implementDeps = func(ctx context.Context, p params, tr *tracker) (*implement.Deps, error) {
+	if tr == nil {
+		return nil, usagef("implement needs --repo (or set AFK_REPO)")
+	}
+	prefix, err := required(p.branchPrefix, "branch-prefix", "AFK_BRANCH_PREFIX")
+	if err != nil {
+		return nil, err
+	}
+	login, err := tr.Login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &implement.Deps{Tracker: tr.client, Login: login, BranchPrefix: prefix}, nil
+}
+
+// kindDeps builds the dependencies of one job kind, and leaves the rest nil:
+// a hand-run needs only its own kind's parameters.
+func kindDeps(ctx context.Context, kind store.Kind, p params, st store.Store, tr *tracker) (*deps, error) {
+	var (
+		d   deps
+		err error
+	)
+	switch kind {
+	case store.KindReview:
+		d.review, err = reviewDeps(ctx, p, st, tr)
+	case store.KindImplement:
+		d.implement, err = implementDeps(ctx, p, tr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 func readEnrolment(path string) (*model.Enrolment, error) {

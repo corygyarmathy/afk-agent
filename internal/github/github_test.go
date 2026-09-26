@@ -59,7 +59,7 @@ func expect(t *testing.T, w http.ResponseWriter, r *http.Request, method, path, 
 func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"}}`)
+			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"user":{"login":"alice"}}`)
 		}
 	})
 
@@ -67,7 +67,7 @@ func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", Title: "Reserve a job", Body: "Closes #7."}
+	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", Login: "alice", Title: "Reserve a job", Body: "Closes #7."}
 	if pr != want {
 		t.Errorf("got %+v, want %+v", pr, want)
 	}
@@ -88,7 +88,7 @@ func TestAPullRequestWithNoDescriptionHasAnEmptyBody(t *testing.T) {
 	}
 }
 
-func TestIssueReadsItsTitleAndBody(t *testing.T) {
+func TestIssueReadsItsTitleBodyAndState(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/issues/7", "application/vnd.github+json") {
 			fmt.Fprint(w, `{"number":7,"title":"Jobs are reserved","body":"A job is reserved before it runs.","state":"open"}`)
@@ -99,7 +99,7 @@ func TestIssueReadsItsTitleAndBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (github.Issue{Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}); is != want {
+	if want := (github.Issue{Number: 7, State: "open", Title: "Jobs are reserved", Body: "A job is reserved before it runs."}); is != want {
 		t.Errorf("got %+v, want %+v", is, want)
 	}
 }
@@ -158,6 +158,25 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("got %+v\nwant %+v", got, want)
+		}
+	})
+
+	t.Run("open issues", func(t *testing.T) {
+		c, srv := serve(t, pages("/repos/o/n/issues",
+			`[{"number":7,"state":"open","title":"An issue"}]`,
+			`[{"number":12,"state":"open","title":"A pull request","pull_request":{"url":"https://api.github.com/repos/o/n/pulls/12"}}]`))
+		srvURL = srv.URL
+
+		got, err := c.OpenIssues(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []github.Issue{
+			{Number: 7, State: "open", Title: "An issue"},
+			{Number: 12, State: "open", Title: "A pull request", PullRequest: true},
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("got %+v, want %+v", got, want)
 		}
 	})
 

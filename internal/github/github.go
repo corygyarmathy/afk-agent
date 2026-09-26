@@ -3,7 +3,7 @@
 //
 // GitHub owns work state (ADR 0001 §5), so everything a transition knows about a
 // pull request it reads through here, fresh, rather than from the store. Only
-// what the /review slice needs is here; a method is added when a transition
+// what a transition needs is here; a method is added when a transition
 // needs it, not in anticipation of one.
 //
 // It speaks REST over net/http rather than driving the gh binary, so the unit
@@ -80,17 +80,33 @@ type PullRequest struct {
 	// "reviewed at that head" means.
 	HeadSHA string
 
+	// HeadRef is the branch the pull request is from. The agent's own pull
+	// requests are recognised by it.
+	HeadRef string
+
+	// Login is the author's account.
+	Login string
+
 	// Title and Body are the pull request's description, as its author wrote
 	// it. Body is empty when there is none.
 	Title string
 	Body  string
 }
 
-// Issue is the part of an issue a review reads: what it asks for.
+// Issue is the part of an issue a transition reads: what it asks for, and
+// whether it is still open.
 type Issue struct {
 	Number int
-	Title  string
-	Body   string
+
+	// State is `open` or `closed`, as the API spells it.
+	State string
+
+	Title string
+	Body  string
+
+	// PullRequest reports that this issue is a pull request. The API serves
+	// every pull request as an issue too, and says which it is.
+	PullRequest bool
 }
 
 // Comment is one comment on a pull request's conversation.
@@ -147,7 +163,27 @@ func (c *Client) Issue(ctx context.Context, number int) (Issue, error) {
 	if _, err := c.getJSON(ctx, u, &w); err != nil {
 		return Issue{}, err
 	}
-	return Issue{Number: w.Number, Title: w.Title, Body: w.Body}, nil
+	return w.issue(), nil
+}
+
+// OpenIssues lists every open issue and every open pull request, to the last
+// page: the API serves both from one listing, and Issue.PullRequest says which
+// each is. It is how intake reads both kinds of subject a command can be on
+// in one read.
+func (c *Client) OpenIssues(ctx context.Context) ([]Issue, error) {
+	u, err := c.repoURL("/issues?state=open&per_page=%d", perPage)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := all[wireIssue](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Issue, len(ws))
+	for i, w := range ws {
+		out[i] = w.issue()
+	}
+	return out, nil
 }
 
 // OpenPullRequests lists every open pull request, to the last page.
@@ -245,17 +281,33 @@ type wirePR struct {
 	Body   string `json:"body"`
 	Head   struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
 
 func (w wirePR) pullRequest() PullRequest {
-	return PullRequest{Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, Title: w.Title, Body: w.Body}
+	return PullRequest{
+		Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, HeadRef: w.Head.Ref,
+		Login: w.User.Login, Title: w.Title, Body: w.Body,
+	}
 }
 
 type wireIssue struct {
 	Number int    `json:"number"`
+	State  string `json:"state"`
 	Title  string `json:"title"`
 	Body   string `json:"body"`
+
+	// PullRequest is present, and its contents are links, only on an issue
+	// that is a pull request.
+	PullRequest *struct{} `json:"pull_request"`
+}
+
+func (w wireIssue) issue() Issue {
+	return Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil}
 }
 
 type wireComment struct {

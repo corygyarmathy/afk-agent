@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
@@ -30,10 +31,11 @@ func withCatalogue(t *testing.T, ts ...transition.Transition) {
 	t.Helper()
 	reg := transition.MustRegistry(ts...)
 	was := catalogue
-	catalogue = func(*review.Deps) *transition.Registry { return reg }
-	wasDeps := reviewDeps
+	catalogue = func(*deps) *transition.Registry { return reg }
+	wasReview, wasImplement := reviewDeps, implementDeps
 	reviewDeps = func(context.Context, params, store.Store, *tracker) (*review.Deps, error) { return nil, nil }
-	t.Cleanup(func() { catalogue, reviewDeps = was, wasDeps })
+	implementDeps = func(context.Context, params, *tracker) (*implement.Deps, error) { return nil, nil }
+	t.Cleanup(func() { catalogue, reviewDeps, implementDeps = was, wasReview, wasImplement })
 }
 
 // decides is a transition that decides something and touches nothing: no
@@ -114,6 +116,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			args:     []string{"run", "review", "--pr", "12", "extra"},
 			want:     ExitUsage,
 			stderrIs: `unexpected argument "extra"`,
+		},
+		{
+			name:     "a subject of the wrong kind",
+			args:     []string{"run", "review", "--issue", "12"},
+			want:     ExitUsage,
+			stderrIs: "review runs review jobs, which are on a pr: use --pr",
 		},
 		{
 			name:     "an unregistered transition names the ones that are",
@@ -409,11 +417,7 @@ func runsStandalone(t *testing.T, tr transition.Transition) error {
 	}
 	defer s.Close()
 
-	typ := store.SubjectPR
-	if tr.Kind == store.KindImplement {
-		typ = store.SubjectIssue
-	}
-	job, err := s.Ensure(ctx, tr.Kind, store.Subject{Type: typ, Number: 1}, tr.From, time.Now())
+	job, err := s.Ensure(ctx, tr.Kind, store.Subject{Type: subjectOf(tr.Kind), Number: 1}, tr.From, time.Now())
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
@@ -682,6 +686,28 @@ func TestReviewAndIntakeShareTheCommandsTracker(t *testing.T) {
 	}
 }
 
+// Implementing an issue needs the branch prefix, and reaches the tracker
+// through the one the command built.
+func TestImplementNeedsABranchPrefixAndSharesTheCommandsTracker(t *testing.T) {
+	t.Setenv("AFK_BRANCH_PREFIX", "")
+	tr := &tracker{client: &github.Client{Repo: "o/n"}, login: "afk-agent[bot]"}
+
+	if _, err := implementDeps(context.Background(), params{}, tr); err == nil || !strings.Contains(err.Error(), "--branch-prefix") {
+		t.Errorf("err = %v, want it to name --branch-prefix", err)
+	}
+	if _, err := implementDeps(context.Background(), params{branchPrefix: "afk/"}, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
+		t.Errorf("err = %v, want it to name --repo", err)
+	}
+
+	d, err := implementDeps(context.Background(), params{branchPrefix: "afk/"}, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Tracker != tr.client || d.Login != tr.login || d.BranchPrefix != "afk/" {
+		t.Errorf("deps = %+v, want the command's client and login, and the prefix", d)
+	}
+}
+
 // afk intake is nothing without a repository, and says so before it opens
 // anything.
 func TestIntakeNeedsARepository(t *testing.T) {
@@ -707,34 +733,44 @@ func TestEveryCommandStartsWhereATransitionRuns(t *testing.T) {
 		if _, ok := reg.Next(cmd.Kind, cmd.Start); !ok {
 			t.Errorf("%s starts %s jobs in %q, and no transition runs from there", cmd.Word, cmd.Kind, cmd.Start)
 		}
+		if want := subjectOf(cmd.Kind); cmd.On != want {
+			t.Errorf("%s is read on a %s, and makes %s jobs, which are on a %s", cmd.Word, cmd.On, cmd.Kind, want)
+		}
 	}
 }
 
-// standaloneDeps is the review's dependencies with nothing live behind them: a
+// standaloneDeps is every kind's dependencies with nothing live behind them: a
 // tracker that answers from memory, and a budget that is limited, so every
 // transition reaches a decision from its starting state without a network, a
 // model or a checkout.
-func standaloneDeps(t *testing.T) *review.Deps {
-	return &review.Deps{
-		Tracker: closedTracker{},
-		Resolve: func(context.Context) (model.Candidates, error) {
-			return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+func standaloneDeps(t *testing.T) *deps {
+	return &deps{
+		review: &review.Deps{
+			Tracker: closedTracker{},
+			Resolve: func(context.Context) (model.Candidates, error) {
+				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+			},
+			Bound:    1,
+			TierWait: time.Hour,
+			Login:    "afk-bot",
+			StateDir: t.TempDir(),
 		},
-		Bound:    1,
-		TierWait: time.Hour,
-		Login:    "afk-bot",
-		StateDir: t.TempDir(),
+		implement: &implement.Deps{Tracker: closedTracker{}, Login: "afk-bot", BranchPrefix: "afk/"},
 	}
 }
 
-// closedTracker is a pull request that is closed and has nothing on it.
+// closedTracker is an issue and a pull request that are closed and have
+// nothing on them.
 type closedTracker struct{}
 
 func (closedTracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	return github.PullRequest{Number: n, State: "closed", HeadSHA: "abc"}, nil
 }
 func (closedTracker) Issue(_ context.Context, n int) (github.Issue, error) {
-	return github.Issue{Number: n}, nil
+	return github.Issue{Number: n, State: "closed"}, nil
+}
+func (closedTracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
+	return nil, nil
 }
 func (closedTracker) Diff(context.Context, int) (string, error)               { return "", nil }
 func (closedTracker) Comments(context.Context, int) ([]github.Comment, error) { return nil, nil }
