@@ -50,7 +50,7 @@ func matchSegments(pattern, name []string) bool {
 			return false
 		}
 		if ok, err := path.Match(pattern[0], name[0]); err != nil || !ok {
-			// A malformed pattern matches nothing here. validDenylist
+			// A malformed pattern matches nothing here. ValidDenylist
 			// refuses one before it gets this far.
 			return false
 		}
@@ -71,6 +71,11 @@ func ValidDenylist(denylist []string) error {
 			return fmt.Errorf("denylist pattern %q is not a path relative to the repository", pattern)
 		}
 		for _, seg := range strings.Split(pattern, "/") {
+			// git names a path with none of these, so a pattern that
+			// has one matches nothing: `secrets/`, `./flake.lock`.
+			if seg == "" || seg == "." || seg == ".." {
+				return fmt.Errorf("denylist pattern %q has an empty, . or .. segment, and would match no path", pattern)
+			}
 			if seg == "**" {
 				continue
 			}
