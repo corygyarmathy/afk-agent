@@ -107,6 +107,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	// not be the model that wrote the session. That is intended: opencode
 	// continues a session under any model, and the tier's order is the
 	// preference (ADR 0001 §9).
+	//
+	// The stays are the candidates that failed transiently only because
+	// that is the one stay this transition makes. Another way to stay here
+	// would move the work on to the next candidate as well (#62).
 	ref, until, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
 	if err != nil {
 		return transition.Result{}, err

@@ -147,9 +147,11 @@ func (f *fixture) drive() []error {
 		if !ok {
 			return errs
 		}
-		if _, err := f.run.Run(context.Background(), t.Name, job.ID); err != nil {
+		out, err := f.run.Run(context.Background(), t.Name, job.ID)
+		if err != nil {
 			errs = append(errs, err)
 		}
+		f.last, f.lastErr = out, err
 		job = f.now()
 		if job.NextRunAt.IsZero() || job.State == implement.Deferred || job.NextRunAt.After(f.at) {
 			return errs
@@ -537,6 +539,35 @@ func TestAnErrorBeforeTheModelRunsKeepsTheCandidate(t *testing.T) {
 	}
 }
 
+// A clone that fails is git's, not the model's, and does not move the work on
+// to the next candidate either (#62).
+func TestAFailedCloneKeepsTheCandidate(t *testing.T) {
+	f := setup(t, newTracker())
+	f.setState(implement.Implementing)
+	f.run.Backoff = func(int) (time.Time, bool) { return f.at, true }
+	f.model.then(commit("ok"))
+	remote := f.deps.Remote
+	f.deps.Remote = filepath.Join(t.TempDir(), "gone")
+
+	if _, err := f.run.Run(context.Background(), "implement-run", f.job.ID); err == nil {
+		t.Fatal("the clone of a remote that is not there succeeded")
+	}
+	if j := f.now(); j.Stays != 0 || j.Attempts != 1 {
+		t.Errorf("job = %+v, want one attempt and no stays", j)
+	}
+	f.deps.Remote = remote
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 1 || f.model.asked[0].Model != first {
+		t.Errorf("asked %+v, want the first candidate, once", f.model.asked)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Errorf("job in %q, want %q", j.State, implement.Watching)
+	}
+}
+
 // An error that keeps coming back parks the work where it is, as any other
 // transition's does, rather than spend the tier and defer without end (#62).
 func TestAnErrorThatRecursParksTheWork(t *testing.T) {
@@ -553,6 +584,9 @@ func TestAnErrorThatRecursParksTheWork(t *testing.T) {
 	}
 	if len(f.model.asked) != 0 {
 		t.Errorf("asked %+v, want no model run", f.model.asked)
+	}
+	if f.lastErr == nil || !f.last.Parked {
+		t.Errorf("last run = %+v, %v; want a failure that parked, which dispatch tells the operator about", f.last, f.lastErr)
 	}
 }
 
