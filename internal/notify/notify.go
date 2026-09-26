@@ -187,7 +187,7 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 	key := fmt.Sprintf("tier:%s:%d", job.ID, ep.Since.UnixNano())
 
 	body := fmt.Sprintf("%s, on %s #%d, has run out of models %d times since %s.",
-		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.Format(time.RFC3339))
+		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.UTC().Format(time.RFC3339))
 	if cause != nil {
 		body += "\n\n" + cause.Error()
 	}

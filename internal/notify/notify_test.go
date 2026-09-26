@@ -285,7 +285,11 @@ func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 
 	job := parked("deferred", 0)
 	job.NextRunAt = time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
-	ep := store.Episode{Since: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC), Times: 2}
+	// Since in the pool's own location, as the process that started the
+	// episode has it: the message says it in UTC, as a restarted process
+	// reading it back from the store would.
+	since := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC).In(time.FixedZone("AEST", 10*60*60))
+	ep := store.Episode{Since: since, Times: 2}
 	if err := n.TierExhausted(context.Background(), job, ep, errors.New("tier exhausted: all 2 enrolled models tried")); err != nil {
 		t.Fatal(err)
 	}
