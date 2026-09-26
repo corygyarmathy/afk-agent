@@ -44,21 +44,3 @@ func TestAMalformedDenylistIsRefused(t *testing.T) {
 		t.Errorf("ValidDenylist refused a good list: %v", err)
 	}
 }
-
-// The token reaches git through the environment, for the remote's URL only,
-// and not at all for a remote that is not HTTPS.
-func TestThePushEnvironmentCarriesTheTokenForTheRemoteOnly(t *testing.T) {
-	env := strings.Join(pushEnv("https://github.com/o/n.git", "ghs_secret"), "\n")
-	for _, want := range []string{
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.https://github.com/o/n.git.extraheader",
-		"GIT_CONFIG_VALUE_0=Authorization: Basic eC1hY2Nlc3MtdG9rZW46Z2hzX3NlY3JldA==",
-	} {
-		if !strings.Contains(env, want) {
-			t.Errorf("environment does not contain %q:\n%s", want, env)
-		}
-	}
-	if env := strings.Join(pushEnv("/srv/remote.git", "ghs_secret"), "\n"); strings.Contains(env, "extraheader") {
-		t.Errorf("a local remote was given the token:\n%s", env)
-	}
-}

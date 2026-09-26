@@ -47,13 +47,15 @@ func TestCleanWorkIsPushedAndOpensOnePullRequest(t *testing.T) {
 func TestALostPushIsMadeAgain(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(commit("ok"))
-	calls := 0
-	f.deps.Token = func(context.Context) (string, error) {
-		calls++
-		if calls == 1 {
-			return "", errors.New("minting a token: 502 Bad Gateway")
+	failed := false
+	f.deps.Remote.Token = func(context.Context) (string, error) {
+		// Every read mints a token too. The first one minted once there is
+		// a relay is the push's.
+		if _, err := os.Stat(filepath.Join(f.deps.StateDir, "relays")); err != nil || failed {
+			return "", nil
 		}
-		return "", nil
+		failed = true
+		return "", errors.New("minting a token: 502 Bad Gateway")
 	}
 
 	errs := f.drive()
@@ -63,8 +65,12 @@ func TestALostPushIsMadeAgain(t *testing.T) {
 	if j := f.now(); j.State != implement.Watching {
 		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
 	}
-	if calls != 2 || len(f.tr.opened) != 1 {
-		t.Errorf("%d pushes tried and %d pull requests opened, want 2 and 1", calls, len(f.tr.opened))
+	head, _ := run(f.workspace(), "git", "rev-parse", "HEAD")
+	if at, _ := run(f.remote, "git", "rev-parse", "refs/heads/afk/7-1"); at != head {
+		t.Errorf("the remote's afk/7-1 is at %q, want the workspace's head %q", at, head)
+	}
+	if len(f.tr.opened) != 1 {
+		t.Errorf("%d pull requests opened, want 1", len(f.tr.opened))
 	}
 }
 

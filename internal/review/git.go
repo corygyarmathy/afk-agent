@@ -9,9 +9,9 @@ import (
 
 // Git checks a pull request's head out with the git binary.
 type Git struct {
-	// Remote is the repository to fetch from: the tracker's clone URL, or a
-	// local path in a test.
-	Remote string
+	// Remote is the repository to fetch from, and the token the fetch
+	// carries.
+	Remote git.Remote
 }
 
 // Checkout fetches refs/pull/<n>/head into dir and checks it out detached. The
@@ -21,16 +21,19 @@ type Git struct {
 // Shallow, because a review reads a head and not its history. The diff against
 // the base comes from the tracker rather than from git, which is what lets the
 // fetch stay shallow.
+//
+// The repository is made isolated, so no template or hook from the agent
+// user's configuration is in it when the fetch, which carries the token, runs
+// there. Nothing of the token is left in dir.
 func (g Git) Checkout(ctx context.Context, dir string, number int) (string, error) {
-	steps := [][]string{
-		{"init", "--quiet"},
-		{"fetch", "--quiet", "--depth=1", g.Remote, fmt.Sprintf("refs/pull/%d/head", number)},
-		{"checkout", "--quiet", "--detach", "FETCH_HEAD"},
+	if _, err := git.RunEnv(ctx, dir, git.Isolated, "init", "--quiet"); err != nil {
+		return "", err
 	}
-	for _, args := range steps {
-		if _, err := git.Run(ctx, dir, args...); err != nil {
-			return "", err
-		}
+	if _, err := g.Remote.Run(ctx, dir, "fetch", "--quiet", "--depth=1", g.Remote.URL, fmt.Sprintf("refs/pull/%d/head", number)); err != nil {
+		return "", err
+	}
+	if _, err := git.Run(ctx, dir, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
+		return "", err
 	}
 	return git.Run(ctx, dir, "rev-parse", "HEAD")
 }

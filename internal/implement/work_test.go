@@ -1,9 +1,12 @@
 package implement_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -546,8 +549,8 @@ func TestAFailedCloneKeepsTheCandidate(t *testing.T) {
 	f.setState(implement.Implementing)
 	f.run.Backoff = func(int) (time.Time, bool) { return f.at, true }
 	f.model.then(commit("ok"))
-	remote := f.deps.Remote
-	f.deps.Remote = filepath.Join(t.TempDir(), "gone")
+	remote := f.deps.Remote.URL
+	f.deps.Remote.URL = filepath.Join(t.TempDir(), "gone")
 
 	if _, err := f.run.Run(context.Background(), "implement-run", f.job.ID); err == nil {
 		t.Fatal("the clone of a remote that is not there succeeded")
@@ -555,7 +558,7 @@ func TestAFailedCloneKeepsTheCandidate(t *testing.T) {
 	if j := f.now(); j.Stays != 0 || j.Attempts != 1 {
 		t.Errorf("job = %+v, want one attempt and no stays", j)
 	}
-	f.deps.Remote = remote
+	f.deps.Remote.URL = remote
 
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
@@ -574,7 +577,7 @@ func TestAnErrorThatRecursParksTheWork(t *testing.T) {
 	f := setup(t, newTracker())
 	f.setState(implement.Implementing)
 	f.run.Backoff = func(attempts int) (time.Time, bool) { return f.at, attempts < 3 }
-	f.deps.Remote = filepath.Join(t.TempDir(), "gone")
+	f.deps.Remote.URL = filepath.Join(t.TempDir(), "gone")
 
 	if errs := f.drive(); len(errs) != 3 {
 		t.Fatalf("errors: %v, want three failed clones", errs)
@@ -666,4 +669,66 @@ func TestInstructionsAreWhatFollowsTheWord(t *testing.T) {
 			t.Errorf("Instructions(%q) = %q, want %q", body, got, want)
 		}
 	}
+}
+
+// Every read carries the token, and nothing of it is left where the session
+// can read it: not in the workspace the clone made, and not in the agent
+// user's configuration, which the session could write (#65).
+func TestTheTokenIsLeftNowhereTheSessionCanRead(t *testing.T) {
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	f := setup(t, newTracker())
+	minted := 0
+	f.deps.Remote.Token = func(context.Context) (string, error) {
+		minted++
+		return "ghs_secret", nil
+	}
+	var found []string
+	f.model.then(func(dir string) error {
+		found = holding(t, "ghs_secret", dir, global)
+		return commit("ok")(dir)
+	})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Watching {
+		t.Fatalf("job in %q, want %q", j.State, implement.Watching)
+	}
+	if minted == 0 {
+		t.Fatal("no token was minted, so none could have been left")
+	}
+	if len(found) != 0 {
+		t.Errorf("the token is in %v", found)
+	}
+}
+
+// holding is every file under paths that holds token, as itself or as the
+// header git sends it in.
+func holding(t *testing.T, token string, paths ...string) []string {
+	t.Helper()
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	var found []string
+	for _, root := range paths {
+		err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+			if err != nil || !e.Type().IsRegular() {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if bytes.Contains(b, []byte(token)) || bytes.Contains(b, []byte(basic)) {
+				found = append(found, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return found
 }

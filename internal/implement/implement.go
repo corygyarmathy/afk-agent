@@ -59,6 +59,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -112,9 +113,10 @@ type Deps struct {
 	// parameter.
 	BranchPrefix string
 
-	// Remote is the repository a workspace is cloned from: the tracker's
-	// clone URL, or a local path in a test.
-	Remote string
+	// Remote is the repository a workspace is cloned from and the work is
+	// pushed to, and the App's installation token every git process that
+	// reaches it carries.
+	Remote git.Remote
 
 	// Resolve is the ordered candidate list for the implement tier, as of
 	// now (ADR 0001 §9). A *model.LimitedError defers the job to the reset.
@@ -149,10 +151,6 @@ type Deps struct {
 	// Denylist is the paths the agent may never push, as globs (see
 	// denied). A parameter.
 	Denylist []string
-
-	// Token is the credential a push carries: the App's installation
-	// token. Nil pushes with none, which is a local remote in a test.
-	Token func(ctx context.Context) (string, error)
 
 	// Store is read, never written: which round of an effect is next, and
 	// where the pull request's review job is. This job's own state is the

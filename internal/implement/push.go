@@ -53,11 +53,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
-		token, err := d.token(ctx)
-		if err != nil {
-			return err
-		}
-		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed, token)
+		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
 	}}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
@@ -147,13 +143,6 @@ func description(n int, p progress) string {
 	}
 	b.WriteString("Written by the agent. CI decides whether it is correct; an advisory review will be posted here as a comment once CI is green. Merging is yours.\n")
 	return b.String()
-}
-
-func (d *Deps) token(ctx context.Context) (string, error) {
-	if d.Token == nil {
-		return "", nil
-	}
-	return d.Token(ctx)
 }
 
 func quoted(paths []string) string {

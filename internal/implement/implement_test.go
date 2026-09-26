@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -242,7 +243,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		Model:         m,
 		Login:         agent,
 		BranchPrefix:  prefix,
-		Remote:        remote,
+		Remote:        git.Remote{URL: remote},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
 		Bound:         2,
 		TierWait:      time.Hour,

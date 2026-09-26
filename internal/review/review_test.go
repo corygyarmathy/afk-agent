@@ -1,9 +1,12 @@
 package review_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
@@ -668,7 +672,7 @@ func TestGitChecksOutThePullRequestHead(t *testing.T) {
 	gitIn(t, src, "update-ref", "refs/pull/7/head", "HEAD")
 
 	dst := t.TempDir()
-	got, err := review.Git{Remote: src}.Checkout(context.Background(), dst, 7)
+	got, err := review.Git{Remote: git.Remote{URL: src}}.Checkout(context.Background(), dst, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,6 +681,59 @@ func TestGitChecksOutThePullRequestHead(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "store.go")); err != nil {
 		t.Errorf("the head's files are not in the workspace: %v", err)
+	}
+}
+
+// The fetch carries the token, and nothing of it is left in the workspace the
+// model reads, or in the agent user's configuration, which the session could
+// write. Nor does that configuration redirect the fetch (#65).
+func TestGitLeavesTheTokenNowhereTheSessionCanRead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on PATH")
+	}
+	src := t.TempDir()
+	gitIn(t, src, "init", "--quiet")
+	gitIn(t, src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "head")
+	want := gitIn(t, src, "rev-parse", "HEAD")
+	gitIn(t, src, "update-ref", "refs/pull/7/head", "HEAD")
+
+	elsewhere := t.TempDir()
+	gitIn(t, elsewhere, "init", "--quiet")
+	gitIn(t, elsewhere, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "elsewhere")
+	gitIn(t, elsewhere, "update-ref", "refs/pull/7/head", "HEAD")
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[url \""+elsewhere+"\"]\n\tinsteadOf = "+src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+
+	minted := 0
+	remote := git.Remote{URL: src, Token: func(context.Context) (string, error) {
+		minted++
+		return "ghs_secret", nil
+	}}
+	dst := t.TempDir()
+	got, err := review.Git{Remote: remote}.Checkout(context.Background(), dst, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("checked out %s, want %s from the remote rather than its redirect", got, want)
+	}
+	if minted == 0 {
+		t.Fatal("no token was minted, so none could have been left")
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:ghs_secret"))
+	for _, root := range []string{dst, global} {
+		filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+			if err != nil || !e.Type().IsRegular() {
+				return err
+			}
+			if b, _ := os.ReadFile(path); bytes.Contains(b, []byte("ghs_secret")) || bytes.Contains(b, []byte(basic)) {
+				t.Errorf("the token is in %s", path)
+			}
+			return nil
+		})
 	}
 }
 
