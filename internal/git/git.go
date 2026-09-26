@@ -26,9 +26,23 @@ func RunEnv(ctx context.Context, dir string, env []string, args ...string) (stri
 	cmd.Env = append(append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("git %s: %w: %s", command(args), err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// command is the git command args run: the first argument that is not an
+// option to git itself.
+func command(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-c" || a == "-C":
+			i++
+		case !strings.HasPrefix(a, "-"):
+			return a
+		}
+	}
+	return ""
 }
 
 // Short is a commit's name as a message gives it: the first twelve characters.
@@ -57,7 +71,23 @@ type Remote struct {
 	// Token is the App's installation token. Nil sends none, which is a
 	// local remote in a test.
 	Token func(ctx context.Context) (string, error)
+
+	// Refused is told the token a process carried when the remote answered
+	// it with a 401, so that the next process mints another rather than
+	// presenting a revoked one again (ADR 0005 §2). Nil tells nothing.
+	Refused func(token string)
 }
+
+// refused is what a git process prints when the remote answered its token with
+// a 401.
+//
+// git reports no HTTP status, and its message for a 401 is not one about
+// authentication: with no terminal to prompt on, it says it could not read a
+// username. What it does do on a 401, and on nothing else, is ask a credential
+// helper for a username and password. The helper Env configures for the
+// remote's URL gives none; it prints this, so a refusal is read from a line the
+// agent wrote rather than from git's wording, in whatever language git speaks.
+const refused = "afk: the remote refused the token"
 
 // Run runs one git command that reaches the remote, in dir, isolated from the
 // global and system configuration, with the token for the remote's URL. The
@@ -68,34 +98,51 @@ type Remote struct {
 // configuration of whatever repository it runs in, which isolation does not
 // shut out, and a repository around the agent's directory could send the
 // token elsewhere. A path in args is therefore absolute.
+//
+// A process the remote refused with its token tells Refused, and still fails:
+// whether to try again is the caller's to decide, as it is for a request.
 func (r Remote) Run(ctx context.Context, dir string, args ...string) (string, error) {
-	env, err := r.Env(ctx)
+	env, token, err := r.env(ctx)
 	if err != nil {
 		return "", err
 	}
 	if dir == "" {
 		dir = "/"
 	}
-	return RunEnv(ctx, dir, env, args...)
+	out, err := RunEnv(ctx, dir, env, args...)
+	if err != nil && token != "" && r.Refused != nil && strings.Contains(err.Error(), refused) {
+		r.Refused(token)
+	}
+	return out, err
 }
 
 // Env is the environment a git process that reaches the remote runs with: git's
 // own configuration-by-environment, so the token is not an argument (visible in
 // ps to everyone) or a file. The header is scoped to the remote's URL, so a
-// request to any other URL does not carry it.
+// request to any other URL does not carry it. So is the credential helper that
+// reports a refusal of it (refused): it supplies no credential, and is asked
+// only when the remote has answered the header with a 401.
 func (r Remote) Env(ctx context.Context) ([]string, error) {
+	env, _, err := r.env(ctx)
+	return env, err
+}
+
+// env is Env, and the token it carries: empty if none.
+func (r Remote) env(ctx context.Context) ([]string, string, error) {
 	env := append([]string{"GIT_TERMINAL_PROMPT=0"}, Isolated...)
 	if r.Token == nil {
-		return env, nil
+		return env, "", nil
 	}
 	token, err := r.Token(ctx)
 	if err != nil || token == "" {
-		return env, err
+		return env, "", err
 	}
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 	return append(env,
-		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=http."+r.URL+".extraheader",
 		"GIT_CONFIG_VALUE_0=Authorization: Basic "+basic,
-	), nil
+		"GIT_CONFIG_KEY_1=credential."+r.URL+".helper",
+		"GIT_CONFIG_VALUE_1=!echo '"+refused+"' >&2; :",
+	), token, nil
 }

@@ -117,7 +117,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 // push is the agent on the tracker like any other request (ADR 0005), and a
 // private repository is read as a public one is.
 func remote(tr *tracker) git.Remote {
-	return git.Remote{URL: "https://github.com/" + tr.client.Repo + ".git", Token: tr.app.Token}
+	return git.Remote{URL: "https://github.com/" + tr.client.Repo + ".git", Token: tr.app.Token, Refused: tr.app.Refused}
 }
 
 // resolver is the state directory, and the candidate list for one job kind's
