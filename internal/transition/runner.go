@@ -62,6 +62,10 @@ type Runner struct {
 	// last effect returns - short enough that a dead holder's job is
 	// reclaimable without an operator. A deployment parameter, so it is supplied rather
 	// than chosen here.
+	//
+	// It also bounds the work it leases: the transition runs under the first
+	// lease's deadline and the effects under the renewed one's, so neither
+	// outlives the lease it runs under (see leased).
 	LeaseTTL time.Duration
 
 	// Backoff schedules re-entry after a failure. Nil parks a failed job,
@@ -94,6 +98,23 @@ func (r *Runner) now() time.Time {
 // SIGTERM should do.
 func finishing(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
+}
+
+// leased is the context the work a lease covers runs under: the caller's, with
+// a deadline a LeaseTTL from now.
+//
+// Work that outlives its lease is work another worker can take the job out from
+// under - for an effect, a push or a comment made again by the next transition
+// (#64). The deadline stops the worker being held behind it too, so the job
+// goes back on the queue on time. It narrows the race rather than closing it:
+// cancelling does not take back a request that already reached GitHub.
+//
+// A timer rather than the lease's stored expiry, because that expiry is read
+// off Clock, which a test pins to a fixed date, and a context's deadline is
+// wall-clock time. So it is started before the expiry is read, and on the real
+// clock runs out no later than the lease does.
+func (r *Runner) leased(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, r.LeaseTTL)
 }
 
 // Outcome is what one Run did, in the terms an operator reading a hand-run's
@@ -159,6 +180,8 @@ func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("%w %q", ErrUnknownTransition, name)
 	}
 
+	lease, cancel := r.leased(ctx)
+	defer cancel()
 	now := r.now()
 	job, ok, err := r.Store.Acquire(ctx, jobID, r.Holder, now, r.LeaseTTL)
 	if err != nil {
@@ -168,14 +191,15 @@ func (r *Runner) Run(ctx context.Context, name, jobID string) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("%w: %s", ErrHeld, jobID)
 	}
 
-	return r.apply(ctx, t, job, now)
+	return r.apply(ctx, lease, t, job, now)
 }
 
-// apply runs the transition and commits what it decided. Every path out of it
-// that still holds the lease gives it back exactly once: through the commit's
-// own release when there is nothing to perform, or through release - once the
-// effects have run, or on a path that returns without a commit.
-func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now time.Time) (out Outcome, err error) {
+// apply runs the transition under lease, the context bounded by the lease Run
+// took, and commits what it decided. Every path out of it that still holds the
+// lease gives it back exactly once: through the commit's own release when there
+// is nothing to perform, or through release - once the effects have run, or on
+// a path that returns without a commit.
+func (r *Runner) apply(ctx, lease context.Context, t Transition, job store.Job, now time.Time) (out Outcome, err error) {
 	if job.Kind != t.Kind {
 		return Outcome{}, r.release(ctx, job, fmt.Errorf("transition %q runs %s jobs, %s is a %s job", t.Name, t.Kind, job.ID, job.Kind))
 	}
@@ -183,7 +207,7 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		return Outcome{}, r.release(ctx, job, fmt.Errorf("%w: %s is in state %q, transition %q runs from %q", ErrWrongState, job.ID, job.State, t.Name, t.From))
 	}
 
-	res, err := r.decide(ctx, t, job, now)
+	res, err := r.decide(lease, t, job, now)
 	if err != nil {
 		return r.fail(ctx, t, job, now, err)
 	}
@@ -238,7 +262,11 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 		Keys:      Result{Effects: todo}.keys(),
 		Release:   len(todo) == 0,
 	}
+	effects := ctx
 	if !c.Release {
+		var cancel context.CancelFunc
+		effects, cancel = r.leased(ctx)
+		defer cancel()
 		c.LeaseUntil = r.now().Add(r.LeaseTTL)
 	}
 	if err := r.Store.Commit(done, c); err != nil {
@@ -261,9 +289,10 @@ func (r *Runner) apply(ctx context.Context, t Transition, job store.Job, now tim
 
 	// After the commit. An effect that fails here has not been lost quietly:
 	// the state has moved, and the next transition re-reads GitHub and sees
-	// the comment is not there.
+	// the comment is not there. One still running when the renewed lease runs
+	// out is cancelled, and fails the same way.
 	for _, e := range todo {
-		if err := e.Do(ctx); err != nil {
+		if err := e.Do(effects); err != nil {
 			return out, r.release(ctx, job, fmt.Errorf("effect %q on %s: %w", e.Key, job.ID, err))
 		}
 		out.Performed = append(out.Performed, e.Key)

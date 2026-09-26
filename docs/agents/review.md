@@ -135,11 +135,12 @@ Two things GitHub's documentation does not say:
 before choosing values:
 
 - `--lease` must be longer than a model run, and than posting the reply. A
-  lease that lapses mid-run lets another worker take the job; the store refuses
-  the first run's commit, so the work is wasted rather than duplicated, but it
-  is still wasted. The lease is renewed when a transition commits and held
-  until its effects finish, so one that lapses mid-post lets a verify look for
-  the reply before it lands, and post it again.
+  run still going when its lease lapses is cancelled, and counts as a failed
+  attempt; the work is wasted rather than duplicated, but it is still wasted.
+  The lease is renewed when a transition commits and bounds its effects, so a
+  post still going when it lapses is cancelled too - but one that had already
+  reached GitHub can still land after a verify has looked for the reply, and
+  been posted again.
 - `--model-attempts` bounds the candidates tried before a tier is exhausted.
   Only a model run that failed transiently moves on to the next candidate. Any
   other error in a run - the tracker, the checkout - counts against
