@@ -57,3 +57,23 @@ func TestAskLeavesAParkedJobAlone(t *testing.T) {
 		t.Errorf("job = %s attempts %d due %v leased %v, want it parked in posting with 3 attempts, unscheduled and unleased", j.State, j.Attempts, j.NextRunAt, j.Lease != nil)
 	}
 }
+
+// Arming starts the work afresh, so it ends the job's episode of an exhausted
+// tier. Left standing, the episode would count the first exhaustion of the new
+// work into an old one, and tell it at once.
+func TestArmingEndsAnEpisode(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seeded := seed(t, s, store.KindReview, 12, "start")
+	storetest.Rest(t, s, seeded.ID, "posting", 0, now)
+	if _, err := s.CountEpisode(ctx, seeded.ID, store.Episode{Running: "start", Deferred: "deferred", Since: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, err := asker(s).Restart(ctx, store.KindReview, askedPR, "start", now, "restart-1"); err != nil || !ok {
+		t.Fatalf("Restart = %v, %v; want armed", ok, err)
+	}
+	if _, ok, err := s.Episode(ctx, seeded.ID); err != nil || ok {
+		t.Errorf("Episode after arming = ok %v, %v; want none", ok, err)
+	}
+}
