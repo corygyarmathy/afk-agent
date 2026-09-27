@@ -52,6 +52,16 @@ and the 8 GB `nix flake check` peak that OOM-killed a session. If you are about
 to write "this is slow" or "this exhausts the host" in a decision, measure it
 first or say plainly that you did not.
 
+## Research note - what the sources say, dated
+
+Lives in `docs/research/`, one file per question. What primary sources say about
+a question a decision is waiting on, with each claim's confidence and which
+sources were read in full. It reports; it does not decide - the decision is the
+issue's or the ADR's, and it cites the note. Dated, and not kept current: a
+later answer is a new note, not an edit to the old one.
+
+Distinct from a findings note, which holds what was measured here.
+
 ## Pull request description - the bridge
 
 Links the issue, and summarises what changed and why for a reviewer. Becomes the
