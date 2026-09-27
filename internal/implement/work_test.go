@@ -507,6 +507,8 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 
 	g := setup(t, newTracker())
 	g.model.then(fail(first), fail(second))
+	var logged []string
+	g.deps.Log = func(msg string) { logged = append(logged, msg) }
 	if errs := g.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
@@ -515,6 +517,15 @@ func TestATransientFailureTriesTheNextModelThenDefers(t *testing.T) {
 	}
 	if g.last.Exhausted == nil {
 		t.Errorf("last run = %+v; want it to say the tier is exhausted, which dispatch tells the operator about (#76)", g.last)
+	}
+	// What the last candidate's run failed with is what the operator is told,
+	// and each candidate's failure is logged as it happens (#98).
+	var last *opencode.TransientError
+	if !errors.As(g.last.Exhausted, &last) || last.Model != second {
+		t.Errorf("the exhausted tier says %v; want it to carry %s's failure", g.last.Exhausted, second)
+	}
+	if len(logged) != 2 || !strings.Contains(logged[0], first.String()) || !strings.Contains(logged[1], second.String()) {
+		t.Errorf("logged %q, want one line for each candidate's failure", logged)
 	}
 	if _, err := g.run.Run(context.Background(), "implement-resume", g.job.ID); err != nil {
 		t.Fatal(err)

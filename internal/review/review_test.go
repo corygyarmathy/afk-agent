@@ -513,6 +513,30 @@ func TestAnExhaustedTierDefersAndStartsOverAfterTheWait(t *testing.T) {
 	}
 }
 
+// An exhausted tier carries what the last candidate's run failed with, which
+// is what the operator is told, and every candidate's failure is logged as it
+// happens: nothing else keeps it once the next candidate runs (#98).
+func TestAnExhaustedTierSaysWhatTheLastRunFailedWith(t *testing.T) {
+	killed := &opencode.TransientError{Model: second, Err: errors.New("the run was still going after 30m0s, and was killed"), Bound: 30 * time.Minute}
+	f := setup(t, newTracker(command(1)), &reviewer{answers: []error{transient(first), killed}})
+	var logged []string
+	f.deps.Log = func(msg string) { logged = append(logged, msg) }
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != review.Deferred {
+		t.Fatalf("job = %+v, want it deferred", j)
+	}
+	var last *opencode.TransientError
+	if !errors.As(f.last.Exhausted, &last) || last != killed {
+		t.Errorf("the exhausted tier says %v; want it to carry the last run's failure, %v", f.last.Exhausted, killed)
+	}
+	if len(logged) != 2 || !strings.Contains(logged[0], "429 Too Many Requests") || !strings.Contains(logged[1], "was killed") {
+		t.Errorf("logged %q, want one line for each candidate's failure", logged)
+	}
+}
+
 // A tracker error before the model runs is not the model's, and does not move
 // the review on to the next candidate (#62).
 func TestAnErrorBeforeTheModelRunsKeepsTheCandidate(t *testing.T) {

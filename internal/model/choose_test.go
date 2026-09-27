@@ -3,6 +3,7 @@ package model_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,4 +52,47 @@ func TestChoose(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A transient failure stays for the next candidate, or defers the tier that
+// has none, carrying the failure: what ran the tier out is what the operator
+// is told (#98). Anything else stays, for the next run to find.
+func TestFailed(t *testing.T) {
+	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	wait := 30 * time.Minute
+	two := func(context.Context) (model.Candidates, error) {
+		return model.Candidates{{Provider: "a", Model: "one"}, {Provider: "b", Model: "two"}}, nil
+	}
+	failed := errors.New("the run was still going after 30m, and was killed")
+
+	t.Run("a candidate left stays", func(t *testing.T) {
+		if w := model.Failed(context.Background(), two, 0, 2, now, wait, failed); w != (model.Wait{}) {
+			t.Errorf("Failed = %+v, want the zero Wait: a stay", w)
+		}
+	})
+	t.Run("the last candidate defers the tier with its failure", func(t *testing.T) {
+		w := model.Failed(context.Background(), two, 1, 2, now, wait, failed)
+		if !w.Until.Equal(now.Add(wait)) {
+			t.Errorf("Failed defers until %v, want %v", w.Until, now.Add(wait))
+		}
+		var exhausted *model.ExhaustedError
+		if !errors.As(w.Exhausted, &exhausted) {
+			t.Fatalf("Failed's wait = %v, want the tier exhausted", w.Exhausted)
+		}
+		if !errors.Is(w.Exhausted, failed) || !strings.Contains(w.Exhausted.Error(), failed.Error()) {
+			t.Errorf("the exhausted tier (%v) does not carry what the last run failed with", w.Exhausted)
+		}
+	})
+	t.Run("a limited budget stays", func(t *testing.T) {
+		limited := func(context.Context) (model.Candidates, error) { return nil, &model.LimitedError{} }
+		if w := model.Failed(context.Background(), limited, 1, 2, now, wait, failed); w != (model.Wait{}) {
+			t.Errorf("Failed = %+v, want the zero Wait: a stay", w)
+		}
+	})
+	t.Run("a resolution that fails stays", func(t *testing.T) {
+		wrong := func(context.Context) (model.Candidates, error) { return nil, errors.New("no enrolment") }
+		if w := model.Failed(context.Background(), wrong, 1, 2, now, wait, failed); w != (model.Wait{}) {
+			t.Errorf("Failed = %+v, want the zero Wait: a stay", w)
+		}
+	})
 }

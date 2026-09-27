@@ -179,6 +179,14 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 	var transient *opencode.TransientError
 	if errors.As(err, &transient) {
+		if d.Log != nil {
+			d.Log(fmt.Sprintf("%s: %v", in.Job.ID, transient))
+		}
+		// A tier with no candidate left defers from here, with the failure
+		// that ran it out (#98).
+		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
+			return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
+		}
 		// Stay, and the stay moves the next run to the next candidate
 		// (ADR 0001 §10). An error returned instead would not: it is an
 		// attempt, and every other error here is one that is not the

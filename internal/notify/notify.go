@@ -21,6 +21,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/fetch"
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
@@ -165,7 +167,9 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 
 // TierExhausted reports a job whose model tier has run out and keeps running
 // out (ADR 0001 §10: exhausting a tier is a human-facing event). cause is what
-// the tier said the last time, and job is as committed, deferred.
+// the tier said the last time - with what the last candidate's run failed
+// with, when the run that ran the tier out saw it - and job is as committed,
+// deferred.
 //
 // Once per episode, and only once the episode reaches TierAfter. A tier that
 // ran out once and came back on the next try is a bad few minutes at a
@@ -202,10 +206,20 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 	if !job.NextRunAt.IsZero() {
 		body += " until " + job.NextRunAt.Format(time.RFC3339)
 	}
-	body += " and will try the tier again, and keeps doing so until a model answers. " +
-		"Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, the provider is down, " +
-		"or every run is outlasting --model-timeout. " +
-		"This is not repeated while the tier stays exhausted."
+	body += " and will try the tier again, and keeps doing so until a model answers. "
+	// The last run's failure is the only one carried here (#98). A run killed
+	// at its bound is said outright, because the bound is the one cause the
+	// operator set, and a bound too short for the work fails every candidate
+	// the same way.
+	var transient *opencode.TransientError
+	if errors.As(cause, &transient) && transient.Bound > 0 {
+		body += fmt.Sprintf("The last candidate's run was killed at its bound, --model-timeout (%s). "+
+			"If every run is, the bound is too short for the work, and the tier stays exhausted until --model-timeout is raised. ", transient.Bound)
+	} else {
+		body += "Every enrolled candidate failed transiently: the enrolment may name models the provider does not know, the provider is down, " +
+			"or every run is outlasting --model-timeout. "
+	}
+	body += "This is not repeated while the tier stays exhausted."
 
 	if err := n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body); err != nil {
 		return false, err

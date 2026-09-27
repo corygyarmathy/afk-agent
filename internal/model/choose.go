@@ -52,3 +52,27 @@ func Choose(ctx context.Context, resolve func(context.Context) (Candidates, erro
 	}
 	return ref, Wait{}, nil
 }
+
+// Failed is what follows a run whose candidate failed transiently, as of now:
+// the zero Wait to stay and run the next candidate, or the tier's deferral if
+// there is no next one. stays is the job's stays before the failure.
+//
+// Decided here rather than by the next run's Choose because this run is the
+// one that has the failure. The exhaustion is carried to the operator
+// (notify.Notifier.TierExhausted), and so is failed with it, as the
+// ExhaustedError's Last: a tier every run of which outlasted its bound needs
+// the bound changed, and one whose models the provider does not know needs the
+// enrolment changed, and only the failure tells the two apart (#98).
+//
+// Anything but an exhausted tier stays, as a transient failure always did: a
+// limited budget, or a resolution that fails, is the next run's to find, and
+// the next run is due now.
+func Failed(ctx context.Context, resolve func(context.Context) (Candidates, error), stays, bound int, now time.Time, wait time.Duration, failed error) Wait {
+	_, w, err := Choose(ctx, resolve, stays+1, bound, now, wait)
+	var exhausted *ExhaustedError
+	if err != nil || !errors.As(w.Exhausted, &exhausted) {
+		return Wait{}
+	}
+	exhausted.Last = failed
+	return w
+}
