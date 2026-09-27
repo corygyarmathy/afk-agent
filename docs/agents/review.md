@@ -136,7 +136,9 @@ before choosing values:
 
 - `--model-timeout` bounds the model run. One still going when it runs out is
   killed with everything it started, and is a transient failure: the job
-  stays, and its next run tries the next candidate.
+  stays, and its next run tries the next candidate. Each transient failure is
+  a log line, and the last candidate's defers the tier with it, which is what
+  the operator is told: [`notification.md`](notification.md).
 - `--lease` should be longer than a model run, and than posting the reply. A
   lease that lapses mid-run lets another worker take the job; the store refuses
   the first run's commit, so the work is wasted rather than duplicated, but it
