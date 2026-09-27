@@ -76,6 +76,10 @@ _Avoid_: Review (bare), AI review
 The operator reading a pull request and deciding it: merge, send back, or close. The only review that decides anything.
 _Avoid_: Review (bare), approval
 
+**Send-back**:
+An operator's review that ends with points to address, written in the operator's own words. The only instruction `/revise` acts on. It may cite advisory findings one at a time, but it is never an answer to them: the operator owes no reply to any finding, and a reaction, an approval or a resolved thread decides nothing.
+_Avoid_: Change request, triage, feedback
+
 **Hand-off**:
 The agent declaring a pull request ready for human review. A signal, not a control: nothing merges on it.
 _Avoid_: Completion, ready state
