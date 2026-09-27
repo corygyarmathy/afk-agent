@@ -363,6 +363,13 @@ func TestAnExhaustedTierSaysWhatTheLastRunFailedWith(t *testing.T) {
 			not:  []string{"the provider is down"},
 		},
 		{
+			// A killed run's stderr is the longest cause there is, and the
+			// body is cut at the end: what the operator acts on comes first.
+			name: "a run killed at its bound with a long stderr",
+			last: &opencode.TransientError{Model: ref, Err: errors.New("the run was still going after 30m0s, and was killed\nstderr: " + strings.Repeat("x", 4<<10)), Bound: 30 * time.Minute},
+			want: []string{"killed at its bound, --model-timeout (30m0s)", "not repeated", "p/m: the run was still going after 30m0s, and was killed"},
+		},
+		{
 			name: "any other failure",
 			last: &opencode.TransientError{Model: ref, Err: errors.New("429 Too Many Requests")},
 			want: []string{"p/m: 429 Too Many Requests", "the provider is down", "--model-timeout"},

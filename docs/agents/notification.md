@@ -55,8 +55,8 @@ The run whose failure spends the tier's last candidate is the one that
 defers, so the exhaustion carries what that run failed with, and the message
 says it. Only the last: the candidates before it are in the log, one line each
 as they fail. A run killed at its bound is said outright, naming
-`--model-timeout`, because a bound too short for the work fails every candidate
-the same way, and raising it is the operator's to do.
+`--model-timeout` and its value, in place of the list of possible causes. The
+cause comes last in the message, so a long one is what the length limit cuts.
 
 So the pool counts. An **episode** starts the first time a job's tier runs out,
 and ends the next time the job moves anywhere other than back to the model or

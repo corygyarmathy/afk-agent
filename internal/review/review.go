@@ -293,7 +293,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	reply, err := d.Model.Run(ctx, opencode.Request{Model: ref, Dir: ws, Prompt: text.String()})
 	var transient *opencode.TransientError
 	if errors.As(err, &transient) {
-		d.logf("%s: %v", in.Job.ID, transient)
+		if d.Log != nil {
+			d.Log(fmt.Sprintf("%s: %v", in.Job.ID, transient))
+		}
 		// A tier with no candidate left defers from here, with the failure
 		// that ran it out (#98).
 		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
@@ -324,13 +326,6 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
-}
-
-// logf writes one line to Log, if there is one.
-func (d *Deps) logf(format string, args ...any) {
-	if d.Log != nil {
-		d.Log(fmt.Sprintf(format, args...))
-	}
 }
 
 // post is `review-post`: post the saved reply under the next round's key.
