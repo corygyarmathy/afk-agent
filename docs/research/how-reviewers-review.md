@@ -13,11 +13,6 @@ and what is written for reviewers early in their career?
 AI-written pull requests alone. This note reports what the sources say. It
 does not design a process; the grilling tickets make those decisions.
 
-**Where this file lives.** The repository had no home for research notes.
-`docs/agents/documentation.md` lists none, and a findings note is reserved for
-things that were measured. This file sits on its own branch, `docs/research/`,
-and nobody has decided whether it should be merged.
-
 ## Confidence scale
 
 - **High.** Several independent primary sources agree, at least one of them
