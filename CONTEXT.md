@@ -65,8 +65,16 @@ The issue label that opts an issue in to unattended work: the agent may take it 
 _Avoid_: Trigger label, ready label
 
 **Gate**:
-A check a job must pass before it may proceed. Distinct from the review, which advises and never blocks.
+A check a job must pass before it may proceed. Distinct from the advisory review, which advises and never blocks.
 _Avoid_: Check, validation
+
+**Advisory review**:
+The agent's report on a pull request: advice to the operator, never a gate, never a decision.
+_Avoid_: Review (bare), AI review
+
+**Operator's review**:
+The operator reading a pull request and deciding it: merge, send back, or close. The only review that decides anything.
+_Avoid_: Review (bare), approval
 
 **Hand-off**:
 The agent declaring a pull request ready for human review. A signal, not a control: nothing merges on it.
