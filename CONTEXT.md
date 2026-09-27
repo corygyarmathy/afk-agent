@@ -72,6 +72,10 @@ _Avoid_: Check, validation
 The agent's report on a pull request: advice to the operator, never a gate, never a decision.
 _Avoid_: Review (bare), AI review
 
+**Finding**:
+One numbered item in an advisory review, carrying a severity. Advice only: it is owed no answer, and it enters a send-back only when the operator cites it.
+_Avoid_: Comment, issue, nit
+
 **Operator's review**:
 The operator reading a pull request and deciding it: merge, send back, or close. The only review that decides anything.
 _Avoid_: Review (bare), approval
