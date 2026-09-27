@@ -140,7 +140,9 @@ optional.
 - `--ci-wait` is also how often a review not yet posted is looked for.
 - `--model-timeout` bounds each model run. One still going when it runs out is
   killed with everything it started, and is a transient failure: the job
-  stays, and its next run tries the next candidate. `implement-run` can make
+  stays, and its next run tries the next candidate. Each transient failure is
+  a log line, and the last candidate's defers the tier with it, which is what
+  the operator is told: [`notification.md`](notification.md). `implement-run` can make
   two runs, when the session it continues has gone, and each has the bound.
 - `--lease` should be longer than a model run, than the gate, and than a push.
   A lease that lapses mid-run lets another worker take the job; the store

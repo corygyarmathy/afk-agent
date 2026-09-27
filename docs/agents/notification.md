@@ -11,7 +11,7 @@ decisions it implements are [ADR 0001 §10 and
 | --- | --- | --- |
 | a job **parked** after a failure | a transition failed and there was no retry left to schedule, or the job is in a state no transition runs from | the job, its state, its attempts, the tracker subject, and the error |
 | a budget window is **spent** | the provider reports a window `rate-limited` while the pool is deciding whether to start a job | the window, its percent, and when it reopens |
-| a job's model tier **stays exhausted** | the job's tier has run out `--tier-notify-after` times in one episode | the job, the tracker subject, how many times since when, what the tier said, and when it tries again |
+| a job's model tier **stays exhausted** | the job's tier has run out `--tier-notify-after` times in one episode | the job, the tracker subject, how many times since when, what the tier said, what the last candidate's run failed with, and when it tries again |
 
 Nothing else notifies. Not a pull request ready for review, not a job handed
 back, not a red CI run, not a retry still in flight, not a window approaching
@@ -50,6 +50,13 @@ nothing (ADR 0001 §10). A tier that does not - every enrolled model unknown to
 the provider, an outage longer than the wait, or work whose every run outlasts
 `--model-timeout` - would otherwise defer and resume indefinitely, and the only
 sign would be a job that is always in `deferred`.
+
+The run whose failure spends the tier's last candidate is the one that
+defers, so the exhaustion carries what that run failed with, and the message
+says it. Only the last: the candidates before it are in the log, one line each
+as they fail. A run killed at its bound is said outright, naming
+`--model-timeout`, because a bound too short for the work fails every candidate
+the same way, and raising it is the operator's to do.
 
 So the pool counts. An **episode** starts the first time a job's tier runs out,
 and ends the next time the job moves anywhere other than back to the model or
