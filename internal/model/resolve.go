@@ -228,11 +228,11 @@ func overCeiling(p Price, ceiling Ceiling) string {
 // bound is a parameter and comes from configuration; zero or negative means the
 // only bound is the length of the list. Running past the bound is not a failure
 // to hand back to a human but a job to defer, so the caller gets an
-// ExhaustedError and decides when to come back. Choose defers it for the tier
-// wait and says why, and the pool tells the operator about a job whose tier
-// has run out --tier-notify-after times without a model answering in between
-// (notify.Notifier.TierExhausted) - not about one that ran out once and came
-// back.
+// ExhaustedError and decides when to come back. Choose, or Failed after the
+// last candidate's run, defers it for the tier wait and says why, and the pool
+// tells the operator about a job whose tier has run out --tier-notify-after
+// times without a model answering in between (notify.Notifier.TierExhausted) -
+// not about one that ran out once and came back.
 func (c Candidates) Attempt(n, bound int) (Ref, error) {
 	limit := len(c)
 	if bound > 0 && bound < limit {
@@ -342,11 +342,25 @@ func (e *NoCandidateError) Error() string {
 type ExhaustedError struct {
 	Tried    int
 	Enrolled int
+
+	// Last is what the last candidate's run failed with, or nil when the run
+	// that found the tier exhausted did not see it fail. It is the one cause
+	// the operator can be given: the tier is exhausted by runs, and the
+	// exhaustion on its own says only how many (#98).
+	Last error
 }
 
 func (e *ExhaustedError) Error() string {
+	var s string
 	if e.Tried < e.Enrolled {
-		return fmt.Sprintf("tier exhausted: %d attempts used, the bound, of %d enrolled models", e.Tried, e.Enrolled)
+		s = fmt.Sprintf("tier exhausted: %d attempts used, the bound, of %d enrolled models", e.Tried, e.Enrolled)
+	} else {
+		s = fmt.Sprintf("tier exhausted: all %d enrolled models tried", e.Enrolled)
 	}
-	return fmt.Sprintf("tier exhausted: all %d enrolled models tried", e.Enrolled)
+	if e.Last != nil {
+		s += "; the last failed: " + e.Last.Error()
+	}
+	return s
 }
+
+func (e *ExhaustedError) Unwrap() error { return e.Last }

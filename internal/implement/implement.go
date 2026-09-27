@@ -178,7 +178,9 @@ type Deps struct {
 
 	// Log receives one line each time the watch finds a failed run on a head
 	// the local gate passed: what CI caught that the gate did not (dotfiles
-	// ADR 0007 §8). Nil is silent. It is a log rather than a notification: nothing
+	// ADR 0007 §8). And one each time a candidate's run fails transiently:
+	// what it failed with, which nothing else keeps once the next candidate
+	// runs (#98). Nil is silent. It is a log rather than a notification: nothing
 	// here is the operator's to act on.
 	Log func(msg string)
 }

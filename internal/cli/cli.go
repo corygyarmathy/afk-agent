@@ -259,8 +259,12 @@ func runCmd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	logf := func(msg string) { fmt.Fprintln(stderr, msg) }
+	if deps.review != nil {
+		deps.review.Log = logf
+	}
 	if deps.implement != nil {
-		deps.implement.Log = func(msg string) { fmt.Fprintln(stderr, msg) }
+		deps.implement.Log = logf
 	}
 	runner.Registry = catalogue(deps)
 
@@ -367,6 +371,9 @@ func workCmd(args []string, stderr io.Writer) error {
 	kinds := &deps{}
 	if kinds.review, err = reviewDeps(ctx, p, st, tr); err != nil {
 		return err
+	}
+	if kinds.review != nil {
+		kinds.review.Log = d.Log
 	}
 	if optional(p.branchPrefix, "AFK_BRANCH_PREFIX") == "" {
 		fmt.Fprintln(stderr, "afk work: no --branch-prefix, so implement jobs park rather than run")

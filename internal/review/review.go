@@ -143,6 +143,12 @@ type Deps struct {
 	// StateDir is where workspaces and replies waiting to be posted live -
 	// beside the store, never in it (ADR 0001 §5).
 	StateDir string
+
+	// Log receives one line each time a candidate's run fails transiently:
+	// what it failed with, which nothing else keeps once the next candidate
+	// runs (#98). Nil is silent. It is a log rather than a notification: a
+	// tier that recovers is not the operator's to act on.
+	Log func(msg string)
 }
 
 // Transitions is the review kind, as registry entries.
@@ -287,6 +293,12 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	reply, err := d.Model.Run(ctx, opencode.Request{Model: ref, Dir: ws, Prompt: text.String()})
 	var transient *opencode.TransientError
 	if errors.As(err, &transient) {
+		d.logf("%s: %v", in.Job.ID, transient)
+		// A tier with no candidate left defers from here, with the failure
+		// that ran it out (#98).
+		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
+			return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
+		}
 		// Stay, and the stay moves the next run to the next candidate
 		// (ADR 0001 §10). An error returned instead would not: it is an
 		// attempt, and every other error here is one that is not the
@@ -312,6 +324,13 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
+}
+
+// logf writes one line to Log, if there is one.
+func (d *Deps) logf(format string, args ...any) {
+	if d.Log != nil {
+		d.Log(fmt.Sprintf(format, args...))
+	}
 }
 
 // post is `review-post`: post the saved reply under the next round's key.

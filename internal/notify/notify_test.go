@@ -11,7 +11,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
+	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
@@ -340,6 +342,58 @@ func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 		if !strings.Contains(got[0].title+"\n"+got[0].body, want) {
 			t.Errorf("the notification does not mention %q:\n%s\n%s", want, got[0].title, got[0].body)
 		}
+	}
+}
+
+// The acceptance criteria of #98: an exhausted tier's message says what the
+// last candidate's run failed with, and a tier run out by a run killed at its
+// bound says so and names --model-timeout, rather than listing it among causes
+// the operator has to choose between.
+func TestAnExhaustedTierSaysWhatTheLastRunFailedWith(t *testing.T) {
+	ref := model.Ref{Provider: "p", Model: "m"}
+	for _, tc := range []struct {
+		name      string
+		last      *opencode.TransientError
+		want, not []string
+	}{
+		{
+			name: "a run killed at its bound",
+			last: &opencode.TransientError{Model: ref, Err: errors.New("the run was still going after 30m0s, and was killed"), Bound: 30 * time.Minute},
+			want: []string{"p/m: the run was still going after 30m0s, and was killed", "killed at its bound, --model-timeout (30m0s)"},
+			not:  []string{"the provider is down"},
+		},
+		{
+			name: "any other failure",
+			last: &opencode.TransientError{Model: ref, Err: errors.New("429 Too Many Requests")},
+			want: []string{"p/m: 429 Too Many Requests", "the provider is down", "--model-timeout"},
+			not:  []string{"killed at its bound"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &recorder{}
+			n := notifier(r)
+			n.TierAfter = 1
+
+			cause := &model.ExhaustedError{Tried: 2, Enrolled: 2, Last: tc.last}
+			ep := store.Episode{Since: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC), Times: 1}
+			if _, err := n.TierExhausted(context.Background(), parked("deferred", 0), ep, cause); err != nil {
+				t.Fatal(err)
+			}
+			got := r.all()
+			if len(got) != 1 {
+				t.Fatalf("%d notifications, want 1", len(got))
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got[0].body, want) {
+					t.Errorf("the notification does not mention %q:\n%s", want, got[0].body)
+				}
+			}
+			for _, not := range tc.not {
+				if strings.Contains(got[0].body, not) {
+					t.Errorf("the notification mentions %q:\n%s", not, got[0].body)
+				}
+			}
+		})
 	}
 }
 
