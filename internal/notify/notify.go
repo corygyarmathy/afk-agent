@@ -199,9 +199,6 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 
 	body := fmt.Sprintf("%s, on %s #%d, has run out of models %d times since %s.",
 		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.UTC().Format(time.RFC3339))
-	if cause != nil {
-		body += "\n\n" + cause.Error()
-	}
 	body += "\n\nIt is deferred"
 	if !job.NextRunAt.IsZero() {
 		body += " until " + job.NextRunAt.Format(time.RFC3339)
@@ -220,6 +217,11 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 			"or every run is outlasting --model-timeout. "
 	}
 	body += "This is not repeated while the tier stays exhausted."
+	// The cause last: it carries the run's stderr, and a body over the limit is
+	// cut at the end.
+	if cause != nil {
+		body += "\n\n" + cause.Error()
+	}
 
 	if err := n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body); err != nil {
 		return false, err
