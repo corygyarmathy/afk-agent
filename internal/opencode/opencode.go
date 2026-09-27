@@ -110,6 +110,12 @@ type Tokens struct {
 type TransientError struct {
 	Model model.Ref
 	Err   error
+
+	// Bound is the bound on a run, for a run killed because it outlasted it,
+	// and zero for any other failure. Apart from Err because it is the one
+	// cause the operator set: a bound too short for the work fails every
+	// candidate the same way, and nothing but the bound will change that.
+	Bound time.Duration
 }
 
 func (e *TransientError) Error() string { return fmt.Sprintf("%s: %v", e.Model, e.Err) }
@@ -218,7 +224,9 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		// event, which is the kill's doing rather than opencode's. A run that
 		// exited as the bound ran out is judged as it would have been without
 		// one.
-		return Reply{}, c.transient(req, fmt.Errorf("the run was still going after %s, and was killed", c.Timeout), &stderr)
+		err := c.transient(req, fmt.Errorf("the run was still going after %s, and was killed", c.Timeout), &stderr)
+		err.Bound = c.Timeout
+		return Reply{}, err
 	case decodeErr != nil:
 		return Reply{}, &FatalError{fmt.Errorf("%s did not write an event stream: %w", c.Path, decodeErr)}
 	case reported != nil:
@@ -256,7 +264,7 @@ func (c Command) check(req Request) error {
 	return nil
 }
 
-func (c Command) transient(req Request, err error, stderr *tail) error {
+func (c Command) transient(req Request, err error, stderr *tail) *TransientError {
 	if s := strings.TrimSpace(stderr.String()); s != "" {
 		err = fmt.Errorf("%w\nstderr: %s", err, s)
 	}

@@ -145,6 +145,9 @@ func TestFailuresOpencodeReportsAreTransient(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not contain %q", err, tc.want)
 			}
+			if te.Bound != 0 {
+				t.Errorf("a run that failed on its own says it was killed at a bound of %s", te.Bound)
+			}
 		})
 	}
 }
@@ -385,6 +388,11 @@ func TestARunPastItsBoundIsKilledAndTransient(t *testing.T) {
 		}
 		if te.Model != ref {
 			t.Errorf("the error names %s, want %s", te.Model, ref)
+		}
+		// The bound is what the operator is told about, when this runs a
+		// tier out (#98).
+		if te.Bound != c.Timeout {
+			t.Errorf("the error says the bound was %s, want %s", te.Bound, c.Timeout)
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			t.Errorf("%v reads as the caller's context ending, which is a stop rather than a failure", err)
