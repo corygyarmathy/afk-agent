@@ -20,12 +20,11 @@ its threshold. Those are states, and the operator queries them when they choose
 to look: `afk budget` for the budget, the job store for the queue, GitHub for
 everything about the work itself.
 
-A **waiver** is the one condition that needs no action: the operator set it, and
-the notification is their confirmation that work is now spending the
-pay-as-you-go balance. It is worth the interruption anyway, because the endpoint
-cannot show whether the provider's fallback to the balance is on, and a waiver
-set with it off fails every run as a transient failure - so hearing sooner is
-the whole point. See [`budget.md`](budget.md#waiving-a-window).
+A **waiver** is the one condition that needs no action: the notification
+confirms that work is now spending the pay-as-you-go balance. Why it notifies
+anyway is [ADR 0001
+§13](../adr/0001-a-go-state-machine-in-its-own-repository.md); what to set
+before waiving is [`budget.md`](budget.md#waiving-a-window).
 
 The happy path publishes nothing at all.
 

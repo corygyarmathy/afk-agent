@@ -12,12 +12,13 @@ import (
 // carrying on through a spent window is a decision to spend money, and it is
 // the operator's.
 //
-// Until is the window's resetsAt as the operator read it from `afk budget`, and
-// the waiver lapses when it passes. Nothing compares Until against the window's
-// resetsAt: the endpoint moves that by up to a second between observations, so
-// a comparison on the timestamp would miss the period the operator meant. What
-// makes a waiver cover the current period and not the next is that the operator
-// wrote this period's reset, and the next one is about a month later.
+// Until is the window's resetsAt as the operator read it from `afk budget`. A
+// waiver covers the period whose reset it names and no other: it applies only
+// while the window's observed resetsAt is within resetDrift of Until, and it
+// lapses when Until passes. Matching the period rather than only the clock is
+// what keeps a waiver from spending the balance through the next period too - a
+// mistyped month, or next month's reset given early, would otherwise waive every
+// period up to it.
 type Waiver struct {
 	// Window is the window's name as the endpoint reports it: rolling, weekly,
 	// monthly, or any window upstream adds. Which names may be waived at all
@@ -33,30 +34,74 @@ func (w Waiver) String() string {
 	return fmt.Sprintf("%s until %s", w.Window, w.Until.Format(time.RFC3339))
 }
 
+// resetDrift is how far apart two readings of one period's resetsAt can be.
+//
+// Not a parameter: it is the endpoint's arithmetic and `afk budget`'s format,
+// not a choice. The endpoint computes resetsAt as now plus a whole number of
+// seconds rounded up, so the same period reads up to a second later on one
+// observation than another; and the RFC 3339 the operator copies drops the
+// fraction, which is up to a second earlier again.
+const resetDrift = 2 * time.Second
+
+// Covers reports whether wa waives w at now: w is the window wa names, wa has
+// not lapsed, and w's observed reset is the one wa names.
+//
+// A window observed with no resetsAt is never covered. There is no period to
+// match, and spending the balance on a guess is the wrong way to fail.
+func (wa Waiver) Covers(w Window, now time.Time) bool {
+	return wa.Window == w.Name && now.Before(wa.Until) && wa.Matches(w)
+}
+
+// Matches reports whether w's observed reset is the one wa names, whatever the
+// clock says. `afk budget` shows it, so a waiver can be checked against the
+// period it is meant for before that period is spent.
+func (wa Waiver) Matches(w Window) bool {
+	if w.ResetsAt.IsZero() {
+		return false
+	}
+	d := w.ResetsAt.Sub(wa.Until)
+	return -resetDrift <= d && d <= resetDrift
+}
+
 // Waivers is a configured set of waivers, in the order they were given.
 type Waivers []Waiver
 
-// Waived reports the waiver covering w, if one is configured and has not
-// lapsed.
-//
-// The window is matched by name and the waiver by now. A waiver whose Until has
-// passed waives nothing, so the next time the window is spent work defers
-// again - which is what "it lapses when that window resets" is.
+// Waived reports the waiver covering w at now, if one is configured.
 func (ws Waivers) Waived(w Window, now time.Time) (Waiver, bool) {
 	for _, wa := range ws {
-		if wa.Window == w.Name && now.Before(wa.Until) {
+		if wa.Covers(w, now) {
 			return wa, true
 		}
 	}
 	return Waiver{}, false
 }
 
-// skipWaived is the predicate the walks that leave a waived window out use.
-func skipWaived(waivers Waivers, now time.Time) func(Window) bool {
-	return func(w Window) bool {
-		_, ok := waivers.Waived(w, now)
-		return ok
+// Waive is s with the windows ws covers at now left out, and the waivers that
+// covered a limited window.
+//
+// It is the one place a waiver is applied. Admission and resolution each read
+// the result with their own reasoning unchanged, so the two cannot disagree
+// about which windows a waiver leaves out. Every covered window goes, limited
+// or not: a waived window is out of the threshold check as well as the limit
+// (ADR 0001 §11). Only the waivers for a limited window come back, because
+// those are the ones that let something through.
+func (s State) Waive(ws Waivers, now time.Time) (State, []Waiver) {
+	if len(ws) == 0 {
+		return s, nil
 	}
+	out := State{ObservedAt: s.ObservedAt, Windows: make([]Window, 0, len(s.Windows))}
+	var waived []Waiver
+	for _, w := range s.Windows {
+		wa, ok := ws.Waived(w, now)
+		if !ok {
+			out.Windows = append(out.Windows, w)
+			continue
+		}
+		if w.Limited() {
+			waived = append(waived, wa)
+		}
+	}
+	return out, waived
 }
 
 // Live returns the waivers that have not lapsed, for `afk budget` to show what

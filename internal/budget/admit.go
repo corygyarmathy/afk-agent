@@ -113,35 +113,19 @@ func (s State) Admit(threshold float64, waivers Waivers, now time.Time) Admissio
 		return Admission{Decision: Start}
 	}
 
-	// waived collects the waivers that let a limited window through. Only an
-	// admission that starts carries them back to the caller: a waiver that is
-	// configured while nothing is limited let nothing through, and one beside a
-	// window that still defers did not get the work moving.
-	var (
-		waived []Waiver
-		last   Window
-		listed bool
-	)
-	for _, w := range s.Windows {
-		if !w.Limited() {
-			continue
-		}
-		wa, ok := waivers.Waived(w, now)
-		if ok {
-			waived = append(waived, wa)
-			continue
-		}
+	// Everything below reads the observation with the waived windows already
+	// left out. Only an admission that starts carries the waivers back to the
+	// caller: a waiver beside a window that still defers did not get the work
+	// moving.
+	s, waived := s.Waive(waivers, now)
+
+	if s.Limited() {
 		// The window named is the one that reopens last, because that is the
 		// window the timestamp came from. Naming the peak instead would print a
 		// window whose own reset is not the time being deferred to, and "defer
 		// until T: <window that reopens well before T>" is a log line that
 		// reads as a bug in the agent rather than as the OR working.
-		if !listed || w.ResetsAt.After(last.ResetsAt) {
-			last, listed = w, true
-		}
-	}
-
-	if listed {
+		last := s.LastToReset()
 		if last.ResetsAt.After(now) {
 			return Admission{Decision: Defer, Until: last.ResetsAt, Window: last}
 		}
@@ -152,9 +136,8 @@ func (s State) Admit(threshold float64, waivers Waivers, now time.Time) Admissio
 		// or past time, and NextRunAt in the past is a job that is due
 		// immediately while a zero one is a job nothing ever picks up again.
 		//
-		// Nothing reopens, so the window worth naming is the worst one that was
-		// not waived.
-		return Admission{Decision: Wait, Window: s.peak(skipWaived(waivers, now))}
+		// Nothing reopens, so the window worth naming is the worst one.
+		return Admission{Decision: Wait, Window: s.Peak()}
 	}
 
 	if threshold > 0 {
@@ -166,9 +149,8 @@ func (s State) Admit(threshold float64, waivers Waivers, now time.Time) Admissio
 		//
 		// Nothing is limited at this point, so Peak is simply the window
 		// nearest its limit by percent: if any window is at or above the
-		// threshold then that one is, and it is the one to name. A waived
-		// window is skipped, spent or not.
-		if peak := s.peak(skipWaived(waivers, now)); peak.Percent >= threshold {
+		// threshold then that one is, and it is the one to name.
+		if peak := s.Peak(); peak.Percent >= threshold {
 			return Admission{Decision: Wait, Window: peak}
 		}
 	}

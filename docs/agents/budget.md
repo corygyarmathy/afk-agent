@@ -36,7 +36,7 @@ Undocumented, and added by
 | observed | what happens | jobs in flight |
 | --- | --- | --- |
 | any window `rate-limited` | due jobs are **deferred** to the last limited window's `resetsAt` | untouched |
-| a `rate-limited` window the operator has **waived** | work starts, spending the pay-as-you-go balance, until the waiver's timestamp | untouched |
+| a `rate-limited` window the operator has **waived** | work starts, spending the pay-as-you-go balance, for the period whose reset the waiver names | untouched |
 | any window at or over the threshold | new jobs do not start; the queue is looked at again next poll | untouched |
 | everything below the threshold | work starts | untouched |
 | the endpoint cannot be read | the last good observation stands; with none, work starts | untouched |
@@ -47,16 +47,12 @@ waived is left out of all of it, the threshold included.
 
 A window that is `rate-limited` also reaches the operator once, as a
 notification: [`notification.md`](notification.md). Approaching one does not.
-The first job admitted under a waiver is told once per waiver, because the
-endpoint cannot say whether the provider's fallback is on and a waiver set with
-it off fails every run.
+The first job admitted under a waiver is told once per waiver.
 
 ## Waiving a window
 
-A **waiver** is the operator's permission for work to carry on through one spent
-window until that window next resets (CONTEXT.md: waiver). It spends the
-pay-as-you-go balance, and the operator is the only one who grants one, because
-carrying on through a spent window is a decision to spend money.
+A **waiver** is defined in [`CONTEXT.md`](../../CONTEXT.md), and decided in
+[ADR 0001 §11](../adr/0001-a-go-state-machine-in-its-own-repository.md).
 
 ```bash
 # Work continues through the spent monthly window until 2026-09-27T00:00:00Z,
@@ -66,14 +62,13 @@ afk work ... --budget-key /run/credentials/afk-agent.service/opencode-api-key \
 ```
 
 - **Turn the provider's fallback on first.** "Use balance" in the console,
-  billing settings. The agent cannot see that setting, and a waiver set with it
-  off fails every run as a transient failure: the waiver notification is how the
-  operator notices sooner.
-- **The timestamp is the window's `resetsAt`**, as `afk budget` prints it. The
-  waiver lapses when it passes, so the next time that window is spent work defers
-  again. The endpoint moves `resetsAt` by up to a second between observations,
-  which is why nothing compares the two exactly: the operator's timestamp is the
-  window's own, and the next period starts about a month later.
+  billing settings. The agent cannot see that setting. With it off, a waiver
+  fails every run as a transient failure, and the waiver notification is the
+  first sign.
+- **The timestamp is the window's `resetsAt`**, as `afk budget` prints it. A
+  waiver applies only while the window's observed `resetsAt` is within two
+  seconds of it, and lapses when it passes. A waiver for any other period waives
+  nothing, and `afk budget` says it does not match.
 - **Name windows, not `rolling`/`weekly`/`monthly` specifically.** Which names
   may be waived is the module's to restrict; the agent applies whatever it is
   given.
@@ -81,9 +76,8 @@ afk work ... --budget-key /run/credentials/afk-agent.service/opencode-api-key \
   and a hand-invocation resolve against the same waived window rather than being
   refused by it.
 
-The short windows are waited out rather than waived: a rolling window's percent
-falls as old usage ages out, and a waiver on it would spend the balance to save
-minutes.
+The short windows are waited out ([ADR 0001
+§11](../adr/0001-a-go-state-machine-in-its-own-repository.md)).
 
 `afk run` is unaffected by all of it. A hand-invocation is an operator asking
 for this job now.
@@ -131,9 +125,9 @@ rolling 12% (ok), resets 2026-09-11T18:00:00Z; weekly 41% (ok), resets 2026-09-1
 defer until 2026-09-27T00:00:00Z: monthly 100% (rate-limited), resets 2026-09-27T00:00:00Z
 ```
 
-With a waiver, the same reading admits and says which window is waived and
-until when - whether or not that window is spent yet, so a waiver can be checked
-before it is relied on:
+With a waiver, the same reading admits, and each waiver in force is listed
+against the period its window was observed in, whether or not that window is
+spent yet:
 
 ```bash
 afk budget --budget-key /run/credentials/afk-agent.service/opencode-api-key \
@@ -143,8 +137,12 @@ afk budget --budget-key /run/credentials/afk-agent.service/opencode-api-key \
 ```
 rolling 12% (ok), resets 2026-09-11T18:00:00Z; weekly 41% (ok), resets 2026-09-15T00:00:00Z; monthly 100% (rate-limited), resets 2026-09-27T00:00:00Z
 start (waived: monthly until 2026-09-27T00:00:00Z)
-monthly is waived until 2026-09-27T00:00:00Z
+monthly is waived until 2026-09-27T00:00:00Z: covers this period
 ```
+
+A waiver that names another period reads
+`does not match this period's reset <resetsAt>`, and one for a window the
+endpoint did not report reads `no <window> window observed`.
 
 The tests in this repository run offline, so this is the only thing in the
 binary that reaches the live endpoint.
@@ -154,9 +152,9 @@ binary that reaches the live endpoint.
 Not metered here. Models reached outside the Go subscription are bounded by the
 account balance with auto-recharge disabled, which is a control on the
 provider's side; exhausting it arrives as a transient failure and is handled as
-one. A waiver deliberately crosses that boundary - the operator turns on the
-provider's fallback and waives a window, and work continues on the balance until
-the window resets. See [ADR 0001
+one. A waiver crosses that boundary: the operator turns on the provider's
+fallback and waives a window, and work continues on the balance until the
+window resets. See [ADR 0001
 §12](../adr/0001-a-go-state-machine-in-its-own-repository.md) and
 [`model-enrolment.md`](model-enrolment.md) for which providers are on the
 subscription.

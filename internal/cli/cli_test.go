@@ -428,6 +428,42 @@ func TestBudgetWaiverParameters(t *testing.T) {
 	}
 }
 
+// `afk budget` says a waived window is waived, and says of each waiver in force
+// whether it names the period its window was observed in - so a waiver for the
+// wrong period can be caught by hand before the window is spent.
+func TestBudgetOutputReportsEachWaiverAgainstItsPeriod(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	state := budget.State{
+		ObservedAt: now,
+		Windows: []budget.Window{
+			{Name: "weekly", Status: budget.StatusOK, Percent: 41, ResetsAt: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)},
+			{Name: "monthly", Status: budget.StatusRateLimited, Percent: 100, ResetsAt: time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)},
+		},
+	}
+	waivers := budget.Waivers{
+		{Window: "monthly", Until: time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)},
+		{Window: "weekly", Until: time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)},
+		{Window: "fortnightly", Until: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)},
+		{Window: "rolling", Until: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
+	}
+
+	var out bytes.Buffer
+	if err := writeBudget(&out, state, 0, waivers, now); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		state.String(),
+		"start (waived: monthly until 2026-09-27T00:00:00Z)",
+		"monthly is waived until 2026-09-27T00:00:00Z: covers this period",
+		"weekly is waived until 2026-09-22T00:00:00Z: does not match this period's reset 2026-09-15T00:00:00Z",
+		"fortnightly is waived until 2026-09-25T00:00:00Z: no fortnightly window observed",
+		"",
+	}, "\n")
+	if out.String() != want {
+		t.Fatalf("afk budget printed:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
 // The acceptance criterion of #2, at the command line: a transition runs with
 // no daemon present, named by the tracker subject rather than by a job id. The
 // job does not have to exist first - the subject is what names it.

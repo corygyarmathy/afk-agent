@@ -28,6 +28,11 @@ func TestAWaivedWindowAdmits(t *testing.T) {
 	if len(adm.Waived) != 1 || adm.Waived[0] != wa {
 		t.Fatalf("admitted under %+v, want the one waiver", adm.Waived)
 	}
+	// What `afk budget` prints on its admission line, which is how the
+	// operator sees the waiver applied.
+	if got, want := adm.String(), "start (waived: monthly until 2026-09-27T00:00:00Z)"; got != want {
+		t.Fatalf("the admission reads %q, want %q", got, want)
+	}
 
 	// Without the waiver the same observation defers: the waiver is the
 	// difference, and a test where it changed nothing would pass either way.
@@ -37,19 +42,78 @@ func TestAWaivedWindowAdmits(t *testing.T) {
 }
 
 // The acceptance criterion: the same window after its reset is not waived. Its
-// next rate-limited observation defers, whatever the waiver says, because the
-// waiver lapsed when the reset it named passed.
+// next rate-limited observation defers, whatever the waiver says - including a
+// waiver that has not lapsed, because it names a reset that is not this
+// period's.
 func TestAWaiverDoesNotCoverTheNextPeriod(t *testing.T) {
-	wa := budget.Waiver{Window: "monthly", Until: at(t, "2026-09-27T00:00:00Z")}
-	now := at(t, "2026-09-28T00:00:00Z")
 	const next = `{"usage":{"monthly":{"status":"rate-limited","percent":100,"resetsAt":"2026-10-27T00:00:00Z"}}}`
 
-	adm := decode(t, next, now).Admit(0, budget.Waivers{wa}, now)
-	if adm.Decision != budget.Defer {
-		t.Fatalf("decision is %s, want defer: the waiver lapsed at its own timestamp", adm.Decision)
+	for _, tc := range []struct {
+		name, doc, now, until, deferTo string
+	}{
+		{
+			// The waiver lapsed at its own timestamp.
+			name: "after the waiver's reset", doc: next,
+			now: "2026-09-28T00:00:00Z", until: "2026-09-27T00:00:00Z", deferTo: "2026-10-27T00:00:00Z",
+		},
+		{
+			// A mistyped month: the waiver outlives the period it was meant
+			// for, and the next period is not the one it names.
+			name: "a waiver past the next period's reset", doc: next,
+			now: "2026-09-28T00:00:00Z", until: "2026-11-27T00:00:00Z", deferTo: "2026-10-27T00:00:00Z",
+		},
+		{
+			// Next month's reset given while this period is still spent: it
+			// names the next period, not this one.
+			name: "a waiver for the period after this one", doc: monthlyLimited,
+			now: "2026-09-11T12:00:00Z", until: "2026-10-27T00:00:00Z", deferTo: "2026-09-27T00:00:00Z",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := at(t, tc.now)
+			wa := budget.Waiver{Window: "monthly", Until: at(t, tc.until)}
+
+			adm := decode(t, tc.doc, now).Admit(0, budget.Waivers{wa}, now)
+			if adm.Decision != budget.Defer {
+				t.Fatalf("decision is %s, want defer: the waiver names another period", adm.Decision)
+			}
+			if want := at(t, tc.deferTo); !adm.Until.Equal(want) {
+				t.Fatalf("deferred until %s, want the observed period's %s", adm.Until, want)
+			}
+			if len(adm.Waived) != 0 {
+				t.Fatalf("a waiver for another period was reported as applied: %+v", adm.Waived)
+			}
+		})
 	}
-	if want := at(t, "2026-10-27T00:00:00Z"); !adm.Until.Equal(want) {
-		t.Fatalf("deferred until %s, want the new period's %s", adm.Until, want)
+}
+
+// The endpoint moves one period's resetsAt by up to a second between
+// observations, and `afk budget` prints it without the fraction. A waiver copied
+// from that output still covers its period on a later observation; one that is
+// out by more than the drift does not.
+func TestAWaiverCoversItsPeriodThroughTheEndpointsDrift(t *testing.T) {
+	now := at(t, "2026-09-11T12:00:00Z")
+	wa := budget.Waiver{Window: "monthly", Until: at(t, "2026-09-27T00:00:00Z")}
+
+	for _, tc := range []struct {
+		resets string
+		covers bool
+	}{
+		{"2026-09-27T00:00:00Z", true},
+		{"2026-09-27T00:00:01.4Z", true},
+		{"2026-09-26T23:59:59Z", true},
+		{"2026-09-27T00:01:00Z", false},
+		{"2026-09-26T23:59:00Z", false},
+	} {
+		w := budget.Window{Name: "monthly", Status: budget.StatusRateLimited, ResetsAt: at(t, tc.resets)}
+		if got := wa.Covers(w, now); got != tc.covers {
+			t.Errorf("a waiver until %s covers a window resetting %s: %v, want %v", wa.Until.Format(time.RFC3339), tc.resets, got, tc.covers)
+		}
+	}
+
+	// A window with no resetsAt has no period to match, so it is never covered.
+	if wa.Covers(budget.Window{Name: "monthly", Status: budget.StatusRateLimited}, now) {
+		t.Error("a waiver covered a window with no resetsAt")
 	}
 }
 
@@ -168,13 +232,13 @@ func TestWaiversLiveExcludesLapsedOnes(t *testing.T) {
 	if len(live) != 1 || live[0].Window != "monthly" {
 		t.Fatalf("live waivers are %+v, want only the unexpired monthly one", live)
 	}
-	if _, ok := ws.Waived(budget.Window{Name: "weekly"}, now); ok {
+	if _, ok := ws.Waived(budget.Window{Name: "weekly", ResetsAt: at(t, "2026-09-01T00:00:00Z")}, now); ok {
 		t.Fatal("a lapsed waiver reports itself as covering its window")
 	}
-	if wa, ok := ws.Waived(budget.Window{Name: "monthly"}, now); !ok || wa.Until != at(t, "2026-09-27T00:00:00Z") {
+	if wa, ok := ws.Waived(budget.Window{Name: "monthly", ResetsAt: at(t, "2026-09-27T00:00:00Z")}, now); !ok || wa.Until != at(t, "2026-09-27T00:00:00Z") {
 		t.Fatalf("Waived = %+v, %v; want the monthly waiver", wa, ok)
 	}
-	if _, ok := ws.Waived(budget.Window{Name: "rolling"}, now); ok {
+	if _, ok := ws.Waived(budget.Window{Name: "rolling", ResetsAt: at(t, "2026-09-27T00:00:00Z")}, now); ok {
 		t.Fatal("a waiver covered a window it does not name")
 	}
 }
@@ -185,5 +249,26 @@ func TestAnUnobservedBudgetAdmitsUnderAWaiver(t *testing.T) {
 	wa := budget.Waiver{Window: "monthly", Until: time.Now().Add(time.Hour)}
 	if adm := (budget.State{}).Admit(0, budget.Waivers{wa}, time.Now()); !adm.Starts() {
 		t.Fatalf("an unobserved budget stopped work: %s", adm)
+	}
+}
+
+// Waive is the one place a waiver is applied: every covered window is left
+// out, limited or not, and only the waivers for a limited one come back.
+func TestWaiveLeavesOutTheCoveredWindows(t *testing.T) {
+	now := at(t, "2026-09-11T12:00:00Z")
+	ws := budget.Waivers{
+		{Window: "weekly", Until: at(t, "2026-09-15T00:00:00Z")},
+		{Window: "monthly", Until: at(t, "2026-09-27T00:00:00Z")},
+	}
+
+	s, waived := decode(t, monthlyLimited, now).Waive(ws, now)
+	if len(s.Windows) != 1 || s.Windows[0].Name != "rolling" {
+		t.Fatalf("waived state is %s, want only rolling left", s)
+	}
+	if !s.Known() {
+		t.Fatal("waiving windows made the observation unknown")
+	}
+	if len(waived) != 1 || waived[0].Window != "monthly" {
+		t.Fatalf("waived %+v, want only the limited monthly window's waiver", waived)
 	}
 }

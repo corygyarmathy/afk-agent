@@ -143,26 +143,16 @@ func (s State) LastToReset() Window {
 
 // Peak is the window nearest its limit, which is the one worth naming in a log
 // line or a notification. The zero Window if nothing was observed.
-func (s State) Peak() Window { return s.peak(nil) }
-
-// peak is Peak over the windows skip does not exclude. A nil skip excludes
-// none, which is Peak itself; admission passes the waived windows, which are
-// left out of the threshold check as they are out of the limit (ADR 0001 §11).
-func (s State) peak(skip func(Window) bool) Window {
-	// Seeded from the first window the walk keeps rather than from the zero
-	// one, so that the answer is always a window the endpoint actually
-	// reported. Starting at zero means an account at 0% across the board peaks
-	// at a nameless window, and the log line it is in reads " 0% ()".
-	peaked := false
-	var peak Window
-	for _, w := range s.Windows {
-		if skip != nil && skip(w) {
-			continue
-		}
-		if !peaked {
-			peak, peaked = w, true
-			continue
-		}
+func (s State) Peak() Window {
+	if len(s.Windows) == 0 {
+		return Window{}
+	}
+	// Seeded from the first window rather than from the zero one, so that the
+	// answer is always a window the endpoint actually reported. Starting at zero
+	// means an account at 0% across the board peaks at a nameless window, and
+	// the log line it is in reads " 0% ()".
+	peak := s.Windows[0]
+	for _, w := range s.Windows[1:] {
 		// A limited window outranks an unlimited one whatever the percents
 		// say: percent is a number about a window, and being limited is the
 		// answer about the account.
