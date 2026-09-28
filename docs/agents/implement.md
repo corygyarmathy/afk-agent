@@ -21,8 +21,8 @@ the model as instructions. The agent never merges.
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
-| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, then pushes the commit it checked. A denied path hands back. |
-| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. |
+| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, and counts the work's size, then pushes the commit it checked. A denied path hands back. |
+| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request if it is not open already. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
@@ -32,7 +32,9 @@ the model as instructions. The agent never merges.
 A **hand-back** is a comment saying what stopped the work, quoting the end of
 the output that said so, plus the hand-back label. Before the push it goes on
 the issue, and nothing was pushed. After the push it goes on the pull request
-only, and the pull request stays open. Either way the job comes to rest once
+only, and the pull request stays open. Between the two - work over the size
+signal, or a pull request that never opened - it goes on the issue, and says
+where the pushed branch is. Either way the job comes to rest once
 both are read back from the tracker, and its workspace goes at once.
 
 A claim, a reply and a hand-back are each read back before the job moves on
@@ -70,6 +72,34 @@ description, and says the implement job asked for it
   saw its own push land at. A session that amends its own pushed commits does
   not stall the job, and anyone else's push to the branch is never rewritten
   (ADR 0001, amendment of 2026-09-25).
+
+## The size signal
+
+A pull request is one concern, reviewable in one sitting, tests included
+([#107](https://github.com/corygyarmathy/afk-agent/issues/107)). Changed lines
+are the signal for that, not the rule: `--size-signal` is how many changed
+non-test lines the work may have before its size needs a decision. The code is
+[`internal/size`](../../internal/size), which `/revise` reuses.
+
+- **The session is told first.** The prompt gives the rule and the signal, so
+  the session can stop at a coherent first piece by itself and say what is left.
+- **The count is the agent's.** It is made by git on the commit the push sends,
+  in the relay, never from what the session says. Each line added and each line
+  removed counts once. Left out: files deleted whole, binary files, vendored
+  files (under `vendor/`, `third_party/` or `node_modules/`, or marked
+  `linguist-vendored`) and generated ones (lock files by name, Go's
+  `// Code generated ... DO NOT EDIT.` line, or marked `linguist-generated`).
+  An attribute set false in the head's `.gitattributes` takes a convention's
+  exclusion back. Tests - `_test` files, `test/`, `tests/`, `testdata/`,
+  `spec/` and the like - are counted beside it, and do not count towards it.
+- **Over it**, the work is pushed and no pull request is opened. The issue gets
+  a hand-back with both counts, the signal and the branch, so the work is kept
+  and a human decides what becomes of it. At the signal or under it, nothing
+  changes.
+- **The override** is the command's own instructions, and only those: "don't
+  split" or "do not split", anywhere in them, opens the pull request whatever
+  its size, and the session is told not to stop early. Unattended work has no
+  instructions, so it has no override.
 
 ## What it needs on the host
 
@@ -124,7 +154,8 @@ branch.
 ([`domain.md`](domain.md)). Without `--branch-prefix`, `afk work` neither runs
 implement jobs nor answers `/implement`. With it, all of these are required:
 `--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
-`--denylist`, `--ci-wait`, `--ci-ceiling` and `--ci-fixes`, plus model choice,
+`--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`
+(whose default, 400, is the NixOS module's), plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` is
 optional.
 

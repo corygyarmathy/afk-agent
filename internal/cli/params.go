@@ -101,6 +101,9 @@ Implementing an issue, for afk run and afk work:
                                              posted, is read again
   --ci-ceiling <dur>    AFK_CI_CEILING       time after a push CI may take, then a hand-back
   --ci-fixes <n>        AFK_CI_FIXES         red runs sent back to the session, then a hand-back
+  --size-signal <n>     AFK_SIZE_SIGNAL      changed non-test lines a pull request may have; over it,
+                                             the branch is pushed and handed back unopened
+                                             (the module's default is 400)
 
 All but --implement-needs are required to implement, with the model choice
 parameters and the two above; implementing also needs the heavy-build token's capacity.
@@ -161,6 +164,7 @@ type params struct {
 	ciWait         string
 	ciCeiling      string
 	ciFixes        string
+	sizeSignal     string
 
 	opencode      string
 	enrolment     string
@@ -637,6 +641,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
 	fs.StringVar(&p.ciFixes, "ci-fixes", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_FIXES)")
+	fs.StringVar(&p.sizeSignal, "size-signal", "", "changed non-test lines a pull request may have before a hand-back (AFK_SIZE_SIGNAL)")
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how
@@ -684,6 +689,7 @@ type implementParams struct {
 	ciWait       time.Duration
 	ciCeiling    time.Duration
 	ciFixes      int
+	sizeSignal   int
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -736,6 +742,12 @@ func (p *params) implement() (implementParams, error) {
 		return implementParams{}, err
 	}
 	if ip.ciFixes, err = count(v, "ci-fixes"); err != nil {
+		return implementParams{}, err
+	}
+	if v, err = required(p.sizeSignal, "size-signal", "AFK_SIZE_SIGNAL"); err != nil {
+		return implementParams{}, err
+	}
+	if ip.sizeSignal, err = count(v, "size-signal"); err != nil {
 		return implementParams{}, err
 	}
 	return ip, nil

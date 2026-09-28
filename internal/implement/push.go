@@ -9,6 +9,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -44,6 +45,15 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	if bad := denied(d.Denylist, paths); len(bad) > 0 {
 		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
+
+	// Measured here, on the commit the push sends and in the relay, where
+	// nothing the session wrote into its .git is read. Whether it is over
+	// is decided once the push has landed: the work is kept either way.
+	c, err := size.Measure(ctx, relayDir, p.Base, head)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	p.Lines, p.Tests = c.Lines, c.Tests
 
 	// The stem is new with each head, and a head is pushed only by the work
 	// that made it: out of rounds, the work is handed back, and a later
@@ -120,6 +130,19 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{}, err
 	} else if ok {
 		return transition.Result{State: Watching, RunAt: in.Now}, nil
+	}
+
+	// Over the size signal, the pushed branch is the work's to keep, and a
+	// human decides what becomes of it. Only the command's instructions can
+	// ask for it opened whatever its size.
+	if (size.Count{Lines: p.Lines, Tests: p.Tests}).Over(d.SizeSignal) {
+		instructions, err := d.instructions(ctx, n)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		if !Whole(instructions) {
+			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review. Split the issue, or `%s` again saying \"don't split\" to have it done over as one pull request.", p.Lines, p.Tests, d.SizeSignal, Word), "")
+		}
 	}
 
 	// New with each workspace, as the push's stem is with each head. The

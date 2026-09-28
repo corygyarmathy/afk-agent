@@ -16,7 +16,8 @@
 //	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
 //	                                         opening       the pull request, under the next key
 //	                                         pushing       the push is not on the remote: again
-//	                                         handing-back  someone else pushed, or the pull request is out of rounds
+//	                                         handing-back  someone else pushed, the work is over the size signal,
+//	                                                       or the pull request is out of rounds
 //	watching     --implement-watch-------->  reviewing     CI is green on the pushed head
 //	                                         watching      not finished: again after the CI wait
 //	                                         implementing  red: back to the session, with what CI said
@@ -161,6 +162,12 @@ type Deps struct {
 	// Denylist is the paths the agent may never push, as globs (see
 	// denied). A parameter.
 	Denylist []string
+
+	// SizeSignal is the changed non-test lines a pull request may have
+	// before the work needs a decision (package size): over it, the work is
+	// pushed, and handed back on the issue rather than opened. The session is
+	// told it up front. A parameter.
+	SizeSignal int
 
 	// Store is read, never written: which round of an effect is next, and
 	// where the pull request's review job is. This job's own state is the

@@ -68,6 +68,10 @@ _Avoid_: Trigger label, ready label
 A check a job must pass before it may proceed. Distinct from the advisory review, which advises and never blocks.
 _Avoid_: Check, validation
 
+**Size signal**:
+The changed non-test lines a pull request may have before its size needs a decision, as the agent counts them on the commits: generated, vendored and lock files and files deleted whole are left out, and tests are counted beside it. Not a gate: crossing it fails nothing, it asks for a decision instead of a silent large pull request. Only a command's own instructions override it.
+_Avoid_: Size limit, size gate, PR budget
+
 **Advisory review**:
 The agent's report on a pull request: advice to the operator, never a gate, never a decision.
 _Avoid_: Review (bare), AI review
