@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,10 @@ const (
 	envStderr = "AFK_OPENCODE_STDERR"
 	envRecord = "AFK_OPENCODE_RECORD"
 	envPids   = "AFK_OPENCODE_PIDS"
+
+	// envExports is a directory of `opencode export` output, one <session>.json
+	// each. A session with no file is one opencode does not have.
+	envExports = "AFK_OPENCODE_EXPORTS"
 )
 
 var ref = model.Ref{Provider: "opencode-go", Model: "muse-spark-1.3-contributor"}
@@ -95,6 +100,122 @@ func TestAReplyIsReadFromARecordedRun(t *testing.T) {
 	if got != want {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}
+}
+
+// A run that handed work to a sub-agent, recorded from the real binary on
+// 2026-09-28 with the child's export beside it. The sub-agent ran in a session
+// of its own, and nothing of it is in the run's stream but the task tool call
+// naming that session: its cost is read from its export and counted, or a
+// review that fans out reports a fraction of what it spent (#99).
+func TestASubAgentsCostIsCounted(t *testing.T) {
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: dir})
+
+	got, err := c.Run(context.Background(), request(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The run's own steps, then the sub-agent's session.
+	const want = 0.001925676 + 0.00007284 + 0.001617276
+	if math.Abs(got.Cost-want) > 1e-12 {
+		t.Errorf("cost %v, want %v: the run's and its sub-agent's", got.Cost, want)
+	}
+	wantTokens := opencode.Tokens{Input: 12306 + 188 + 10730, Output: 124 + 4 + 4, CacheRead: 1792 + 14080 + 1792}
+	if got.Tokens != wantTokens {
+		t.Errorf("tokens %+v, want %+v", got.Tokens, wantTokens)
+	}
+	if got.Unread != 0 {
+		t.Errorf("%d sub-agents unread, want none", got.Unread)
+	}
+	if got.Text != "pong" || got.Session != "ses_f1815410dffe1YAxJ0v1eQ7qFL" {
+		t.Errorf("text %q in %s, want the run's own reply in its own session", got.Text, got.Session)
+	}
+}
+
+// A sub-agent whose cost cannot be read does not fail the run: the cost
+// informs and decides nothing. The reply says how many went uncounted, so
+// that what it reports reads as the floor it is.
+func TestASubAgentWhoseCostCannotBeReadIsUnread(t *testing.T) {
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: exports(t, nil)})
+
+	got, err := c.Run(context.Background(), request(t))
+	if err != nil {
+		t.Fatalf("got %v, want the reply: an uncounted sub-agent is not a failed run", err)
+	}
+	if got.Unread != 1 {
+		t.Errorf("%d sub-agents unread, want 1", got.Unread)
+	}
+	const want = 0.001925676 + 0.00007284
+	if math.Abs(got.Cost-want) > 1e-12 {
+		t.Errorf("cost %v, want the run's own %v", got.Cost, want)
+	}
+}
+
+// A sub-agent's own sub-agents are counted too, each session once however
+// many times it is named. opencode 1.18.31 denies the general sub-agent the
+// task tool, so this is a shape the recording could not show: the export's
+// task part is the one the parent's session holds for the same call.
+func TestASubAgentsSubAgentsAreCounted(t *testing.T) {
+	c := fake(t, "replay", map[string]string{
+		envExit: "0",
+		envStream: stream(t,
+			`{"type":"step_start","sessionID":"ses_p","part":{"type":"step-start"}}`,
+			taskEvent("ses_p", "ses_c"),
+			taskEvent("ses_p", "ses_c"),
+			`{"type":"text","sessionID":"ses_p","part":{"type":"text","text":"done"}}`,
+			`{"type":"step_finish","sessionID":"ses_p","part":{"type":"step-finish","cost":1}}`,
+		),
+		envExports: exports(t, map[string]string{
+			"ses_c": exported("ses_c", 2, "ses_g"),
+			"ses_g": exported("ses_g", 4),
+		}),
+	})
+
+	got, err := c.Run(context.Background(), request(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cost != 7 || got.Unread != 0 {
+		t.Errorf("cost %v with %d unread, want 7 with none: the run, its sub-agent and that one's, once each", got.Cost, got.Unread)
+	}
+}
+
+// taskEvent is a finished task tool call in a run's stream, as opencode 1.18.31
+// writes it, trimmed to what names the sub-agent's session.
+func taskEvent(parent, child string) string {
+	return fmt.Sprintf(`{"type":"tool_use","sessionID":%q,"part":{"type":"tool","tool":"task","state":{"status":"completed","metadata":{"parentSessionId":%[1]q,"sessionId":%q}}}}`, parent, child)
+}
+
+// exported is a session's `opencode export`, trimmed to its cost and to a
+// task tool call for each of children.
+func exported(session string, cost float64, children ...string) string {
+	var parts []string
+	for _, c := range children {
+		parts = append(parts, fmt.Sprintf(`{"type":"tool","tool":"task","state":{"status":"completed","metadata":{"sessionId":%q}}}`, c))
+	}
+	return fmt.Sprintf(`{"info":{"id":%q,"cost":%v,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}},"messages":[{"info":{"role":"assistant"},"parts":[%s]}]}`,
+		session, cost, strings.Join(parts, ","))
+}
+
+// exports writes the sessions opencode has, by id, for the fake's export.
+func exports(t *testing.T, sessions map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for id, body := range sessions {
+		if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func readFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(fixture(t, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 // An unknown model, recorded from the real binary. The stream says only
@@ -505,6 +626,9 @@ func TestHelperIsOpencode(t *testing.T) {
 }
 
 func helper(mode string, args []string) int {
+	if len(args) == 2 && args[0] == "export" {
+		return export(args[1])
+	}
 	switch mode {
 	case "replay":
 		fmt.Fprint(os.Stderr, os.Getenv(envStderr))
@@ -568,4 +692,17 @@ func replay() int {
 	}
 	code, _ := strconv.Atoi(os.Getenv(envExit))
 	return code
+}
+
+// export is `opencode export <session>`, which writes its progress to stderr
+// and the session to stdout.
+func export(session string) int {
+	fmt.Fprintf(os.Stderr, "Exporting session: %s\n", session)
+	b, err := os.ReadFile(filepath.Join(os.Getenv(envExports), session+".json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Session not found")
+		return 1
+	}
+	os.Stdout.Write(b)
+	return 0
 }

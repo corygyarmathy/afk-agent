@@ -552,8 +552,21 @@ func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
 	if issue != 0 {
 		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
 	}
-	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n\n</details>\n",
-		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
+	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s · %s</sub>\n\n</details>\n",
+		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), ref, cost(reply))
+}
+
+// cost is what the run cost, sub-agents and all (#99). One whose sub-agents'
+// cost was not all read is marked as the floor it is, rather than passed off
+// as the whole.
+func cost(reply opencode.Reply) string {
+	switch reply.Unread {
+	case 0:
+		return fmt.Sprintf("$%.4f", reply.Cost)
+	case 1:
+		return fmt.Sprintf("≥ $%.4f, with 1 sub-agent's cost unread", reply.Cost)
+	}
+	return fmt.Sprintf("≥ $%.4f, with %d sub-agents' cost unread", reply.Cost, reply.Unread)
 }
 
 // pending is a reply written and not yet seen on the tracker. From is the
