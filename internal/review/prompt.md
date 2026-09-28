@@ -22,7 +22,11 @@ This workspace is not the one the skill expects, in three ways:
   description, then each issue the pull request closes, verbatim. The issues are
   the spec. The description is the author's claims, to be checked against the
   code like the commit messages. If the file holds no issue, the description is
-  the only spec there is: use it, and say so under `## Spec`.
+  the only spec there is: use it, and say so under `## Spec`. A pull request
+  that is the first piece of its issue has that issue headed as only partly
+  done, followed by the issue filed for the rest, headed as out of scope:
+  review the piece against the part of the issue it takes on, and do not
+  report what the rest's issue holds as missing.
 - **No one is in the session.** Where the skill says to ask the user, do not
   wait for an answer: take the path the skill gives for when there is none, and
   say which you took. If you cannot run sub-agents, work each axis in turn from

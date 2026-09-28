@@ -33,7 +33,7 @@ on it.
 | --- | --- | --- |
 | `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
 | `review-claimed` | `claiming` | reads the claims and replies back, makes any that are missing again, and once all of them are there moves on to `reviewing` or rests |
-| `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
+| `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes or is a first piece of, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
 | `review-post` | `posting` | posts the reply, under a key numbered by posting round; out of rounds, owes a hand-back instead and moves to `handing-back` |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
 | `review-handed-back` | `handing-back` | rests once the hand-back's comment and label are on the pull request, and makes whichever is missing again |
@@ -44,12 +44,18 @@ is not what the skill expects - a shallow checkout, and no credentials for the
 tracker - so `review-run` fetches what the skill would have: the diff into
 `.git/afk-pr.diff`, and the pull request's description and every issue it
 closes (by GitHub's closing keywords, `Closes #7`) into `.git/afk-pr-spec.md`.
+A first piece of an issue too big for one pull request links it with the
+implement kind's link line instead, `Part of #7. The rest is #9.`, straight
+after its marker (#127): the spec then holds #7, headed as only partly done by
+the piece, and #9, the issue filed for the rest, headed as out of scope, so
+that what the piece leaves for later is not reported as missing. `Part of`
+anywhere else in a description links nothing.
 The description goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
 touches a sensitive path is reviewed as any other. An issue it cannot find is noted there as a gap, not a failure. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
-where those are. A pull request that closes no issue is reviewed against its
-description, and the report says so.
+where those are. A pull request that closes no issue, and is no issue's first
+piece, is reviewed against its description, and the report says so.
 
 ### What the operator sees
 
@@ -139,7 +145,7 @@ installation's grants:
 | listing open issues and pull requests, which intake reads commands from | not recorded | not verified |
 | listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
 | reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
-| reading the issues a pull request closes | Issues: read | not verified: served with Metadata only |
+| reading the issues a pull request closes, or is a first piece of, and a first piece's rest | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
 | reading reactions | Issues: read | not verified: served with Metadata only |
 | the `git` fetch of the pull request's head | Contents: read | by GitHub's documentation; not verified. A public repository serves it with no credentials at all |
