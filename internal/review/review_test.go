@@ -433,8 +433,10 @@ func TestTheModelRunsTheSkillWithTheLinkedIssueAsTheSpec(t *testing.T) {
 }
 
 // The first piece of an issue too big for one pull request does not close it,
-// and the issue is still what the piece is reviewed against (#127). The issue
-// filed for the rest is not: it is work the pull request does not do.
+// and the issue is still what the piece is reviewed against, headed as only
+// partly done by it (#127). The issue filed for the rest is there too, headed
+// as out of scope, so that what the piece leaves for it is not read as
+// missing.
 func TestAPartOfPullRequestIsReviewedAgainstItsIssue(t *testing.T) {
 	tr := newTracker(command(1))
 	tr.desc = "<!-- afk:implement issue=7 -->\nPart of #7. The rest is #9.\n"
@@ -448,11 +450,56 @@ func TestAPartOfPullRequestIsReviewedAgainstItsIssue(t *testing.T) {
 		t.Fatalf("errors: %v", errs)
 	}
 	spec := strings.ReplaceAll(f.model.specs[0], tr.desc, "")
-	if !strings.Contains(spec, "A job is reserved before it runs.") {
-		t.Errorf("the spec does not carry #7:\n%s", spec)
+	for _, want := range []string{
+		"# Issue #7: Jobs are reserved (only partly done", "A job is reserved before it runs.",
+		"# Issue #9: The rest of #7 (out of scope", "Expiry is left.",
+	} {
+		if !strings.Contains(spec, want) {
+			t.Errorf("the spec does not say %q:\n%s", want, spec)
+		}
 	}
-	if strings.Contains(spec, "Expiry is left.") {
-		t.Errorf("the spec carries the rest, which the pull request does not do:\n%s", spec)
+	if strings.Count(spec, "A job is reserved before it runs.") != 1 {
+		t.Errorf("the spec carries #7 more than once:\n%s", spec)
+	}
+	if !strings.Contains(f.model.asked[0].Prompt, "out of scope") {
+		t.Errorf("the prompt does not say what an issue out of scope is:\n%s", f.model.asked[0].Prompt)
+	}
+}
+
+// "Part of" is read only where the implement kind writes it, straight after
+// its marker: in anyone's prose, it names an issue the pull request is not
+// reviewed against.
+func TestPartOfInProseIsNotALink(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.desc = "Closes #7\n\nThis is part of #8, the map of the work.\n"
+	tr.issues = map[int]github.Issue{
+		7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."},
+		8: {Number: 8, Title: "The map", Body: "Everything, eventually."},
+	}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	spec := strings.ReplaceAll(f.model.specs[0], tr.desc, "")
+	if !strings.Contains(spec, "A job is reserved before it runs.") || strings.Contains(spec, "Everything, eventually.") {
+		t.Errorf("the spec is not #7 alone:\n%s", spec)
+	}
+}
+
+func TestPartOfReadsTheImplementLinkLine(t *testing.T) {
+	for desc, want := range map[string][3]int{
+		"<!-- afk:implement issue=7 -->\nPart of #7. The rest is #9.\n\nmore": {7, 9, 1},
+		"<!-- afk:implement issue=7 -->\r\nPart of #7. The rest is #9.\r\n":   {7, 9, 1},
+		"<!-- afk:implement issue=7 -->\nPart of #7. The rest is #9.":         {7, 9, 1},
+		"<!-- afk:implement issue=7 -->\nCloses #7\n":                         {0, 0, 0},
+		"Part of #7. The rest is #9.\n":                                       {0, 0, 0},
+		"text\n<!-- afk:implement issue=7 -->\nPart of #7. The rest is #9.\n": {0, 0, 0},
+	} {
+		issue, rest, ok := review.PartOf(desc)
+		if got := [3]int{issue, rest, map[bool]int{true: 1}[ok]}; got != want {
+			t.Errorf("PartOf(%q) = %v, want %v", desc, got, want)
+		}
 	}
 }
 
