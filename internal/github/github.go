@@ -583,6 +583,17 @@ func (c *Client) Unlabel(ctx context.Context, number int, label string) error {
 	return nil
 }
 
+// HasLabel reports whether labels carries label. Label names are
+// case-insensitive on GitHub, and empty means no label.
+func HasLabel(labels []string, label string) bool {
+	for _, l := range labels {
+		if label != "" && strings.EqualFold(l, label) {
+			return true
+		}
+	}
+	return false
+}
+
 // NewIssue is an issue to file.
 type NewIssue struct {
 	Title string

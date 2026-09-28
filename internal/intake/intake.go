@@ -381,7 +381,7 @@ func (in *Intake) queue(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	for _, is := range open {
-		if is.PullRequest && strings.EqualFold(is.Author, in.Login) && hasLabel(is, q.Label) {
+		if is.PullRequest && strings.EqualFold(is.Author, in.Login) && github.HasLabel(is.Labels, q.Label) {
 			n++
 		}
 	}
@@ -441,18 +441,7 @@ func (in *Intake) taken(ctx context.Context, n int) (bool, error) {
 
 // labelled reports whether an issue carries the eligibility label.
 func (in *Intake) labelled(is github.Issue) bool {
-	return hasLabel(is, in.Unattended.Label)
-}
-
-// hasLabel reports whether an issue carries label. Label names are
-// case-insensitive on GitHub.
-func hasLabel(is github.Issue, label string) bool {
-	for _, l := range is.Labels {
-		if strings.EqualFold(l, label) {
-			return true
-		}
-	}
-	return false
+	return github.HasLabel(is.Labels, in.Unattended.Label)
 }
 
 // subject reads one subject's comments and arms what they ask for. It reports

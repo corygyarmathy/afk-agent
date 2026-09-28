@@ -109,7 +109,9 @@ func ClaimIssue(n int) Item {
 }
 
 // Reply is a comment on issue or pull request n answering command c. It is
-// read back by a marker naming c, so it is said once for each command.
+// read back by a marker naming c, so it is said once for each command. It is a
+// refusal: a revision's answer uses RevisionMarker instead, so a refusal does
+// not read as a revision still being in flight.
 func Reply(stem string, n int, c github.Comment, text string) Item {
 	marker := ReplyMarker(c.ID)
 	return Comment(stem, n, marker, marker+"\n"+text)
@@ -119,6 +121,14 @@ func Reply(stem string, n int, c github.Comment, text string) Item {
 // carries.
 func ReplyMarker(id int64) string {
 	return fmt.Sprintf("<!-- afk:reply comment=%d -->", id)
+}
+
+// RevisionMarker is the hidden line a revision's answer to the command with id
+// carries. A revision's reply and its hand-back both carry it, once for each
+// command of the send-back (#146), so a later command can tell it was written
+// while the revision was in flight.
+func RevisionMarker(id int64) string {
+	return fmt.Sprintf("<!-- afk:revision comment=%d -->", id)
 }
 
 // Comment is a comment on issue or pull request n, read back by marker, which
@@ -399,13 +409,7 @@ func (b *Book) there(ctx context.Context, it Item, comments map[int][]github.Com
 			ls = is.Labels
 			labels[it.On] = ls
 		}
-		on := false
-		for _, l := range ls {
-			if strings.EqualFold(l, it.Label) {
-				on = true
-			}
-		}
-		return on == (it.What == label), nil
+		return github.HasLabel(ls, it.Label) == (it.What == label), nil
 	}
 	return false, fmt.Errorf("owed item %s is malformed", it.Stem)
 }

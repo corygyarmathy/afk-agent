@@ -157,10 +157,10 @@ func send(id int64, body string) github.Comment {
 	return github.Comment{ID: id, Login: "cory", Association: "OWNER", Body: body}
 }
 
-// answer is the agent's comment answering command id, as a revision's reply or
-// hand-back carries it.
+// answer is the agent's comment answering command id as a revision, as its
+// reply and its hand-back carry it.
 func answer(id, answered int64) github.Comment {
-	return github.Comment{ID: id, Login: agent, Body: owed.ReplyMarker(answered) + "\nDone."}
+	return github.Comment{ID: id, Login: agent, Body: owed.RevisionMarker(answered) + "\nDone."}
 }
 
 type fixture struct {
@@ -424,6 +424,49 @@ func TestInFlightAndAfterAreToldApart(t *testing.T) {
 	}
 }
 
+// A revision's reply and its hand-back both carry its marker. A command
+// written between them is in flight too: the hand-back came after it, so the
+// head it was written against has moved.
+func TestACommandBetweenTheReplyAndTheHandBackIsInFlight(t *testing.T) {
+	f := setup(t)
+	f.tr.say(12, send(1, "/revise First."))
+	f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f.tr.say(12, answer(2, 1)) // the revision's reply, before the command
+	f.tr.say(12, send(3, "/revise Second."))
+	f.tr.say(12, answer(4, 1)) // the revision's hand-back, after it
+	f.pass()
+
+	job := f.drive()
+	if job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q (due %v), want at rest in start", job.State, !job.NextRunAt.IsZero())
+	}
+	if a := f.tr.answers(3); len(a) != 1 || !strings.Contains(a[0], "in flight") {
+		t.Errorf("answers to the command between the reply and the hand-back = %q, want one refusal", a)
+	}
+}
+
+// A refusal's reply carries a different marker from a revision's answer, so a
+// command written before a refusal's reply lands is not read as in flight: no
+// revision was in flight, only a reply in the post.
+func TestARefusalReplyIsNotARevisionAnswer(t *testing.T) {
+	f := setup(t)
+	f.tr.say(12, send(1, "/revise")) // refused earlier: no points
+	f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f.tr.say(12, send(3, "/revise Rename Foo."))
+	// The earlier command's refusal reply is posted only after the command
+	// below was written, the way a killed claim's read-back replays it.
+	f.tr.say(12, github.Comment{ID: 4, Login: agent, Body: owed.ReplyMarker(1) + "\nThere is nothing here to revise."})
+	f.pass()
+
+	job := f.drive()
+	if job.State != revise.Revising {
+		t.Errorf("the job is in %q, want revising", job.State)
+	}
+	if a := f.tr.answers(3); len(a) != 0 {
+		t.Errorf("answers to the command after a refusal = %q, want none", a)
+	}
+}
+
 // A closed pull request's commands are claimed, and nothing else happens.
 func TestAClosedPullRequestsCommandsAreOnlyClaimed(t *testing.T) {
 	f := setup(t)
@@ -448,8 +491,38 @@ func TestAClosedPullRequestsCommandsAreOnlyClaimed(t *testing.T) {
 	}
 }
 
-// A pull request with no hand-off label on it has none to take off.
-func TestNoHandOffLabelIsNothingToTakeOff(t *testing.T) {
+// A hand-off label applied after the claim read the pull request is still
+// taken off before the job moves on: the removal is owed whatever the read
+// showed, and the read-back is what catches the label appearing in between.
+func TestALabelAppliedAfterTheClaimIsStillTakenOff(t *testing.T) {
+	f := setup(t)
+	f.tr.pr.Labels = []string{"bug"}
+	f.tr.say(12, send(1, "/revise Rename Foo."))
+	subject := store.Subject{Type: store.SubjectPR, Number: 12}
+	if _, err := f.store.Ensure(context.Background(), store.KindRevise, subject, revise.Start, now); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id := store.ID(store.KindRevise, subject)
+	if _, err := f.run.Run(ctx, "revise", id); err != nil {
+		t.Fatal(err)
+	}
+
+	// The label appears while the claim's effects are in the post.
+	f.tr.pr.Labels = []string{"bug", handOff}
+	if _, err := f.run.Run(ctx, "revise-claimed", id); err != nil {
+		t.Fatal(err)
+	}
+	if f.tr.labelled() {
+		t.Error("the hand-off label is still on, want it taken off")
+	}
+}
+
+// A pull request with no hand-off label on it is still carried through the
+// removal: a label that is not there is not an error, and the removal being
+// owed whatever the pull request read showed is what lets the read-back catch
+// one applied after that read.
+func TestNoHandOffLabelIsTakenOffHarmlessly(t *testing.T) {
 	f := setup(t)
 	f.tr.pr.Labels = []string{"bug"}
 	f.tr.say(12, send(1, "/revise Rename Foo."))
@@ -458,8 +531,8 @@ func TestNoHandOffLabelIsNothingToTakeOff(t *testing.T) {
 	if job := f.drive(); job.State != revise.Revising {
 		t.Errorf("the job is in %q, want revising", job.State)
 	}
-	if f.tr.writes["unlabel"] != 0 {
-		t.Errorf("the label was taken off %d times, want none", f.tr.writes["unlabel"])
+	if got := strings.Join(f.tr.pr.Labels, ","); got != "bug" {
+		t.Errorf("labels are %q, want only bug", got)
 	}
 }
 

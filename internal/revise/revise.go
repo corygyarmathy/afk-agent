@@ -16,7 +16,9 @@
 // command only once. It is read back before the job moves on (package owed),
 // and so is the hand-off label it takes off: that label is how the review
 // queue counts a pull request waiting on the operator, and while its revision
-// is in flight the revision counts in its place.
+// is in flight the revision counts in its place. A claim that only refuses
+// leaves the label where it was: nothing is being revised, so the pull request
+// still waits on the operator's review, not the agent.
 //
 // A send-back's points are the command's body after the word, in the
 // operator's own words. Every unanswered `/revise` with points is part of the
@@ -31,9 +33,10 @@
 // cannot run during a flight - intake does not arm a job that is queued or
 // held - so a command written then is read afterwards, and its head has moved
 // on under it. It was written during one if an earlier `/revise`'s answer, the
-// agent's comment carrying owed.ReplyMarker for it, comes after it: the
+// agent's comment carrying owed.RevisionMarker for it, comes after it: the
 // revision's reply and its hand-back carry that marker for every command of
-// the send-back. A revision that ended without either, by parking, blocks
+// the send-back. A refusal carries owed.ReplyMarker instead, so it does not
+// read as a revision. A revision that ended without either, by parking, blocks
 // nothing after it.
 package revise
 
@@ -181,9 +184,10 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 
-	if labelled(pr, d.HandOffLabel) {
-		items = append(items, owed.Unlabel(fmt.Sprintf("revise-unlabel-comment-%d", points[0].Comment), n, d.HandOffLabel))
-	}
+	// Owed even if the label is not there now: the read-back is what catches
+	// one applied after the pull request above was read but before the job
+	// moves on, and taking off a label that is not there is not an error.
+	items = append(items, owed.Unlabel(fmt.Sprintf("revise-unlabel-comment-%d", points[0].Comment), n, d.HandOffLabel))
 	if err := statefile.Save(d.path(in.Job.ID), SendBack{Head: pr.HeadSHA, Points: points}); err != nil {
 		return transition.Result{}, err
 	}
@@ -204,11 +208,14 @@ func (d *Deps) book() *owed.Book {
 }
 
 // inFlight reports whether command id was written while a revision was in
-// flight: an earlier `/revise` was first answered after it.
+// flight: an earlier `/revise` was answered as a revision after it.
 //
-// A command written between an earlier one being refused and its refusal
-// landing reads the same way. That is seconds, and it is refused rather than
-// done against a head nobody checked.
+// The revision's reply and its hand-back both carry owed.RevisionMarker for
+// every command of the send-back, so either one coming after the command means
+// that command was written against a head the revision has since moved. A
+// refusal's reply carries owed.ReplyMarker instead, so a command written
+// between a refusal and its reply landing does not read as in flight: nothing
+// was being revised.
 func (d *Deps) inFlight(comments []github.Comment, id int64) bool {
 	at := -1
 	for i, c := range comments {
@@ -220,13 +227,10 @@ func (d *Deps) inFlight(comments []github.Comment, id int64) bool {
 		if !intake.IsCommand(earlier, d.Login, Word) {
 			continue
 		}
-		marker := owed.ReplyMarker(earlier.ID)
+		marker := owed.RevisionMarker(earlier.ID)
 		for i, c := range comments {
-			if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
-				if i > at {
-					return true
-				}
-				break
+			if i > at && strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
+				return true
 			}
 		}
 	}
@@ -238,17 +242,6 @@ func (d *Deps) inFlight(comments []github.Comment, id int64) bool {
 func Points(body string) string {
 	rest, _ := strings.CutPrefix(strings.TrimSpace(body), Word)
 	return strings.TrimSpace(rest)
-}
-
-// labelled reports whether a pull request carries label. Label names are
-// case-insensitive on GitHub.
-func labelled(pr github.PullRequest, label string) bool {
-	for _, l := range pr.Labels {
-		if label != "" && strings.EqualFold(l, label) {
-			return true
-		}
-	}
-	return false
 }
 
 // Load is the send-back the claim handed job's work, from the state directory.
