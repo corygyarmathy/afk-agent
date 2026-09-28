@@ -271,6 +271,9 @@ func runCmd(args []string, stdout, stderr io.Writer) error {
 	if deps.implement != nil {
 		deps.implement.Log = logf
 	}
+	if deps.revise != nil {
+		deps.revise.Log = logf
+	}
 	runner.Registry = catalogue(deps)
 
 	now := time.Now()

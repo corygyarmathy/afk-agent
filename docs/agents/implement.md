@@ -5,7 +5,11 @@ The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repositor
 §2-§5, §8, §10 and §14 (with its amendments for #40 and #51), and `dotfiles`
 ADR 0004 §6 and ADR 0007, as ADR 0001 carries them. The spec is
 [#40](https://github.com/corygyarmathy/afk-agent/issues/40) and its sub-issues
-#49-#53. The code is [`internal/implement`](../../internal/implement).
+#49-#53. The transitions are
+[`internal/implement`](../../internal/implement); the workspace, the relay, the
+local gate and its retries, the denylist, the leased push and the hand-back on
+a pull request are [`internal/work`](../../internal/work), which `/revise` uses
+too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 ## What it does
 

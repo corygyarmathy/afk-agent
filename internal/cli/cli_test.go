@@ -1295,6 +1295,10 @@ func TestUnattendedWorkIsTheJobImplementMakes(t *testing.T) {
 // transition reaches a decision from its starting state without a network, a
 // model or a checkout.
 func standaloneDeps(t *testing.T) *deps {
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &deps{
 		review: &review.Deps{
 			Tracker: closedTracker{},
@@ -1323,12 +1327,21 @@ func standaloneDeps(t *testing.T) *deps {
 			StateDir:      t.TempDir(),
 		},
 		revise: &revise.Deps{
-			Tracker:      closedTracker{},
-			Login:        "afk-bot",
-			Repo:         "o/n",
-			Rounds:       1,
-			HandOffLabel: "ready-for-review",
-			StateDir:     t.TempDir(),
+			Tracker: closedTracker{},
+			Store:   st,
+			Login:   "afk-bot",
+			Repo:    "o/n",
+			Resolve: func(context.Context) (model.Candidates, error) {
+				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+			},
+			Bound:         1,
+			Rounds:        1,
+			TierWait:      time.Hour,
+			Gate:          "false",
+			Attempts:      1,
+			HandOffLabel:  "ready-for-review",
+			HandBackLabel: "needs-decision",
+			StateDir:      t.TempDir(),
 		},
 	}
 }

@@ -9,11 +9,11 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/glob"
 	"github.com/corygyarmathy/afk-agent/internal/permalink"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // pushTransition is `implement-push`: the denylist, then the push, with nothing
@@ -25,8 +25,8 @@ import (
 // could move what is pushed.
 func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition.Result, error) {
 	p, err := d.load(in.Job.ID)
-	ws := d.workspacePath(in.Job.ID)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && !isDir(ws)) {
+	ws := d.work().Dir(in.Job.ID)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !d.work().Exists(in.Job.ID)) {
 		// The work is gone before it reached the remote, or with nothing
 		// to show that it did. Either way it starts over, on a branch
 		// nobody has pushed.
@@ -41,16 +41,16 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{State: Implementing, RunAt: in.Now}, nil
 	}
 
-	relayDir := d.relayPath(in.Job.ID)
-	head, err := relay(ctx, ws, relayDir, p.Branch)
+	relayDir := d.work().RelayDir(in.Job.ID)
+	head, err := work.Relay(ctx, ws, relayDir, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	paths, err := touched(ctx, relayDir, p.Base, head)
+	paths, err := work.Touched(ctx, relayDir, p.Base, head)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if bad := glob.Matching(d.Denylist, paths); len(bad) > 0 {
+	if bad := work.Denied(d.Denylist, paths); len(bad) > 0 {
 		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
 
@@ -107,7 +107,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
-		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
+		return work.Push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
 	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
@@ -127,7 +127,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 // for it.
 func (d *Deps) keepWhole(ctx context.Context, in transition.In, p progress, relayDir, head string) (transition.Result, bool, error) {
 	whole := wholeBranch(p.Branch)
-	at, err := remoteHead(ctx, d.Remote, whole)
+	at, err := work.RemoteHead(ctx, d.Remote, whole)
 	if err != nil {
 		return transition.Result{}, false, err
 	}
@@ -156,7 +156,7 @@ func (d *Deps) keepWhole(ctx context.Context, in transition.In, p progress, rela
 	// Read back by the next pass here: pushing is where the job stays until
 	// the whole is seen on the remote.
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
-		return push(ctx, relayDir, d.Remote, head, whole, "")
+		return work.Push(ctx, relayDir, d.Remote, head, whole, "")
 	}}
 	return transition.Result{State: Pushing, RunAt: in.Now, Effects: []transition.Effect{effect}}, true, nil
 }
@@ -188,7 +188,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	at, err := remoteHead(ctx, d.Remote, p.Branch)
+	at, err := work.RemoteHead(ctx, d.Remote, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -276,7 +276,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	}
 	// Linked in the workspace, the checkout of the pushed head, which says
 	// which citations name a file. Without it, nothing is linked.
-	if ws := d.workspacePath(in.Job.ID); session != "" && isDir(ws) {
+	if ws := d.work().Dir(in.Job.ID); session != "" && d.work().Exists(in.Job.ID) {
 		if session, err = permalink.Link(ws, d.Repo, p.Head, session); err != nil {
 			return transition.Result{}, err
 		}

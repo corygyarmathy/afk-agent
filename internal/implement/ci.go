@@ -10,8 +10,8 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/caught"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // passing is the conclusions a finished check run may have and still be
@@ -58,7 +58,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	// Someone else's push is theirs to see through. It cancels the run on the
 	// agent's head, which would read as red, and the lease would refuse every
 	// push a fix made on top of it.
-	at, err := remoteHead(ctx, d.Remote, p.Branch)
+	at, err := work.RemoteHead(ctx, d.Remote, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -150,7 +150,7 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil || !ok {
 		return transition.Result{State: Start}, errors.Join(err, d.clear(in.Job.ID))
 	}
-	return d.handBackPR(ctx, in, progress{Branch: pr.HeadRef}, pr.Number, "lost-"+pr.HeadSHA,
+	return d.handBackPR(ctx, in, progress{Progress: work.Progress{Branch: pr.HeadRef}}, pr.Number, "lost-"+pr.HeadSHA,
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
 }
 
@@ -203,7 +203,7 @@ func ciOutput(failed []github.CheckRun) string {
 		}
 		b.WriteString("\n")
 	}
-	return tail(b.String(), gateTail)
+	return work.Tail(b.String(), work.GateTail)
 }
 
 // absent is the required checks with no run on the head.
@@ -238,14 +238,16 @@ func names(runs []github.CheckRun) string {
 // Keyed by what is said once: the progress's nonce, or the head a lost record
 // is handed back at. Read back like the hand-back on the issue.
 func (d *Deps) handBackPR(ctx context.Context, in transition.In, p progress, pr int, key, reason, output string) (transition.Result, error) {
-	marker := handBackMarker(in.Job.Subject.Number, p, key)
-	body := handBackBody(marker, "I stopped before handing this pull request off. "+reason, output,
-		fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, in.Job.Subject.Number))
-	if err := d.clear(in.Job.ID); err != nil {
-		return transition.Result{}, err
-	}
-	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
-		owed.Comment(fmt.Sprintf("hand-back-pr-%d-%s", pr, key), pr, marker, body),
-		owed.Label(fmt.Sprintf("hand-back-label-pr-%d-%s", pr, key), pr, d.HandBackLabel),
-	}})
+	return d.work().HandBackPR(ctx, in, in.Job.ID, work.HandBack{
+		Book:        d.book(),
+		Label:       d.HandBackLabel,
+		Number:      pr,
+		Key:         key,
+		Marker:      handBackMarker(in.Job.Subject.Number, p, key),
+		Stopped:     "I stopped before handing this pull request off. " + reason,
+		Next:        fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, in.Job.Subject.Number),
+		Output:      output,
+		HandingBack: HandingBack,
+		Rest:        Start,
+	})
 }

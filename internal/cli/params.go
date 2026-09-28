@@ -14,13 +14,13 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // This file is where configuration enters the binary, and it holds no defaults
@@ -959,7 +959,7 @@ func (p *params) implement() (implementParams, error) {
 			ip.denylist = append(ip.denylist, pattern)
 		}
 	}
-	if err := implement.ValidDenylist(ip.denylist); err != nil {
+	if err := work.ValidDenylist(ip.denylist); err != nil {
 		return implementParams{}, usagef("--denylist: %v", err)
 	}
 	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
