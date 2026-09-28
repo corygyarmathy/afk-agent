@@ -102,6 +102,10 @@ type PullRequest struct {
 type Issue struct {
 	Number int
 
+	// ID is the issue's id, which is not its number: a dependency names its
+	// blocker by it.
+	ID int64
+
 	// State is `open` or `closed`, as the API spells it.
 	State string
 
@@ -445,6 +449,58 @@ func (c *Client) Label(ctx context.Context, number int, label string) error {
 	return c.postJSON(ctx, u, map[string][]string{"labels": {label}}, nil)
 }
 
+// NewIssue is an issue to file.
+type NewIssue struct {
+	Title string
+	Body  string
+}
+
+// CreateIssue files an issue, with no label and nobody assigned, and returns it
+// as created.
+//
+// Not idempotent: a second call files a second issue. Which is why a
+// transition returns it as an effect, under a key, and reads it back.
+func (c *Client) CreateIssue(ctx context.Context, is NewIssue) (Issue, error) {
+	u, err := c.repoURL("/issues")
+	if err != nil {
+		return Issue{}, err
+	}
+	var w wireIssue
+	if err := c.postJSON(ctx, u, map[string]string{"title": is.Title, "body": is.Body}, &w); err != nil {
+		return Issue{}, err
+	}
+	return w.issue(), nil
+}
+
+// BlockedBy lists the issues that block issue n through its native
+// dependencies, open and closed.
+func (c *Client) BlockedBy(ctx context.Context, n int) ([]Issue, error) {
+	u, err := c.repoURL("/issues/%d/dependencies/blocked_by?per_page=%d", n, perPage)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := all[wireIssue](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Issue, len(ws))
+	for i, w := range ws {
+		out[i] = w.issue()
+	}
+	return out, nil
+}
+
+// AddBlockedBy makes issue n blocked by the issue whose id is blocker: a native
+// dependency. The blocker is named by its id, not its number. Adding one that
+// is already there is refused, so a caller reads BlockedBy first.
+func (c *Client) AddBlockedBy(ctx context.Context, n int, blocker int64) error {
+	u, err := c.repoURL("/issues/%d/dependencies/blocked_by", n)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, u, map[string]int64{"issue_id": blocker}, nil)
+}
+
 type wirePR struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
@@ -474,6 +530,7 @@ func (w wirePR) pullRequest() PullRequest {
 }
 
 type wireIssue struct {
+	ID     int64  `json:"id"`
 	Number int    `json:"number"`
 	State  string `json:"state"`
 	Title  string `json:"title"`
@@ -501,7 +558,7 @@ type wireIssue struct {
 }
 
 func (w wireIssue) issue() Issue {
-	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, Author: w.User.Login, UpdatedAt: w.UpdatedAt}
+	is := Issue{Number: w.Number, ID: w.ID, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, Author: w.User.Login, UpdatedAt: w.UpdatedAt}
 	if w.Dependencies != nil {
 		is.BlockedBy, is.DependenciesRead = w.Dependencies.BlockedBy, true
 	}
