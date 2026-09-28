@@ -81,12 +81,23 @@ type tracker struct {
 	// blockers, by number.
 	filed   []github.Issue
 	blocked map[int][]int
+
+	// closeFiled is a human closing each issue the agent files as soon as
+	// it is filed.
+	closeFiled bool
+
+	// failBlocks is how many of the next dependencies added fail, without
+	// landing.
+	failBlocks int
 }
 
 // issueID is the id of the issue the job is for, which is not its number.
 const issueID = 7007
 
-var errEdit = errors.New("PATCH pull request: 502 Bad Gateway")
+var (
+	errEdit  = errors.New("PATCH pull request: 502 Bad Gateway")
+	errBlock = errors.New("POST blocked_by: 502 Bad Gateway")
+)
 
 func newTracker(comments ...github.Comment) *tracker {
 	return &tracker{state: "open", comments: comments, reactions: map[int64][]github.Reaction{}, nextID: 1000}
@@ -114,9 +125,12 @@ func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	return github.Issue{Number: n, ID: issueID, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest, Labels: labels}, nil
 }
 
-// OpenIssues is the issues the agent filed: the issue the job is for is not
-// one the agent reads this way.
-func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
+// IssuesBy is the issues the agent filed, open and closed: the issue the job
+// is for is not one of them.
+func (tr *tracker) IssuesBy(_ context.Context, login string) ([]github.Issue, error) {
+	if login != agent {
+		return nil, errors.New("GET issues: not the agent's")
+	}
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	return append([]github.Issue(nil), tr.filed...), nil
@@ -127,6 +141,9 @@ func (tr *tracker) CreateIssue(_ context.Context, is github.NewIssue) (github.Is
 	defer tr.mu.Unlock()
 	n := 200 + len(tr.filed) + 1
 	filed := github.Issue{Number: n, ID: int64(n) * 1000, State: "open", Title: is.Title, Body: is.Body, Author: agent}
+	if tr.closeFiled {
+		filed.State = "closed"
+	}
 	tr.filed = append(tr.filed, filed)
 	return filed, nil
 }
@@ -146,6 +163,10 @@ func (tr *tracker) AddBlockedBy(_ context.Context, n int, blocker int64) error {
 	defer tr.mu.Unlock()
 	if blocker != issueID {
 		return errors.New("POST blocked_by: 404 Not Found")
+	}
+	if tr.failBlocks > 0 {
+		tr.failBlocks--
+		return errBlock
 	}
 	if tr.blocked == nil {
 		tr.blocked = map[int][]int{}

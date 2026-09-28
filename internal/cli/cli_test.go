@@ -1185,7 +1185,7 @@ func (closedTracker) EditPullRequest(context.Context, int, string) error { retur
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }
-func (closedTracker) OpenIssues(context.Context) ([]github.Issue, error) { return nil, nil }
+func (closedTracker) IssuesBy(context.Context, string) ([]github.Issue, error) { return nil, nil }
 func (closedTracker) CreateIssue(context.Context, github.NewIssue) (github.Issue, error) {
 	return github.Issue{}, nil
 }

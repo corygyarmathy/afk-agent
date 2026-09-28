@@ -109,13 +109,26 @@ type progress struct {
 	Cut     bool `json:"cut,omitempty"`
 	Cutting bool `json:"cutting,omitempty"`
 
+	// Uncut is the commit the work was at before it went back to be cut,
+	// seen on the remote at wholeBranch: whatever the cut does, the work is
+	// kept. Empty for work never sent back.
+	Uncut string `json:"uncut,omitempty"`
+
 	// Remainder is what the session said is left of the issue, as its last
 	// run before the push left the file: the body of the issue filed for
 	// the rest. Not read of work asked for whole.
 	Remainder string `json:"remainder,omitempty"`
 
-	// Rest is the issue filed for the rest, once it is seen on the tracker.
+	// Rest is the issue filed for the rest, once it is seen on the tracker:
+	// kept once seen, so a rest the operator closes straight away is not
+	// filed again.
 	Rest int `json:"rest,omitempty"`
+
+	// Blocked is the rest seen blocked by the issue, and Unblocked its
+	// rounds run out without it, which the pull request's description then
+	// says. Either way the dependency is not made again.
+	Blocked   bool `json:"blocked,omitempty"`
+	Unblocked bool `json:"unblocked,omitempty"`
 
 	// Fixes is how many times CI has sent the work back to the session,
 	// and FixedHead the head the last of them was counted for.
@@ -384,8 +397,15 @@ func (d *Deps) handBackIssue(ctx context.Context, in transition.In, p progress, 
 	n := in.Job.Subject.Number
 	marker := handBackMarker(n, p, p.Nonce)
 	next := fmt.Sprintf("Nothing was pushed. Reshape the issue and `%s` again, or take it by hand.", Word)
-	if p.Pushed != "" {
+	switch {
+	case p.Pushed != "" && p.Uncut != "":
+		next = fmt.Sprintf("`%s` is on the remote at `%s`, cut to a first piece, and `%s` at `%s` is the work as it was before the cut, with no pull request for either. Open one from either by hand, or `%s` again to start over on a new branch.", p.Branch, git.Short(p.Pushed), wholeBranch(p.Branch), git.Short(p.Uncut), Word)
+	case p.Pushed != "":
 		next = fmt.Sprintf("`%s` is on the remote at `%s`, with no pull request. Open one by hand, or `%s` again to start over on a new branch.", p.Branch, git.Short(p.Pushed), Word)
+	case p.Uncut != "":
+		// Handed back on the way through its cut: the cut is not pushed,
+		// and the work it was cut from was, before it went back.
+		next = fmt.Sprintf("The cut was not pushed. `%s` is on the remote at `%s`, the work as it was before it went back to be cut, with no pull request. Open one from it by hand, or `%s` again to start over on a new branch.", wholeBranch(p.Branch), git.Short(p.Uncut), Word)
 	}
 	body := handBackBody(marker, "I stopped without opening a pull request. "+reason, output, next)
 
@@ -562,11 +582,13 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 		// Opened is work past its push, whose pull request's description
 		// is written and never rewritten: the session is not asked for one.
 		Opened bool
-		// Cutting is work over the signal sent back to be cut, and Lines
-		// and Tests are what the agent counted of it.
+		// Cutting is work over the signal sent back to be cut, Lines and
+		// Tests are what the agent counted of it, and Kept the branch it
+		// was pushed to as it was.
 		Cutting      bool
 		Lines, Tests int
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests})
+		Kept         string
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests, wholeBranch(p.Branch)})
 	return b.String(), err
 }
 
