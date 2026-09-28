@@ -36,7 +36,7 @@ func TestCleanWorkIsPushedAndOpensOnePullRequest(t *testing.T) {
 	if pr.Title != "Reserve a job" || pr.Head != "afk/7-1" || pr.Base != "main" {
 		t.Errorf("pull request = %+v, want the issue's title, from afk/7-1 into main", pr)
 	}
-	for _, want := range []string{implement.PRMarker(7), "Closes #7.", "Done.", "advisory review"} {
+	for _, want := range []string{implement.PRMarker(7), "Closes #7", "advisory review"} {
 		if !strings.Contains(pr.Body, want) {
 			t.Errorf("the description does not contain %q:\n%s", want, pr.Body)
 		}

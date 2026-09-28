@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -113,9 +114,14 @@ Implementing an issue, for afk run and afk work:
   --ci-fixes <n>        AFK_CI_FIXES         red runs sent back to the session, then a hand-back
   --size-signal <n>     AFK_SIZE_SIGNAL      changed non-test lines a pull request may have; over it,
                                              the branch is pushed and handed back unopened
+  --review-procedure <url>
+                        AFK_REVIEW_PROCEDURE the operator's review procedure, which each pull
+                                             request's description links
 
-All but --implement-needs are required to implement, with the model choice
-parameters and the two above; implementing also needs the heavy-build token's capacity.
+All but --implement-needs and --review-procedure are required to implement, with
+the model choice parameters and the two above; implementing also needs the
+heavy-build token's capacity. Without --review-procedure, a description's
+reminder says it has no link to the procedure.
 
 The tracker, for afk intake, afk run and afk work:
 
@@ -174,6 +180,8 @@ type params struct {
 	ciCeiling      string
 	ciFixes        string
 	sizeSignal     string
+
+	reviewProcedure string
 
 	opencode      string
 	enrolment     string
@@ -689,6 +697,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
 	fs.StringVar(&p.ciFixes, "ci-fixes", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_FIXES)")
 	fs.StringVar(&p.sizeSignal, "size-signal", "", "changed non-test lines a pull request may have before a hand-back (AFK_SIZE_SIGNAL)")
+	fs.StringVar(&p.reviewProcedure, "review-procedure", "", "the operator's review procedure, which each pull request's description links (AFK_REVIEW_PROCEDURE)")
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how
@@ -737,6 +746,10 @@ type implementParams struct {
 	ciCeiling    time.Duration
 	ciFixes      int
 	sizeSignal   int
+
+	// reviewProcedure is optional. It is a URL: the description links it
+	// as written.
+	reviewProcedure string
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -796,6 +809,12 @@ func (p *params) implement() (implementParams, error) {
 	}
 	if ip.sizeSignal, err = count(v, "size-signal"); err != nil {
 		return implementParams{}, err
+	}
+	if v = optional(p.reviewProcedure, "AFK_REVIEW_PROCEDURE"); v != "" {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return implementParams{}, usagef("--review-procedure: %q is not an http or https URL", v)
+		}
+		ip.reviewProcedure = v
 	}
 	return ip, nil
 }

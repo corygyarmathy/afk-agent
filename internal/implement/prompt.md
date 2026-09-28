@@ -42,5 +42,24 @@ This workspace is not the one the skill expects, in three ways:
   changes to tracked files are a failure, and untracked files are deleted
   before the gate runs.
 
-Reply with a short summary of what you changed and why, in GitHub-flavoured
-markdown. No preamble.
+When you finish, write your part of the pull request's description to
+`.git/afk-description.md`, in GitHub-flavoured markdown. It is orientation for
+the person who reviews the work: what they need and cannot cheaply get from the
+issue or the diff. Use these headings, and leave out a section with nothing to
+say rather than write "none":
+
+- `## Start here` - where to start reading the diff, as `path:line`, and one
+  line on where the behaviour lives. The agent makes it a link.
+- `## Where the ticket didn't decide` - choices you made where the issue was
+  silent or out of date, including each path you took because nobody was here
+  to ask, and any choice that bears on security.
+- `## Not verified` - what you could not check, and behaviour the diff cannot
+  show, such as what only a run on the host would.
+- `## Recipe` - only for work that is one large, mechanical change: the command
+  or the transformation rule that makes it, and where the diff departs from it.
+
+Aim for one or two lines an item, and the whole description on one screen.
+Do not write: what changed file by file, anything that would restate the issue,
+that tests pass or the gate passed, any self-rating such as "safe" or "low
+risk", or a list of hand-checks you ran. The agent writes the rest of the
+description itself, and a description with no `## Start here` is left out.
