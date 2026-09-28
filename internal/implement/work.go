@@ -68,8 +68,9 @@ type progress struct {
 	// pull request asks to merge into.
 	Into string `json:"into"`
 
-	// Summary is what the session said it did, for the pull request.
-	Summary string `json:"summary,omitempty"`
+	// Description is the session's part of the pull request's
+	// description, as its last run left the file.
+	Description string `json:"description,omitempty"`
 
 	// Head is the commit the push was decided for: checked against the
 	// denylist, and what the remote's branch must be at once it lands.
@@ -142,6 +143,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		if err := reset(ctx, ws, p.Base); err != nil {
 			return transition.Result{}, err
 		}
+		if err := os.Remove(filepath.Join(ws, ".git", descriptionFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return transition.Result{}, err
+		}
 	}
 	instructions, err := d.spec(ctx, in.Job.ID, ws, n)
 	if err != nil {
@@ -205,7 +209,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	p.Session = reply.Session
-	p.Summary = strings.TrimSpace(reply.Text)
+	// Read now, as the session left it. The file stays for a retry that
+	// continues the session to amend.
+	if p.Description, err = readDescription(ws); err != nil {
+		return transition.Result{}, err
+	}
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}

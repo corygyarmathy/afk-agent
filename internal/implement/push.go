@@ -9,6 +9,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/permalink"
 	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -160,7 +161,15 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: description(n, p)}
+	// Linked in the workspace, the checkout of the pushed head, which says
+	// which citations name a file. Without it, nothing is linked.
+	session := sessionPart(p.Description)
+	if ws := d.workspacePath(in.Job.ID); session != "" && isDir(ws) {
+		if session, err = permalink.Link(ws, d.Repo, p.Head, session); err != nil {
+			return transition.Result{}, err
+		}
+	}
+	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: description(n, d.ReviewProcedure, session)}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		// The key stops this run opening two. The tracker is what stops a
 		// round that follows a slow success from opening another.
@@ -177,18 +186,6 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 // an issue carries.
 func PRMarker(issue int) string {
 	return fmt.Sprintf("<!-- afk:implement issue=%d -->", issue)
-}
-
-// description is the pull request's body: the issue it closes, what the
-// session said it did, and where the review will be.
-func description(n int, p progress) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\nCloses #%d.\n\n", PRMarker(n), n)
-	if p.Summary != "" {
-		fmt.Fprintf(&b, "%s\n\n", p.Summary)
-	}
-	b.WriteString("Written by the agent. CI decides whether it is correct; an advisory review will be posted here as a comment once CI is green. Merging is yours.\n")
-	return b.String()
 }
 
 // where says where a branch the agent was about to push is, when it is not

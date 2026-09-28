@@ -179,6 +179,15 @@ type Deps struct {
 	// job. ReviewAsker makes one.
 	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 
+	// Repo is the repository, as owner/name: what the permalinks in the
+	// pull request's description are built on. Unset, nothing is linked.
+	Repo string
+
+	// ReviewProcedure is the operator's review procedure, which the
+	// description's reminder links. A parameter. Unset, the reminder says
+	// it has no link rather than linking nowhere.
+	ReviewProcedure string
+
 	// StateDir is where workspaces and their progress live - beside the
 	// store, never in it (ADR 0001 §5).
 	StateDir string
