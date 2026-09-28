@@ -27,8 +27,7 @@ why an accepted ADR is never amended in place.
 ## Plan - the work, disposable
 
 Tracks only what is currently in flight: what is active, what it is blocked on.
-Not a spec (the issue's job) and not a changelog (the pull request's and the
-commit's).
+Not a spec (the issue's job) and not a changelog (the commit's).
 
 A shipped item collapses to one line - issue, pull request or code path - and
 its Problem/Approach/Testing content is deleted rather than archived. Never cite
@@ -62,12 +61,16 @@ later answer is a new note, not an edit to the old one.
 
 Distinct from a findings note, which holds what was measured here.
 
-## Pull request description - the bridge
+## Pull request description - orientation for the review
 
-Links the issue, and summarises what changed and why for a reviewer. Becomes the
-permanent changelog entry once merged. A claim in a pull request description
-that is not true of the diff is one of the two findings the review path treats
-as most serious; do not make claims the diff does not support.
+Links the issue, and gives the reviewer what they need and cannot cheaply get
+from the issue or the diff: where to start reading, the choices the issue left
+open, and what was not verified. It does not summarise the change, and it is
+not the record: the commit messages are
+([#111](https://github.com/corygyarmathy/afk-agent/issues/111)). A claim in a
+pull request description that is not true of the diff is one of the two
+findings the review path treats as most serious; do not make claims the diff
+does not support.
 
 ## Commit message - atomic, for git-archaeology
 
