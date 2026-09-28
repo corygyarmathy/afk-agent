@@ -366,6 +366,10 @@ type WorkflowRun struct {
 	HeadSHA    string
 	HeadBranch string
 
+	// Event is what started it: `push`, `pull_request`, `issue_comment` and
+	// so on.
+	Event string
+
 	// Conclusion is how the run's latest attempt finished: `failure`,
 	// `timed_out`, `cancelled`, `success` and so on.
 	Conclusion string
@@ -376,8 +380,8 @@ type WorkflowRun struct {
 
 // WorkflowRuns lists the workflow runs a push by actor started that finished
 // with conclusion, to the last page. Total is how many GitHub says there are:
-// a filtered listing is cut off at a thousand, so fewer runs than Total means
-// the rest were not served.
+// a filtered listing is cut off at a thousand, though its count is not, so
+// fewer runs than Total means the rest were not served.
 func (c *Client) WorkflowRuns(ctx context.Context, actor, conclusion string) (runs []WorkflowRun, total int, err error) {
 	u, err := c.repoURL("/actions/runs?actor=%s&status=%s&exclude_pull_requests=true&per_page=%d",
 		url.QueryEscape(actor), url.QueryEscape(conclusion), perPage)
@@ -391,6 +395,7 @@ func (c *Client) WorkflowRuns(ctx context.Context, actor, conclusion string) (ru
 				ID         int64     `json:"id"`
 				HeadSHA    string    `json:"head_sha"`
 				HeadBranch string    `json:"head_branch"`
+				Event      string    `json:"event"`
 				Conclusion string    `json:"conclusion"`
 				CreatedAt  time.Time `json:"created_at"`
 			} `json:"workflow_runs"`
@@ -401,11 +406,27 @@ func (c *Client) WorkflowRuns(ctx context.Context, actor, conclusion string) (ru
 		}
 		total = page.TotalCount
 		for _, r := range page.WorkflowRuns {
-			runs = append(runs, WorkflowRun{ID: r.ID, HeadSHA: r.HeadSHA, HeadBranch: r.HeadBranch, Conclusion: r.Conclusion, Created: r.CreatedAt})
+			runs = append(runs, WorkflowRun{ID: r.ID, HeadSHA: r.HeadSHA, HeadBranch: r.HeadBranch, Event: r.Event, Conclusion: r.Conclusion, Created: r.CreatedAt})
 		}
 		u = next
 	}
 	return runs, total, nil
+}
+
+// WorkflowRunCount is how many workflow runs GitHub says actor started,
+// however they finished. The count is not cut off where a listing is.
+func (c *Client) WorkflowRunCount(ctx context.Context, actor string) (int, error) {
+	u, err := c.repoURL("/actions/runs?actor=%s&exclude_pull_requests=true&per_page=1", url.QueryEscape(actor))
+	if err != nil {
+		return 0, err
+	}
+	var page struct {
+		TotalCount int `json:"total_count"`
+	}
+	if _, err := c.getJSON(ctx, u, &page); err != nil {
+		return 0, err
+	}
+	return page.TotalCount, nil
 }
 
 // WorkflowJob is one job of a workflow run: what the Checks API serves as a

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/corygyarmathy/afk-agent/internal/caught"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -153,11 +154,11 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
 }
 
-// caught logs what CI caught that the local gate did not: every failed run on
-// a head the gate passed before the push (dotfiles ADR 0007 §8). Whether it
-// goes back for a fix or is handed back - out of fixes, or at the
-// ceiling with other runs unfinished - the catch is the same one. A run
-// waiting for approval is not one: it never ran.
+// caught logs what CI caught that the local gate did not: every run on a head
+// the gate passed before the push that is a catch as `afk caught` counts one
+// (dotfiles ADR 0007 §8). Whether it goes back for a fix or is handed back -
+// out of fixes, or at the ceiling with other runs unfinished - the catch is
+// the same one. A run that was cancelled, or never ran, is not one.
 //
 // Logged as it is decided, before the runner commits: a run that fails to
 // commit is run again, and logs the catch again.
@@ -166,7 +167,7 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 func (d *Deps) caught(in transition.In, pr int, p progress, failed []github.CheckRun) {
 	var ran []github.CheckRun
 	for _, r := range failed {
-		if r.Conclusion != approval {
+		if caught.IsCatch(r.Conclusion) {
 			ran = append(ran, r)
 		}
 	}

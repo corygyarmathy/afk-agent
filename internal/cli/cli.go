@@ -502,7 +502,12 @@ func caughtCmd(args []string, stdout io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return readCaught(ctx, tr, *list, stdout)
+}
 
+// readCaught reads the catches on the heads the agent pushed, as the App
+// knows the agent, and writes them to stdout.
+func readCaught(ctx context.Context, tr *tracker, list bool, stdout io.Writer) error {
 	login, err := tr.Login(ctx)
 	if err != nil {
 		return err
@@ -511,7 +516,7 @@ func caughtCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return r.Write(stdout, *list)
+	return r.Write(stdout, list)
 }
 
 // holder names this process in a lease. Host and pid, because the store's
