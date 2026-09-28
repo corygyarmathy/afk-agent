@@ -5,6 +5,7 @@ package implement_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -597,6 +598,11 @@ func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRe
 	}
 	ft.die("after-pr")
 	return pr, nil
+}
+
+// Nothing here names a sensitive path, so no description is ever edited.
+func (ft *killTracker) EditPullRequest(context.Context, int, string) error {
+	return errors.New("no description is edited without a sensitive path")
 }
 
 func (ft *killTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
