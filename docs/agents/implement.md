@@ -115,10 +115,11 @@ Its sections, in this order, each left out when it has nothing to say:
 - **The title is the issue's** on a `Closes` pull request, whatever the file
   says. A `Part of` pull request, the first piece of an issue too big for one,
   takes its title from the file's first line when that line is not a heading
-  ([#127](https://github.com/corygyarmathy/afk-agent/issues/127)): the issue's
-  title describes the whole job. The prompt asks for that line only when the
-  size rule is in force and the session stops at a first piece, and the line
-  is never part of the body.
+  ([#111](https://github.com/corygyarmathy/afk-agent/issues/111),
+  [#127](https://github.com/corygyarmathy/afk-agent/issues/127)). A line longer
+  than GitHub takes for a title (256 characters) is no title rather than a cut
+  one. The prompt asks for that line only when the size rule is in force and
+  the session stops at a first piece, and the line is never part of the body.
 - **The agent orders them**, drops a heading it did not name and a section that
   says only "none", and links each `path:line` that names a file to that line
   at the pushed head, as the advisory review's citations are.
