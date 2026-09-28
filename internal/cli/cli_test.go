@@ -89,6 +89,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--size-signal <n>     AFK_SIZE_SIGNAL",
 		},
 		{
+			name:     "help lists the replay bound",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--replays <n>         AFK_REPLAYS",
+		},
+		{
 			name:     "help lists the review procedure",
 			args:     []string{"help"},
 			want:     ExitOK,
@@ -991,7 +997,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_REVIEW_PROCEDURE", "AFK_SENSITIVE", "AFK_EFFECT_ROUNDS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_REVIEW_PROCEDURE", "AFK_SENSITIVE", "AFK_EFFECT_ROUNDS", "AFK_REPLAYS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT"} {
 		t.Setenv(env, "")
 	}
@@ -1038,6 +1044,10 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); d.Model != want {
 		t.Errorf("model = %+v, want %+v", d.Model, want)
+	}
+	// The remote is never reached from a workspace (#134).
+	if want := []string{filepath.Join(filepath.Dir(full.store), "workspaces")}; fmt.Sprint(d.Remote.Untrusted) != fmt.Sprint(want) {
+		t.Errorf("the remote refuses %v, want the workspaces %v", d.Remote.Untrusted, want)
 	}
 	if want := []sensitive.Path{
 		{Label: "job store schema", Globs: []string{"internal/store/**", "cmd/migrate/*.go"}},
@@ -1092,6 +1102,30 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		tc.spoil(&p)
 		if _, err := implementDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("err = %v, want it to contain %q", err, tc.want)
+		}
+	}
+
+	// A revision takes implementing's parameters, and its replay bound of
+	// its own.
+	full.replays = "2"
+	rd, err := reviseDeps(context.Background(), full, nil, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd.Replays != 2 || rd.Gate != "go test ./..." || fmt.Sprint(rd.Remote.Untrusted) != fmt.Sprint(d.Remote.Untrusted) {
+		t.Errorf("revise deps = %+v, want them read from the parameters", rd)
+	}
+	for _, tc := range []struct {
+		replays, want string
+	}{
+		{"", "--replays is required"},
+		{"0", "--replays"},
+		{"some", "--replays"},
+	} {
+		p := full
+		p.replays = tc.replays
+		if _, err := reviseDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("replays %q: err = %v, want it to contain %q", tc.replays, err, tc.want)
 		}
 	}
 }

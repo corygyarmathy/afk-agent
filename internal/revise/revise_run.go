@@ -60,6 +60,11 @@ type progress struct {
 	// file. Posting it is #149's; a hand-back shows it as the points done so
 	// far.
 	Reply string `json:"reply,omitempty"`
+
+	// Replays is how many pushes by someone else the revision has been
+	// replayed onto. Progress.Pushed is the last of them, until the
+	// revision's own push lands.
+	Replays int `json:"replays,omitempty"`
 }
 
 // run is `revise-run`: one candidate model does the send-back's points in the

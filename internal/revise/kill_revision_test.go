@@ -40,8 +40,13 @@ const (
 // "session" kills the process inside the model's run, after the session has
 // committed and written a reply: what it left is not the revision, and the
 // session that finishes starts again from the send-back's head.
+//
+// "replaying" has someone else push during the session, and kills the process
+// once the refused push has sent the revision to be replayed: the process that
+// finishes replays it onto their push and pushes once, keeping theirs. Their
+// push goes through the counting hook too.
 func TestKillingARevisionStillPushesOnce(t *testing.T) {
-	for _, at := range []string{"session", "gating", "pushed", "watching"} {
+	for _, at := range []string{"session", "gating", "pushed", "watching", "replaying"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
 			remote, head, count := revisionRemoteCounting(t, dir)
@@ -77,8 +82,12 @@ func TestKillingARevisionStillPushesOnce(t *testing.T) {
 				t.Fatalf("finishing the revision after the kill: %v\n%s", err, out)
 			}
 
-			if n := pushCount(t, count); n != 1 {
-				t.Errorf("%d pushes landed, want exactly one", n)
+			want := 1
+			if at == "replaying" {
+				want = 2
+			}
+			if n := pushCount(t, count); n != want {
+				t.Errorf("%d pushes landed, want exactly %d", n, want)
 			}
 			// The revision is on the remote, on top of the send-back's head.
 			after := remoteFeatureHead(t, remote)
@@ -90,6 +99,11 @@ func TestKillingARevisionStillPushesOnce(t *testing.T) {
 			}
 			if _, err := run(remote, "git", "cat-file", "-e", after+":half.txt"); err == nil {
 				t.Error("the killed session's commit was pushed")
+			}
+			if at == "replaying" {
+				if _, err := run(remote, "git", "cat-file", "-e", after+":other.txt"); err != nil {
+					t.Error("their push, made during the revision, is not kept")
+				}
 			}
 			if reply := keptReply(t, state); reply != finishedReply {
 				t.Errorf("the reply kept is %q, want the finished session's %q", reply, finishedReply)
@@ -143,6 +157,18 @@ func TestHelperRevisions(t *testing.T) {
 			os.WriteFile(ready, nil, 0o644)
 			select {}
 		}
+	case "replaying":
+		session = func(ws string) error {
+			if err := reviseOn("bar.txt", finishedReply)(ws); err != nil {
+				return err
+			}
+			other := filepath.Join(dir, "other")
+			if err := os.MkdirAll(other, 0o755); err != nil {
+				return err
+			}
+			return pushAs(other, remote, "other.txt", "other\n")
+		}
+		st = &killStore{Store: s, at: killAt, ready: os.Getenv("AFK_REV_KILL_READY")}
 	default:
 		st = &killStore{Store: s, at: killAt, ready: os.Getenv("AFK_REV_KILL_READY")}
 	}
@@ -156,7 +182,7 @@ func TestHelperRevisions(t *testing.T) {
 		Store:         st,
 		Login:         agent,
 		Repo:          repo,
-		Remote:        git.Remote{URL: remote},
+		Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst}, nil },
 		Bound:         1,
 		TierWait:      time.Hour,
@@ -164,6 +190,7 @@ func TestHelperRevisions(t *testing.T) {
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
 		Denylist:      []string{"flake.lock"},
+		Replays:       1,
 		HandOffLabel:  handOff,
 		HandBackLabel: "needs-decision",
 		StateDir:      state,

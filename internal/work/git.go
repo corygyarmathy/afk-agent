@@ -91,12 +91,16 @@ func FetchInto(ctx context.Context, relayDir string, remote git.Remote, ref stri
 // will refuse a head that moved on.
 //
 // The fetch carries no token, so nothing the workspace's .git/config says can
-// send one anywhere. It reads objects alone (upload-pack).
+// send one anywhere. It reads objects alone (upload-pack). A session may
+// already have run in the workspace (Replay), so neither command runs a hook
+// or an fsmonitor the workspace names: the agent's own git is not the
+// session's to run code through.
 func Import(ctx context.Context, relayDir, workspace, branch, ref, commit string) error {
-	if _, err := git.RunEnv(ctx, workspace, git.Isolated, "fetch", "--quiet", "--no-tags", "--force", relayDir, "+"+ref+":refs/afk/import"); err != nil {
+	noHooks := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+	if _, err := git.RunEnv(ctx, workspace, git.Isolated, append(noHooks, "fetch", "--quiet", "--no-tags", "--force", relayDir, "+"+ref+":refs/afk/import")...); err != nil {
 		return err
 	}
-	if _, err := git.RunEnv(ctx, workspace, git.Isolated, "checkout", "--quiet", "--force", "-B", branch, commit); err != nil {
+	if _, err := git.RunEnv(ctx, workspace, git.Isolated, append(noHooks, "checkout", "--quiet", "--force", "-B", branch, commit)...); err != nil {
 		return err
 	}
 	return nil

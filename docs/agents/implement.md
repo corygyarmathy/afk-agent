@@ -76,7 +76,10 @@ description, and says the implement job asked for it
   clone, the read of which branches are taken and the reads of where a push
   landed carry it the same way, isolated from the agent user's global and
   system `git` configuration, so a private repository is implemented as a
-  public one is, and nothing of the token is left in the workspace.
+  public one is, and nothing of the token is left in the workspace. No process
+  that carries it runs in or under a workspace at all: `git.Remote` refuses
+  one, so a fetch into a workspace goes through a repository the agent owns
+  and is brought in with no token.
 - **Every push is `--force-with-lease`**, pinned to the commit the agent last
   saw its own push land at. A session that amends its own pushed commits does
   not stall the job, and anyone else's push to the branch is never rewritten
@@ -293,7 +296,10 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
 `--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
-gate, attempts, denylist and tier: there is no revise tier of its own.
+gate, attempts, denylist and tier: there is no revise tier of its own. It
+requires one parameter of its own, `--replays`: how many times a revision is
+replayed onto a push someone else made during it before the next such push
+hands it back.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the
