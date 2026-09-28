@@ -85,33 +85,33 @@ eligible issues takes the first ones in this order.
 (`CONTEXT.md`). Without it there is no limit, as there is no budget threshold
 without `--budget-at`. With it, `afk intake` and `afk work` each take at most
 the limit less the queue, in the order above, and `--hand-off-label` is
-required.
+required. Why it holds what it holds, and nothing else, is the
+[resolution on #119](https://github.com/corygyarmathy/afk-agent/issues/119#issuecomment-5861685099).
 
-The queue is counted afresh on every pass that has an eligible issue to take:
+The queue is counted afresh on every pass that has an eligible issue to take,
+from two sources:
 
-- open pull requests carrying the hand-off label and opened by the agent, read
-  from the tracker. A sent-back pull request is out while its revision is in
-  flight, because the revision's claim takes the label off. A hand-back never
-  has it. The operator's own pull requests are not the agent's;
-- `implement` jobs that are scheduled or leased, read from the job store,
-  whether a command or this label made them. A job that handed off, handed
-  back or parked is at rest, and is not counted. A job made due that no pool
-  runs - one `afk intake` made with `afk work` stopped - is counted, and holds
-  its place until something runs it.
+- the job store: `implement` and `revise` jobs that are scheduled or leased,
+  whether a command or this label made them. A job at rest - handed off, handed
+  back, or parked - is not counted. A job made due that no pool runs, such as
+  one `afk intake` made with `afk work` stopped, is counted until something
+  runs it;
+- the tracker, listed after the store is read: open pull requests the agent
+  opened that carry the hand-off label. The operator's own pull requests are
+  not counted, labelled or not.
 
-A job applying the hand-off label is counted twice, once as its pull request,
-until it has read the label back. That errs towards holding.
+A job handing off is counted twice, once as its pull request, until it comes to
+rest.
 
 A held issue is **not taken**: no job, no claim, nothing on the tracker. It is
-still free to `/implement`. Only taking is held. Commands arm their jobs, every
-job for an existing pull request runs, and `afk run` is unaffected: holding a
-review or a revision would stop the queue draining. Admission is separate, and
+still free to `/implement`. Commands arm their jobs, every job for an existing
+pull request runs, and `afk run` is unaffected. Admission is separate, and
 unchanged.
 
 Intake logs one line when it starts holding an eligible issue back and one when
-it stops, and nothing on a pass in between. It remembers which it is doing in
-memory, so `afk intake`, one process per pass, logs that it is holding on every
-pass it is.
+the queue has room again, and nothing on a pass in between. It remembers which
+it is doing in memory, so `afk intake`, one process per pass, logs that it is
+holding on every pass it is.
 
 ## What does not carry over
 

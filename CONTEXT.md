@@ -101,7 +101,7 @@ The agent declaring a pull request ready for human review. A signal, not a contr
 _Avoid_: Completion, ready state
 
 **Review queue**:
-The pull requests the operator's review is owed or about to be: those handed off and still open, and the `implement` work taken but not yet handed off. A sent-back pull request leaves it while its revision is in flight and rejoins when the revision hands off; a hand-back is never in it. When it is full the agent takes no issue through the eligibility label, and nothing else waits. Not admission: it is not a budget decision, and it never holds a job that already exists.
+The pull requests the operator's review is owed or about to be: those handed off and still open, the `implement` work taken but not yet handed off, and the revisions in flight. A sent-back pull request stays in it while its revision is in flight, as the revision rather than as a handed-off pull request; a hand-back is never in it. When it is full the agent takes no issue through the eligibility label, and nothing else waits. Not admission: it is not a budget decision, and it never holds a job that already exists.
 _Avoid_: Backlog, throttle, inbox
 
 **Hand-back**:
