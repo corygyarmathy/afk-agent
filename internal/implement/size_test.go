@@ -143,16 +143,16 @@ func TestWorkAtTheSizeSignalOpensItsPullRequest(t *testing.T) {
 }
 
 // The session is told the rule and the signal before it starts, so it can stop
-// at a coherent first piece by itself - unless the person who asked wants one
-// pull request, which it is told instead.
+// at a coherent first piece by itself and give the piece a title - unless the
+// person who asked wants one pull request, which it is told instead.
 func TestThePromptCarriesTheSizeRule(t *testing.T) {
 	for _, tc := range []struct {
 		name, command string
 		want, not     []string
 	}{
-		{"unattended", "", []string{"one concern, reviewable in one sitting", "400 changed lines", "coherent first piece"}, []string{"one pull request, whatever its size"}},
-		{"commanded", "/implement keep it tidy", []string{"one concern, reviewable in one sitting", "400 changed lines"}, []string{"one pull request, whatever its size"}},
-		{"one pull request asked for", "/implement do not split this", []string{"one pull request, whatever its size"}, []string{"400 changed lines"}},
+		{"unattended", "", []string{"one concern, reviewable in one sitting", "400 changed lines", "coherent first piece", "title for the piece"}, []string{"one pull request, whatever its size"}},
+		{"commanded", "/implement keep it tidy", []string{"one concern, reviewable in one sitting", "400 changed lines", "title for the piece"}, []string{"one pull request, whatever its size"}},
+		{"one pull request asked for", "/implement do not split this", []string{"one pull request, whatever its size"}, []string{"400 changed lines", "title for the piece"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newTracker()
