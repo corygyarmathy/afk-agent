@@ -14,12 +14,15 @@ import (
 )
 
 // closing is GitHub's closing keywords: the words that link a pull request to
-// the issue it closes. A reference into another repository (`owner/name#5`)
-// does not match, because the tracker reads this repository only.
-var closing = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)\b`)
+// the issue it closes. And "Part of", which links the first piece of an issue
+// too big for one pull request to that issue without closing it: the issue is
+// still what the piece is reviewed against (#127). A reference into another
+// repository (`owner/name#5`) does not match, because the tracker reads this
+// repository only.
+var closing = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part\s+of):?\s+#(\d+)\b`)
 
-// closes is the issues a description closes, in the order it names them, once
-// each.
+// closes is the issues a description closes, or is part of, in the order it
+// names them, once each.
 func closes(desc string) []int {
 	var out []int
 	seen := map[int]bool{}
