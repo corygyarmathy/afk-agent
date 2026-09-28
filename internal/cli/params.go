@@ -18,6 +18,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -758,7 +759,7 @@ type implementParams struct {
 	reviewProcedure string
 
 	// sensitive is optional, and empty is the feature off.
-	sensitive []implement.Sensitive
+	sensitive []sensitive.Path
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -825,17 +826,17 @@ func (p *params) implement() (implementParams, error) {
 		}
 		ip.reviewProcedure = v
 	}
-	if ip.sensitive, err = sensitive(optional(p.sensitive, "AFK_SENSITIVE")); err != nil {
+	if ip.sensitive, err = sensitivePaths(optional(p.sensitive, "AFK_SENSITIVE")); err != nil {
 		return implementParams{}, err
 	}
 	return ip, nil
 }
 
-// sensitive reads the sensitive paths: `<label>=<globs>` for each label,
+// sensitivePaths reads the sensitive paths: `<label>=<globs>` for each label,
 // separated by semicolons, and the globs separated by commas as the denylist's
 // are. A label may have spaces in it: `job store schema=internal/store/**`.
-func sensitive(v string) ([]implement.Sensitive, error) {
-	var list []implement.Sensitive
+func sensitivePaths(v string) ([]sensitive.Path, error) {
+	var list []sensitive.Path
 	for _, entry := range strings.Split(v, ";") {
 		if entry = strings.TrimSpace(entry); entry == "" {
 			continue
@@ -844,7 +845,7 @@ func sensitive(v string) ([]implement.Sensitive, error) {
 		if !ok {
 			return nil, usagef("--sensitive: %q is not <label>=<globs>", entry)
 		}
-		s := implement.Sensitive{Label: strings.TrimSpace(label)}
+		s := sensitive.Path{Label: strings.TrimSpace(label)}
 		for _, g := range strings.Split(globs, ",") {
 			if g = strings.TrimSpace(g); g != "" {
 				s.Globs = append(s.Globs, g)
@@ -852,7 +853,7 @@ func sensitive(v string) ([]implement.Sensitive, error) {
 		}
 		list = append(list, s)
 	}
-	if err := implement.ValidSensitive(list); err != nil {
+	if err := sensitive.Valid(list); err != nil {
 		return nil, usagef("--sensitive: %v", err)
 	}
 	return list, nil

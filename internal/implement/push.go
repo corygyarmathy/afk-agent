@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/glob"
 	"github.com/corygyarmathy/afk-agent/internal/permalink"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -44,7 +45,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if bad := denied(d.Denylist, paths); len(bad) > 0 {
+	if bad := glob.Matching(d.Denylist, paths); len(bad) > 0 {
 		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
 	}
 
@@ -59,13 +60,13 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 
 	// Recomputed with each push, on what the pull request will show: a fix
 	// that newly touches a sensitive path adds it.
-	p.Sensitive = ""
+	p.Sensitive = nil
 	if len(d.Sensitive) > 0 {
-		paths, err := changed(ctx, relayDir, p.Base, head)
+		paths, err := sensitive.Changed(ctx, relayDir, p.Base, head)
 		if err != nil {
 			return transition.Result{}, err
 		}
-		p.Sensitive = sensitiveLine(d.Sensitive, paths)
+		p.Sensitive = sensitive.Touches(d.Sensitive, paths)
 	}
 
 	// The stem is new with each head, and a head is pushed only by the work
@@ -184,13 +185,19 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 	}
-	body := description(n, d.ReviewProcedure, p.Sensitive, session)
-	if utf8.RuneCountInString(body) > bodyLimit {
-		// Over it, GitHub refuses the pull request every round. Cutting
-		// the session's part would drop what the operator needed, so it
-		// goes whole, as a missing one does.
+	// Over GitHub's limit, the pull request is refused every round. The
+	// sensitive files go first, as a count for each label: the diff names
+	// them again. Cutting the session's part would drop what the operator
+	// needed, so if it is still over, that part goes whole, as a missing one
+	// does.
+	body := description(n, d.ReviewProcedure, sensitive.Line(p.Sensitive), session)
+	if over(body) && len(p.Sensitive) > 0 {
+		d.logf("%s: the description is over GitHub's %d characters, so its sensitive paths are counted rather than listed", in.Job.ID, bodyLimit)
+		body = description(n, d.ReviewProcedure, sensitive.Counted(p.Sensitive), session)
+	}
+	if over(body) {
 		d.logf("%s: the description is over GitHub's %d characters, so the pull request opens with the agent's parts only", in.Job.ID, bodyLimit)
-		body = description(n, d.ReviewProcedure, p.Sensitive, "")
+		body = description(n, d.ReviewProcedure, sensitive.Counted(p.Sensitive), "")
 	}
 	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: body}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
@@ -213,15 +220,28 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress, pr github.PullRequest) (transition.Result, error) {
 	watch := transition.Result{State: Watching, RunAt: in.Now}
 	was := strings.ReplaceAll(pr.Body, "\r\n", "\n")
-	body, ok := withSensitive(was, p.Sensitive)
+	body, ok := sensitive.With(was, sensitive.Line(p.Sensitive))
 	if !ok {
-		if p.Sensitive != "" {
+		if len(p.Sensitive) > 0 {
 			d.logf("%s: the description of #%d has no reminder to put the sensitive paths ahead of, so it is left as it is", in.Job.ID, pr.Number)
 		}
 		return watch, nil
 	}
+	// As when it opened, files over GitHub's limit are counted. The
+	// session's part is written once, so it is never what gives way here.
+	counted := over(body)
+	if counted {
+		body, _ = sensitive.With(was, sensitive.Counted(p.Sensitive))
+	}
 	if body == was {
 		return watch, nil
+	}
+	if over(body) {
+		d.logf("%s: the description of #%d would be over GitHub's %d characters even with its sensitive paths counted, so it is left as it is", in.Job.ID, pr.Number, bodyLimit)
+		return watch, nil
+	}
+	if counted {
+		d.logf("%s: the description of #%d would be over GitHub's %d characters, so its sensitive paths are counted rather than listed", in.Job.ID, pr.Number, bodyLimit)
 	}
 	stem := fmt.Sprintf("description-%s-%s", p.Branch, p.Head)
 	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)

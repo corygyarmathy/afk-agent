@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 )
 
 // descriptionFile is where, in the workspace's .git, the session writes its
@@ -114,12 +117,6 @@ func empty(body []string) bool {
 	return s == "" || strings.EqualFold(s, "none") || strings.EqualFold(s, "n/a")
 }
 
-// reminder begins the reminder's line, which ends Go's fixed part ahead of it.
-const reminder = "> **Your review**"
-
-// sensitivePrefix begins the sensitive line (sensitiveLine).
-const sensitivePrefix = "**Sensitive:** "
-
 // description is the pull request's body: the marker, the link line, the
 // sensitive line and the reminder, which are Go's, then the session's part,
 // already linked.
@@ -127,10 +124,13 @@ const sensitivePrefix = "**Sensitive:** "
 // It is written once, when the pull request opens. Nothing rewrites the
 // session's part: a revision changing what the operator already read would
 // defeat the reading. The sensitive line is Go's to recompute on every push
-// (withSensitive).
-func description(n int, procedure, sensitive, session string) string {
+// (sensitive.With).
+func description(n int, procedure, line, session string) string {
 	var b strings.Builder
-	b.WriteString(fixed(fmt.Sprintf("%s\nCloses #%d", PRMarker(n), n), sensitive))
+	fmt.Fprintf(&b, "%s\nCloses #%d\n\n", PRMarker(n), n)
+	if line != "" {
+		b.WriteString(line + "\n\n")
+	}
 	link := "the agent has no link to the procedure"
 	if procedure != "" {
 		link = fmt.Sprintf("[procedure](%s)", procedure)
@@ -139,16 +139,12 @@ func description(n int, procedure, sensitive, session string) string {
 	if session != "" {
 		from = " from **Start here**"
 	}
-	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", reminder, link, n, from)
+	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", sensitive.Reminder, link, n, from)
 	b.WriteString(session)
 	return b.String()
 }
 
-// fixed is Go's part ahead of the reminder: top, the marker and the link line,
-// then the sensitive line if there is one.
-func fixed(top, sensitive string) string {
-	if sensitive == "" {
-		return top + "\n\n"
-	}
-	return top + "\n\n" + sensitive + "\n\n"
+// over reports whether GitHub would refuse body as a pull request's.
+func over(body string) bool {
+	return utf8.RuneCountInString(body) > bodyLimit
 }
