@@ -18,6 +18,12 @@ var commands = func() []intake.Command {
 	}
 }
 
+// unattended is what an issue carrying the eligibility label, label, is taken
+// for with nobody asking: the job `/implement` would make.
+func unattended(label string) intake.Unattended {
+	return intake.Unattended{Label: label, Kind: store.KindImplement, Start: implement.Start}
+}
+
 // subjectOf is the kind of subject a job kind's jobs are attached to. `afk run`
 // refuses any other before it makes a job, because a job on the wrong kind of
 // subject can only fail until it parks.

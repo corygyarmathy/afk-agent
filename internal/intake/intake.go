@@ -25,12 +25,24 @@
 // comment that becomes a command without moving updated_at - its author given
 // write access afterwards, say - waits for the subject's next change or a
 // restart.
+//
+// A pass also takes work with nobody asking, when it is configured to: an
+// open issue carrying the eligibility label, with no open blocker, becomes the
+// same due job its command would make. The label is a queue filter, not a
+// command - it says the issue may be taken - so it is read from the listing on
+// every pass rather than settled, and a blocker closing need not move the
+// blocked issue's updated_at. An issue is taken once: not if it has a job,
+// whatever made that job, and not if it carries the agent's claim, which is
+// what stops a wiped store taking it again. The job claims the issue itself,
+// since nothing asked. Eligible issues are taken lowest number first, which on
+// GitHub is oldest first.
 package intake
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,6 +66,7 @@ type Tracker interface {
 	OpenIssues(ctx context.Context) ([]github.Issue, error)
 	Comments(ctx context.Context, number int) ([]github.Comment, error)
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
+	IssueReactions(ctx context.Context, number int) ([]github.Reaction, error)
 }
 
 // Command is one entry in the command registry: the word a comment starts
@@ -73,11 +86,26 @@ type Command struct {
 	Start string
 }
 
+// Unattended is the work an issue is taken for with nobody asking: the
+// eligibility label that opts an issue in, and the job kind and start state
+// its command would make.
+type Unattended struct {
+	// Label is the eligibility label. A parameter; empty, nothing is taken
+	// unattended.
+	Label string
+
+	Kind  store.Kind
+	Start string
+}
+
 // Intake is one repository's command intake.
 type Intake struct {
 	Tracker  Tracker
 	Store    store.Store
 	Commands []Command
+
+	// Unattended is what an eligible issue is taken for. Zero, nothing is.
+	Unattended Unattended
 
 	// Login is the agent's own account. Its comments are never commands, and
 	// its reaction is the claim.
@@ -97,6 +125,11 @@ type Intake struct {
 	// armed or answered. It is keyed by number, which issues and pull
 	// requests share.
 	seen map[int]reading
+
+	// claimed is the eligible issues a pass found carrying the agent's
+	// claim with no job in the store. The agent never takes a claim back,
+	// so it is read once rather than on every pass.
+	claimed map[int]bool
 }
 
 // reading is what passes last made of a subject's updated_at.
@@ -164,7 +197,90 @@ func (in *Intake) Pass(ctx context.Context) ([]store.Job, error) {
 	}
 	// Built afresh from the open listing, so a closed subject is forgotten.
 	in.seen = next
+
+	taken, err := in.take(ctx, open)
+	made = append(made, taken...)
+	errs = append(errs, err)
 	return made, errors.Join(errs...)
+}
+
+// take makes the unattended work on each eligible issue due, lowest number
+// first. It runs after the commands, so an issue commanded in the same pass
+// already has its job.
+func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, error) {
+	if in.Unattended.Label == "" {
+		return nil, nil
+	}
+	var eligible []github.Issue
+	for _, is := range open {
+		if in.eligible(is) {
+			eligible = append(eligible, is)
+		}
+	}
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].Number < eligible[j].Number })
+
+	var (
+		made    []store.Job
+		errs    []error
+		claimed = make(map[int]bool)
+	)
+	for _, is := range eligible {
+		job, ok, err := in.takeIssue(ctx, is.Number, claimed)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("issue %d: %w", is.Number, err))
+		}
+		if ok {
+			made = append(made, job)
+		}
+	}
+	// Built afresh, so an issue closed, unlabelled or since given a job is
+	// forgotten.
+	in.claimed = claimed
+	return made, errors.Join(errs...)
+}
+
+// takeIssue makes issue n's unattended work due, unless it has a job or the
+// agent's claim. What it finds claimed goes in claimed.
+func (in *Intake) takeIssue(ctx context.Context, n int, claimed map[int]bool) (store.Job, bool, error) {
+	u := in.Unattended
+	subject := store.Subject{Type: store.SubjectIssue, Number: n}
+	_, err := in.Store.Job(ctx, store.ID(u.Kind, subject))
+	if err == nil {
+		return store.Job{}, false, nil
+	}
+	if !errors.Is(err, store.ErrNoJob) {
+		return store.Job{}, false, err
+	}
+	if !in.claimed[n] {
+		reactions, err := in.Tracker.IssueReactions(ctx, n)
+		if err != nil {
+			return store.Job{}, false, err
+		}
+		if !Claimed(reactions, in.Login) {
+			// Created due rather than armed: there is no job to lease, and
+			// the job being there is what stops the next pass.
+			job, err := in.Store.Ensure(ctx, u.Kind, subject, u.Start, in.now())
+			return job, err == nil, err
+		}
+	}
+	claimed[n] = true
+	return store.Job{}, false, nil
+}
+
+// eligible reports whether an open issue may be taken unattended: an issue
+// rather than a pull request, carrying the eligibility label, and with no
+// open blocker. An issue whose blockers the listing did not say is not.
+func (in *Intake) eligible(is github.Issue) bool {
+	if is.PullRequest || !is.DependenciesRead || is.BlockedBy > 0 {
+		return false
+	}
+	for _, l := range is.Labels {
+		// Label names are case-insensitive on GitHub.
+		if strings.EqualFold(l, in.Unattended.Label) {
+			return true
+		}
+	}
+	return false
 }
 
 // subject reads one subject's comments and arms what they ask for. It reports
@@ -265,6 +381,14 @@ func (in *Intake) validate() error {
 			return fmt.Errorf("command %s: unknown job kind %q", cmd.Word, cmd.Kind)
 		case cmd.Start == "":
 			return fmt.Errorf("command %s: no start state", cmd.Word)
+		}
+	}
+	if u := in.Unattended; u.Label != "" {
+		switch {
+		case !u.Kind.Valid():
+			return fmt.Errorf("unattended work: unknown job kind %q", u.Kind)
+		case u.Start == "":
+			return errors.New("unattended work: no start state")
 		}
 	}
 	return nil

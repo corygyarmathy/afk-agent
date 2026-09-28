@@ -133,10 +133,19 @@ The tracker, for afk intake, afk run and afk work:
   --repo <owner/name>   AFK_REPO          repository commands are read from
   --app-id <id>         AFK_APP_ID        the GitHub App's client ID or app ID
   --app-key <path>      AFK_APP_KEY       file holding the App's private key
+  --eligibility-label <l>
+                        AFK_ELIGIBILITY_LABEL
+                                          the label that opts an issue in to being
+                                          implemented with nobody asking
 
 The agent authenticates as the App's installation on --repo, and its own login
 is the App's [bot] account. Without --repo afk work reads no commands, and runs
 only the jobs already in the store.
+
+Without --eligibility-label no issue is taken unattended: work starts only when
+a command asks for it. With it, an open issue carrying the label, with no open
+blocker among its dependencies, no job and no claim, is taken as /implement
+would take it, lowest issue number first.
 
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
@@ -170,9 +179,10 @@ type params struct {
 	notifyKey       string
 	tierNotifyAfter string
 
-	repo   string
-	appID  string
-	appKey string
+	repo             string
+	appID            string
+	appKey           string
+	eligibilityLabel string
 
 	branchPrefix   string
 	gate           string
@@ -554,6 +564,7 @@ func (p *params) bindTracker(fs *flag.FlagSet) {
 	fs.StringVar(&p.repo, "repo", "", "repository commands are read from, owner/name (AFK_REPO)")
 	fs.StringVar(&p.appID, "app-id", "", "the GitHub App's client ID or app ID (AFK_APP_ID)")
 	fs.StringVar(&p.appKey, "app-key", "", "file holding the GitHub App's private key (AFK_APP_KEY)")
+	fs.StringVar(&p.eligibilityLabel, "eligibility-label", "", "the label that opts an issue in to unattended work (AFK_ELIGIBILITY_LABEL)")
 }
 
 // tracker is the agent on the tracker: the client, and the App it authenticates
@@ -624,7 +635,8 @@ func (p *params) tracker() (*tracker, error) {
 
 // newIntake is command intake over the command's tracker, or nil if there is
 // none. It asks the tracker who the agent is once, rather than on every pass.
-func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, lease time.Duration) (*intake.Intake, error) {
+// It takes issues unattended only if label, the eligibility label, is set.
+func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, lease time.Duration, label string) (*intake.Intake, error) {
 	if tr == nil {
 		return nil, nil
 	}
@@ -632,14 +644,18 @@ func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, 
 	if err != nil {
 		return nil, err
 	}
-	return &intake.Intake{
+	in := &intake.Intake{
 		Tracker:  tr.client,
 		Store:    st,
 		Commands: commands(),
 		Login:    login,
 		Holder:   holder,
 		LeaseTTL: lease,
-	}, nil
+	}
+	if label != "" {
+		in.Unattended = unattended(label)
+	}
+	return in, nil
 }
 
 // bindModel binds model choice: the files the resolver reads, what a review

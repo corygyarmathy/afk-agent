@@ -296,6 +296,14 @@ func runnable(cmds []intake.Command, reg *transition.Registry) []intake.Command 
 	return out
 }
 
+// takeable reports whether this registry can start the work an issue is taken
+// unattended for. A pool that cannot would take the issue into a job that can
+// only park, and an issue with a job is not taken again.
+func takeable(u intake.Unattended, reg *transition.Registry) bool {
+	_, ok := reg.Next(u.Kind, u.Start)
+	return ok
+}
+
 // workCmd implements `afk work`, the worker pool. Everything a transition can
 // do it can do without this command (ADR 0001 §4); what this adds is several
 // of them at once, under the resource tokens that stop the heavy ones from
@@ -386,7 +394,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	}
 	d.Registry = catalogue(kinds)
 
-	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL)
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL"))
 	if err != nil {
 		return err
 	}
@@ -394,6 +402,10 @@ func workCmd(args []string, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "afk work: no --repo, so no commands are read; only jobs already in the store run")
 	} else {
 		in.Commands = runnable(in.Commands, d.Registry)
+		if in.Unattended.Label != "" && !takeable(in.Unattended, d.Registry) {
+			fmt.Fprintln(stderr, "afk work: implement jobs cannot run, so no issue is taken unattended")
+			in.Unattended = intake.Unattended{}
+		}
 		d.Intake = func(ctx context.Context) error {
 			made, err := in.Pass(ctx)
 			for _, job := range made {
@@ -532,7 +544,7 @@ func intakeCmd(args []string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL)
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL"))
 	if err != nil {
 		return err
 	}

@@ -106,6 +106,36 @@ func TestIssueReadsItsTitleBodyStateAndLabels(t *testing.T) {
 	}
 }
 
+// The native dependencies' summary counts the open blockers only. An issue the
+// API serves without one has blockers nobody can read, which is not none.
+func TestAnIssueSaysHowManyOpenIssuesBlockIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, deps string
+		blockedBy  int
+		read       bool
+	}{
+		{"one open blocker of two", `,"issue_dependencies_summary":{"blocked_by":1,"total_blocked_by":2,"blocking":0,"total_blocking":0}`, 1, true},
+		{"its blockers closed", `,"issue_dependencies_summary":{"blocked_by":0,"total_blocked_by":2,"blocking":0,"total_blocking":0}`, 0, true},
+		{"no summary", ``, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				if expect(t, w, r, "GET", "/repos/o/n/issues/7", "application/vnd.github+json") {
+					fmt.Fprintf(w, `{"number":7,"state":"open"%s}`, tc.deps)
+				}
+			})
+
+			is, err := c.Issue(context.Background(), 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if is.BlockedBy != tc.blockedBy || is.DependenciesRead != tc.read {
+				t.Errorf("blocked by %d, dependencies read %t; want %d, %t", is.BlockedBy, is.DependenciesRead, tc.blockedBy, tc.read)
+			}
+		})
+	}
+}
+
 func TestDiffAsksForTheDiff(t *testing.T) {
 	const diff = "diff --git a/x b/x\n+added\n"
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
