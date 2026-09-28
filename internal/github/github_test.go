@@ -196,7 +196,7 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 	t.Run("open issues", func(t *testing.T) {
 		c, srv := serve(t, pages("/repos/o/n/issues",
 			`[{"number":7,"state":"open","title":"An issue","updated_at":"2026-09-13T12:00:00Z","issue_dependencies_summary":{"blocked_by":1,"total_blocked_by":2,"blocking":0,"total_blocking":0}}]`,
-			`[{"number":12,"state":"open","title":"A pull request","pull_request":{"url":"https://api.github.com/repos/o/n/pulls/12"}}]`))
+			`[{"number":12,"state":"open","title":"A pull request","user":{"login":"afk-bot[bot]"},"pull_request":{"url":"https://api.github.com/repos/o/n/pulls/12"}}]`))
 		srvURL = srv.URL
 
 		got, err := c.OpenIssues(context.Background())
@@ -205,7 +205,7 @@ func TestListingsAreReadPastTheFirstPage(t *testing.T) {
 		}
 		want := []github.Issue{
 			{Number: 7, State: "open", Title: "An issue", BlockedBy: 1, DependenciesRead: true, UpdatedAt: time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)},
-			{Number: 12, State: "open", Title: "A pull request", PullRequest: true},
+			{Number: 12, State: "open", Title: "A pull request", PullRequest: true, Author: "afk-bot[bot]"},
 		}
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Errorf("got %+v, want %+v", got, want)

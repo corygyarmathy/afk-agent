@@ -38,6 +38,17 @@
 // issue listed with no dependency summary is not taken, and is reported once.
 // Eligible issues are taken lowest number first, which on GitHub is oldest
 // first.
+//
+// Taking is held at the review-queue limit, when one is configured: a pass
+// takes no more eligible issues than the review queue has room for, counted
+// afresh on every pass from the tracker and the store. A held issue is not
+// taken at all - nothing is asked of it beyond whether it could be, and
+// nothing is said on it - so it is still the operator's to /implement. Only
+// taking is held. A command arms its job whatever the queue says, and so does
+// every job for a pull request that already exists: holding a review or a
+// revision would stop the queue draining. Intake logs when it starts holding
+// and when it stops, from what it remembers in memory, so a process that runs
+// one pass - `afk intake` - says it is holding on every pass it is.
 package intake
 
 import (
@@ -98,6 +109,24 @@ type Unattended struct {
 
 	Kind  store.Kind
 	Start string
+
+	// Queue is the review queue's limit. Zero, taking is not limited.
+	Queue ReviewQueue
+}
+
+// ReviewQueue is the limit on the review queue (CONTEXT.md: review queue): the
+// agent's open pull requests carrying the hand-off label, plus the jobs of the
+// unattended kind taken and not yet handed off, whether a command or the
+// eligibility label made them.
+type ReviewQueue struct {
+	// Limit is how long the queue may be before taking is held. A parameter;
+	// zero, there is no limit.
+	Limit int
+
+	// Label is the hand-off label, which is how a pull request waiting on the
+	// operator's review is known. Its revision's claim takes it off, and a
+	// hand-back never had it.
+	Label string
 }
 
 // Intake is one repository's command intake.
@@ -122,6 +151,10 @@ type Intake struct {
 	// Clock is the time source. Nil means time.Now.
 	Clock func() time.Time
 
+	// Log receives a line when taking starts being held at the review-queue
+	// limit, and one when it stops. Nil is silent.
+	Log func(msg string)
+
 	// seen is each open subject's updated_at as of the last pass that read it
 	// and left nothing to come back for: no error, and every command on it
 	// armed or answered. It is keyed by number, which issues and pull
@@ -131,6 +164,10 @@ type Intake struct {
 	// blind is the labelled issues the last pass found listed with no
 	// dependency summary, so each is reported once rather than every pass.
 	blind map[int]bool
+
+	// holding is whether the last pass that counted the review queue held an
+	// issue back, so that starting and stopping are each said once.
+	holding bool
 }
 
 // reading is what passes last made of a subject's updated_at.
@@ -237,40 +274,115 @@ func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, e
 	in.blind = blind
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].Number < eligible[j].Number })
 
-	var made []store.Job
+	room, queue := len(eligible), 0
+	if limit := in.Unattended.Queue.Limit; limit > 0 && len(eligible) > 0 {
+		var err error
+		if queue, err = in.queue(ctx, open); err != nil {
+			// Not knowing how full the queue is, take nothing.
+			return nil, errors.Join(append(errs, fmt.Errorf("counting the review queue: %w", err))...)
+		}
+		room = max(limit-queue, 0)
+	}
+
+	var (
+		made []store.Job
+		held bool
+	)
 	for _, is := range eligible {
-		job, ok, err := in.takeIssue(ctx, is.Number)
+		ok, err := in.takeable(ctx, is.Number)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("issue %d: %w", is.Number, err))
 		}
-		if ok {
-			made = append(made, job)
+		if !ok {
+			continue
 		}
+		if room == 0 {
+			// One issue held back is enough to say so, and the rest need not
+			// be read.
+			held = true
+			break
+		}
+		job, err := in.ensure(ctx, is.Number)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("issue %d: %w", is.Number, err))
+			continue
+		}
+		made = append(made, job)
+		room--
 	}
+	in.hold(held, queue)
 	return made, errors.Join(errs...)
 }
 
-// takeIssue makes issue n's unattended work due, unless it has a job or was
-// taken before one: it carries the agent's claim, or one of its commands for
-// the same work does.
-func (in *Intake) takeIssue(ctx context.Context, n int) (store.Job, bool, error) {
-	u := in.Unattended
+// hold says when taking starts being held, and when it stops.
+func (in *Intake) hold(held bool, queue int) {
+	if held == in.holding {
+		return
+	}
+	in.holding = held
+	if in.Log == nil {
+		return
+	}
+	if held {
+		in.Log(fmt.Sprintf("intake: holding eligible issues, with %d in the review queue and a limit of %d", queue, in.Unattended.Queue.Limit))
+	} else {
+		in.Log("intake: stopped holding eligible issues")
+	}
+}
+
+// queue counts the review queue: the agent's open pull requests carrying the
+// hand-off label, and the jobs of the unattended kind taken and not yet handed
+// off. A job is taken and not handed off while it is scheduled or leased; one
+// that handed off, handed back or parked is at rest. A job made due that no
+// pool runs is in the queue until something runs it.
+//
+// A job applying the hand-off label is counted twice, once as its pull
+// request, until it reads the label back. That errs towards holding.
+func (in *Intake) queue(ctx context.Context, open []github.Issue) (int, error) {
+	n := 0
+	for _, is := range open {
+		if is.PullRequest && strings.EqualFold(is.Author, in.Login) && hasLabel(is, in.Unattended.Queue.Label) {
+			n++
+		}
+	}
+	jobs, err := in.Store.Jobs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	now := in.now()
+	for _, j := range jobs {
+		if j.Kind != in.Unattended.Kind {
+			continue
+		}
+		if !j.NextRunAt.IsZero() || (j.Lease != nil && !j.Lease.Expired(now)) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// takeable reports whether issue n's unattended work may be taken: it has no
+// job, and was not taken before one - it carries no claim of the agent's, and
+// nor does any of its commands for the same work.
+func (in *Intake) takeable(ctx context.Context, n int) (bool, error) {
 	subject := store.Subject{Type: store.SubjectIssue, Number: n}
-	_, err := in.Store.Job(ctx, store.ID(u.Kind, subject))
+	_, err := in.Store.Job(ctx, store.ID(in.Unattended.Kind, subject))
 	if err == nil {
-		return store.Job{}, false, nil
+		return false, nil
 	}
 	if !errors.Is(err, store.ErrNoJob) {
-		return store.Job{}, false, err
+		return false, err
 	}
 	taken, err := in.taken(ctx, n)
-	if err != nil || taken {
-		return store.Job{}, false, err
-	}
+	return !taken && err == nil, err
+}
+
+// ensure makes issue n's unattended work due.
+func (in *Intake) ensure(ctx context.Context, n int) (store.Job, error) {
+	u := in.Unattended
 	// Created due rather than armed: there is no job to lease, and the job
 	// being there is what stops the next pass.
-	job, err := in.Store.Ensure(ctx, u.Kind, subject, u.Start, in.now())
-	return job, err == nil, err
+	return in.Store.Ensure(ctx, u.Kind, store.Subject{Type: store.SubjectIssue, Number: n}, u.Start, in.now())
 }
 
 // taken reports whether issue n carries the agent's claim, on the issue itself
@@ -300,11 +412,16 @@ func (in *Intake) taken(ctx context.Context, n int) (bool, error) {
 	return false, nil
 }
 
-// labelled reports whether an issue carries the eligibility label. Label names
-// are case-insensitive on GitHub.
+// labelled reports whether an issue carries the eligibility label.
 func (in *Intake) labelled(is github.Issue) bool {
+	return hasLabel(is, in.Unattended.Label)
+}
+
+// hasLabel reports whether an issue carries label. Label names are
+// case-insensitive on GitHub.
+func hasLabel(is github.Issue, label string) bool {
 	for _, l := range is.Labels {
-		if strings.EqualFold(l, in.Unattended.Label) {
+		if strings.EqualFold(l, label) {
 			return true
 		}
 	}
@@ -417,6 +534,12 @@ func (in *Intake) validate() error {
 			return fmt.Errorf("unattended work: unknown job kind %q", u.Kind)
 		case u.Start == "":
 			return errors.New("unattended work: no start state")
+		case u.Queue.Limit < 0:
+			return fmt.Errorf("unattended work: review-queue limit %d is negative", u.Queue.Limit)
+		case u.Queue.Limit > 0 && u.Queue.Label == "":
+			// Without it no pull request would count, and the limit would
+			// hold only in-flight work.
+			return errors.New("unattended work: a review-queue limit and no hand-off label")
 		}
 	}
 	return nil

@@ -57,7 +57,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	case "work":
 		err = workCmd(args[1:], stderr)
 	case "intake":
-		err = intakeCmd(args[1:], stdout)
+		err = intakeCmd(args[1:], stdout, stderr)
 	case "budget":
 		err = budgetCmd(args[1:], stdout)
 	case "version":
@@ -357,6 +357,10 @@ func workCmd(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	taking, err := p.taking()
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -394,7 +398,7 @@ func workCmd(args []string, stderr io.Writer) error {
 	}
 	d.Registry = catalogue(kinds)
 
-	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL"))
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, taking)
 	if err != nil {
 		return err
 	}
@@ -406,6 +410,7 @@ func workCmd(args []string, stderr io.Writer) error {
 			fmt.Fprintln(stderr, "afk work: implement jobs cannot run, so no issue is taken unattended")
 			in.Unattended = intake.Unattended{}
 		}
+		in.Log = d.Log
 		d.Intake = func(ctx context.Context) error {
 			made, err := in.Pass(ctx)
 			for _, job := range made {
@@ -512,13 +517,18 @@ func writeUsage(w io.Writer) {
 // intakeCmd implements `afk intake`: one intake pass, by hand, with no pool
 // running (ADR 0001 §4). It prints the jobs it made due, so an operator can see
 // what the pool would pick up without starting it.
-func intakeCmd(args []string, stdout io.Writer) error {
+//
+// What it says about holding at the review-queue limit goes to stderr. A pass
+// remembers nothing of the last one, so it says it is holding on every pass
+// it is.
+func intakeCmd(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("afk intake", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var p params
 	p.bindStore(fs)
 	p.bindLease(fs)
 	p.bindTracker(fs)
+	p.bindHandOff(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return errUsage{err}
@@ -530,6 +540,10 @@ func intakeCmd(args []string, stdout io.Writer) error {
 		return usagef("intake needs --repo (or set AFK_REPO)")
 	}
 	// The operator's mistakes, before anything is opened.
+	taking, err := p.taking()
+	if err != nil {
+		return err
+	}
 	tr, err := p.tracker()
 	if err != nil {
 		return err
@@ -544,10 +558,11 @@ func intakeCmd(args []string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL"))
+	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, taking)
 	if err != nil {
 		return err
 	}
+	in.Log = func(msg string) { fmt.Fprintln(stderr, msg) }
 	made, err := in.Pass(ctx)
 	for _, job := range made {
 		fmt.Fprintf(stdout, "%s due %s\n", job.ID, job.NextRunAt.Format(time.RFC3339))

@@ -137,6 +137,11 @@ The tracker, for afk intake, afk run and afk work:
                         AFK_ELIGIBILITY_LABEL
                                           the label that opts an issue in to being
                                           implemented with nobody asking
+  --review-queue-limit <n>
+                        AFK_REVIEW_QUEUE_LIMIT
+                                          pull requests waiting on review, counting
+                                          implements not yet handed off, before
+                                          no issue is taken with nobody asking
 
 The agent authenticates as the App's installation on --repo, and its own login
 is the App's [bot] account. Without --repo afk work reads no commands, and runs
@@ -146,6 +151,11 @@ Without --eligibility-label no issue is taken unattended: work starts only when
 a command asks for it. With it, an open issue carrying the label, with no open
 blocker among its dependencies, no job and no claim, is taken as /implement
 would take it, lowest issue number first.
+
+Without --review-queue-limit there is no limit on what is taken that way. With
+it, afk intake and afk work take no more issues than the review queue has room
+for, and --hand-off-label is required: the agent's open pull requests carrying
+it are what is waiting. Commands, reviews and revisions run whatever the queue.
 
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
@@ -183,6 +193,7 @@ type params struct {
 	appID            string
 	appKey           string
 	eligibilityLabel string
+	reviewQueueLimit string
 
 	branchPrefix   string
 	gate           string
@@ -565,6 +576,39 @@ func (p *params) bindTracker(fs *flag.FlagSet) {
 	fs.StringVar(&p.appID, "app-id", "", "the GitHub App's client ID or app ID (AFK_APP_ID)")
 	fs.StringVar(&p.appKey, "app-key", "", "file holding the GitHub App's private key (AFK_APP_KEY)")
 	fs.StringVar(&p.eligibilityLabel, "eligibility-label", "", "the label that opts an issue in to unattended work (AFK_ELIGIBILITY_LABEL)")
+	fs.StringVar(&p.reviewQueueLimit, "review-queue-limit", "", "pull requests waiting on review before no issue is taken unattended (AFK_REVIEW_QUEUE_LIMIT)")
+}
+
+// bindHandOff binds the hand-off label, which the hand-off applies and the
+// review queue counts by.
+func (p *params) bindHandOff(fs *flag.FlagSet) {
+	fs.StringVar(&p.handOffLabel, "hand-off-label", "", "the label the hand-off applies (AFK_HAND_OFF_LABEL)")
+}
+
+// taking resolves what intake takes with nobody asking: the eligibility
+// label's work, held at the review-queue limit if one is set. Zero without the
+// label. The limit is checked whether or not the label is set, so a mistake in
+// it is reported before it matters.
+func (p *params) taking() (intake.Unattended, error) {
+	var queue intake.ReviewQueue
+	if v := optional(p.reviewQueueLimit, "AFK_REVIEW_QUEUE_LIMIT"); v != "" {
+		limit, err := count(v, "review-queue-limit")
+		if err != nil {
+			return intake.Unattended{}, err
+		}
+		label := optional(p.handOffLabel, "AFK_HAND_OFF_LABEL")
+		if label == "" {
+			return intake.Unattended{}, usagef("--review-queue-limit needs --hand-off-label (or set AFK_HAND_OFF_LABEL): the pull requests waiting on review are the ones carrying it")
+		}
+		queue = intake.ReviewQueue{Limit: limit, Label: label}
+	}
+	label := optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL")
+	if label == "" {
+		return intake.Unattended{}, nil
+	}
+	u := unattended(label)
+	u.Queue = queue
+	return u, nil
 }
 
 // tracker is the agent on the tracker: the client, and the App it authenticates
@@ -635,8 +679,8 @@ func (p *params) tracker() (*tracker, error) {
 
 // newIntake is command intake over the command's tracker, or nil if there is
 // none. It asks the tracker who the agent is once, rather than on every pass.
-// It takes issues unattended only if label, the eligibility label, is set.
-func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, lease time.Duration, label string) (*intake.Intake, error) {
+// It takes issues unattended only as u says, zero for none.
+func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, lease time.Duration, u intake.Unattended) (*intake.Intake, error) {
 	if tr == nil {
 		return nil, nil
 	}
@@ -645,15 +689,13 @@ func newIntake(ctx context.Context, tr *tracker, st store.Store, holder string, 
 		return nil, err
 	}
 	in := &intake.Intake{
-		Tracker:  tr.client,
-		Store:    st,
-		Commands: commands(),
-		Login:    login,
-		Holder:   holder,
-		LeaseTTL: lease,
-	}
-	if label != "" {
-		in.Unattended = unattended(label)
+		Tracker:    tr.client,
+		Store:      st,
+		Commands:   commands(),
+		Login:      login,
+		Holder:     holder,
+		LeaseTTL:   lease,
+		Unattended: u,
 	}
 	return in, nil
 }
@@ -713,7 +755,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.gateAttempts, "gate-attempts", "", "sessions the gate may fail before a hand-back (AFK_GATE_ATTEMPTS)")
 	fs.StringVar(&p.implementTier, "implement-tier", "", "the tier implementing draws from (AFK_IMPLEMENT_TIER)")
 	fs.StringVar(&p.implementNeeds, "implement-needs", "", "capabilities implementing requires, comma-separated (AFK_IMPLEMENT_NEEDS)")
-	fs.StringVar(&p.handOffLabel, "hand-off-label", "", "the label the hand-off applies (AFK_HAND_OFF_LABEL)")
+	p.bindHandOff(fs)
 	fs.StringVar(&p.denylist, "denylist", "", "paths the agent may never push, comma-separated globs (AFK_DENYLIST)")
 	fs.StringVar(&p.ciWait, "ci-wait", "", "how long before an unfinished CI run is looked at again (AFK_CI_WAIT)")
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
