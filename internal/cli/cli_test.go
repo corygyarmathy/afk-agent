@@ -24,6 +24,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -1144,6 +1145,14 @@ func standaloneDeps(t *testing.T) *deps {
 			HandBackLabel: "needs-decision",
 			StateDir:      t.TempDir(),
 		},
+		revise: &revise.Deps{
+			Tracker:      closedTracker{},
+			Login:        "afk-bot",
+			Repo:         "o/n",
+			Rounds:       1,
+			HandOffLabel: "ready-for-review",
+			StateDir:     t.TempDir(),
+		},
 	}
 }
 
@@ -1170,6 +1179,7 @@ func (closedTracker) Comment(context.Context, int, string) (github.Comment, erro
 }
 func (closedTracker) React(context.Context, int64, string) error { return nil }
 func (closedTracker) Label(context.Context, int, string) error   { return nil }
+func (closedTracker) Unlabel(context.Context, int, string) error { return nil }
 func (closedTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
 	return nil, nil
 }

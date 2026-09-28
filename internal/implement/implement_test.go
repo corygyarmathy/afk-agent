@@ -250,6 +250,10 @@ func (tr *tracker) ReactToIssue(_ context.Context, n int, content string) error 
 	return nil
 }
 
+func (tr *tracker) Unlabel(context.Context, int, string) error {
+	return errors.New("the implement kind never takes a label off")
+}
+
 func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()

@@ -286,7 +286,8 @@ func (ft *fileTracker) IssueReactions(context.Context, int) ([]github.Reaction, 
 
 func (ft *fileTracker) ReactToIssue(context.Context, int, string) error { return nil }
 
-func (ft *fileTracker) Label(context.Context, int, string) error { return nil }
+func (ft *fileTracker) Label(context.Context, int, string) error   { return nil }
+func (ft *fileTracker) Unlabel(context.Context, int, string) error { return nil }
 
 // killModel is a model that answers, unless this is the process to be killed
 // in the middle of a model run.

@@ -11,6 +11,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -123,6 +124,42 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 	}, nil
 }
 
+// reviseDeps builds what the revise kind's transitions reach, from the
+// parameters and the command's tracker.
+//
+// A variable for the reason reviewDeps is.
+var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker) (*revise.Deps, error) {
+	if tr == nil {
+		return nil, usagef("revise needs --repo (or set AFK_REPO)")
+	}
+	ep, err := p.effects()
+	if err != nil {
+		return nil, err
+	}
+	handOff, err := required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL")
+	if err != nil {
+		return nil, err
+	}
+	path, err := p.storePath()
+	if err != nil {
+		return nil, err
+	}
+	login, err := tr.Login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &revise.Deps{
+		Tracker:      tr.client,
+		Store:        st,
+		Login:        login,
+		Repo:         tr.client.Repo,
+		Rounds:       ep.rounds,
+		HandOffLabel: handOff,
+		// Beside the store, as every other kind's state directory is.
+		StateDir: filepath.Dir(path),
+	}, nil
+}
+
 // remote is the tracker's repository as git reaches it, with the installation
 // token minted and cached by the App the tracker uses: a clone, a fetch or a
 // push is the agent on the tracker like any other request (ADR 0005), and a
@@ -187,6 +224,8 @@ func kindDeps(ctx context.Context, kind store.Kind, p params, st store.Store, tr
 		d.review, err = reviewDeps(ctx, p, st, tr)
 	case store.KindImplement:
 		d.implement, err = implementDeps(ctx, p, st, tr)
+	case store.KindRevise:
+		d.revise, err = reviseDeps(ctx, p, st, tr)
 	}
 	if err != nil {
 		return nil, err

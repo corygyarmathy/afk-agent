@@ -1,0 +1,272 @@
+// Package revise is the revise job kind's transitions: a send-back on a pull
+// request becomes a revision of it (#131).
+//
+// A send-back's way in (#145):
+//
+//	start     --revise---------->  claiming  claim every unanswered command, and refuse what cannot be revised
+//	claiming  --revise-claimed-->  revising  the claims, the replies and the hand-off label taken off are on the tracker
+//	                               start     ... and there is nothing to revise: at rest
+//	                               claiming  made again, under the next key
+//
+// Making the revision, from revising, is #146's.
+//
+// The claim is its own transition for the reason implement's and review's are:
+// it is committed before anything can fail. A job that failed ahead of its
+// claim would come to rest with its command unanswered, and intake arms a
+// command only once. It is read back before the job moves on (package owed),
+// and so is the hand-off label it takes off: that label is how the review
+// queue counts a pull request waiting on the operator, and while its revision
+// is in flight the revision counts in its place.
+//
+// A send-back's points are the command's body after the word, in the
+// operator's own words. Every unanswered `/revise` with points is part of the
+// one send-back, in the order they were written: nothing was pushed between
+// them, so they were all written against the same head. What cannot be revised
+// is refused with one reply, and nothing else: a branch the agent cannot push
+// to, a command written while a revision was in flight, and a command with no
+// points. A closed pull request's commands are claimed and nothing more.
+//
+// Whether a command was written while a revision was in flight is read from
+// the tracker, by where the comments are in the conversation. This job's claim
+// cannot run during a flight - intake does not arm a job that is queued or
+// held - so a command written then is read afterwards, and its head has moved
+// on under it. It was written during one if an earlier `/revise`'s answer, the
+// agent's comment carrying owed.ReplyMarker for it, comes after it: the
+// revision's reply and its hand-back carry that marker for every command of
+// the send-back. A revision that ended without either, by parking, blocks
+// nothing after it.
+package revise
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/statefile"
+	"github.com/corygyarmathy/afk-agent/internal/store"
+	"github.com/corygyarmathy/afk-agent/internal/transition"
+)
+
+// The revise kind's states.
+const (
+	Start    = "start"
+	Claiming = "claiming"
+	Revising = "revising"
+)
+
+// Word is the command that sends a pull request back to be revised.
+const Word = "/revise"
+
+// Tracker is what the revise kind reads and writes. *github.Client is one.
+type Tracker interface {
+	owed.Tracker
+	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
+}
+
+// Deps is everything the revise kind's transitions reach. Built once, by the
+// command surface; the transitions themselves hold nothing.
+type Deps struct {
+	Tracker Tracker
+
+	// Store is read, never written: which round of an effect is next. This
+	// job's own state is the runner's to write.
+	Store store.Store
+
+	// Login is the agent's own account: whose reaction is a claim, and whose
+	// comment is an answer.
+	Login string
+
+	// Repo is the repository, as owner/name. A pull request whose branch is
+	// in any other - a fork's, or one deleted - is one the agent cannot push
+	// to.
+	Repo string
+
+	// Rounds is how many times something owed is made before one that never
+	// appears is an error. A parameter.
+	Rounds int
+
+	// HandOffLabel is the label the hand-off applies, which a claim that
+	// moves on to the work takes off. A parameter.
+	HandOffLabel string
+
+	// StateDir is where what is owed and the send-back wait - beside the
+	// store, never in it (ADR 0001 §5).
+	StateDir string
+}
+
+// Transitions is the revise kind, as registry entries.
+func Transitions(d *Deps) []transition.Transition {
+	return []transition.Transition{
+		{Name: "revise", Kind: store.KindRevise, From: Start, Run: d.claim},
+		{Name: "revise-claimed", Kind: store.KindRevise, From: Claiming, Run: d.claimed},
+	}
+}
+
+// SendBack is what a claim that moves on to the work hands it: the head the
+// send-back was written against, and its points.
+type SendBack struct {
+	Head   string  `json:"head"`
+	Points []Point `json:"points"`
+}
+
+// Point is one command's points, as the operator wrote them.
+type Point struct {
+	// Comment is the command the points are in, which the revision's reply
+	// answers.
+	Comment int64  `json:"comment"`
+	Text    string `json:"text"`
+}
+
+// claim is `revise`: take every unanswered command, refuse what cannot be
+// revised, and move on to the work with the rest.
+func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, error) {
+	if d.Repo == "" {
+		// Without it no branch would be one the agent can push to.
+		return transition.Result{}, errors.New("revise does not know its repository")
+	}
+	n := in.Job.Subject.Number
+	pr, err := d.Tracker.PullRequest(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	comments, err := d.Tracker.Comments(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	book := d.book()
+	commands, err := book.Unanswered(ctx, comments, Word)
+	if err != nil {
+		return transition.Result{}, err
+	}
+
+	var items []owed.Item
+	for _, c := range commands {
+		items = append(items, owed.Claim(c))
+	}
+	// Whatever an earlier claim handed the work is done with or given up
+	// on, and this is a fresh send-back or none.
+	if err := d.clear(in.Job.ID); err != nil {
+		return transition.Result{}, err
+	}
+	if pr.State != "open" {
+		// Nothing to revise, and nothing to say: the claims are enough to
+		// stop the commands being armed again.
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
+	}
+
+	var points []Point
+	for _, c := range commands {
+		text := Points(c.Body)
+		switch {
+		case !strings.EqualFold(pr.HeadRepo, d.Repo):
+			items = append(items, owed.Reply(fmt.Sprintf("revise-unpushable-comment-%d", c.ID), n, c,
+				fmt.Sprintf("This pull request's branch is not in %s, so the agent cannot push to it. Nothing was done.", d.Repo)))
+		case d.inFlight(comments, c.ID):
+			items = append(items, owed.Reply(fmt.Sprintf("revise-in-flight-comment-%d", c.ID), n, c,
+				fmt.Sprintf("A revision of this pull request was in flight when this was written, so the head it was written against is no longer the pull request's. Nothing was done: read what the revision changed, then `%s` again.", Word)))
+		case text == "":
+			items = append(items, owed.Reply(fmt.Sprintf("revise-no-points-comment-%d", c.ID), n, c,
+				fmt.Sprintf("There is nothing here to revise. Write the points after `%s`, in the same comment. Nothing was done.", Word)))
+		default:
+			points = append(points, Point{Comment: c.ID, Text: text})
+		}
+	}
+	if len(points) == 0 {
+		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
+	}
+
+	if labelled(pr, d.HandOffLabel) {
+		items = append(items, owed.Unlabel(fmt.Sprintf("revise-unlabel-comment-%d", points[0].Comment), n, d.HandOffLabel))
+	}
+	if err := statefile.Save(d.path(in.Job.ID), SendBack{Head: pr.HeadSHA, Points: points}); err != nil {
+		return transition.Result{}, err
+	}
+	return book.Owe(ctx, in, Claiming, owed.Record{Next: Revising, Due: true, Items: items})
+}
+
+// claimed is `revise-claimed`: on to what the claim decided, once what it owes
+// is on the tracker. A record lost with the state directory sends the job back
+// to claim, which reads the commands afresh: a send-back whose claims had
+// landed is lost with it, as the send-back it saved beside it would be.
+func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result, error) {
+	return d.book().Settle(ctx, in, transition.Result{State: Start, RunAt: in.Now})
+}
+
+// book is the revise kind's way to what it owes the tracker.
+func (d *Deps) book() *owed.Book {
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed")}
+}
+
+// inFlight reports whether command id was written while a revision was in
+// flight: an earlier `/revise` was first answered after it.
+//
+// A command written between an earlier one being refused and its refusal
+// landing reads the same way. That is seconds, and it is refused rather than
+// done against a head nobody checked.
+func (d *Deps) inFlight(comments []github.Comment, id int64) bool {
+	at := -1
+	for i, c := range comments {
+		if c.ID == id {
+			at = i
+		}
+	}
+	for _, earlier := range comments[:max(at, 0)] {
+		if !intake.IsCommand(earlier, d.Login, Word) {
+			continue
+		}
+		marker := owed.ReplyMarker(earlier.ID)
+		for i, c := range comments {
+			if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
+				if i > at {
+					return true
+				}
+				break
+			}
+		}
+	}
+	return false
+}
+
+// Points is a command's points: its body after the word, as written. Empty
+// when there are none.
+func Points(body string) string {
+	rest, _ := strings.CutPrefix(strings.TrimSpace(body), Word)
+	return strings.TrimSpace(rest)
+}
+
+// labelled reports whether a pull request carries label. Label names are
+// case-insensitive on GitHub.
+func labelled(pr github.PullRequest, label string) bool {
+	for _, l := range pr.Labels {
+		if label != "" && strings.EqualFold(l, label) {
+			return true
+		}
+	}
+	return false
+}
+
+// Load is the send-back the claim handed job's work, from the state directory.
+func (d *Deps) Load(jobID string) (SendBack, error) {
+	var sb SendBack
+	if err := statefile.Load(d.path(jobID), &sb); err != nil {
+		return SendBack{}, err
+	}
+	return sb, nil
+}
+
+func (d *Deps) path(jobID string) string {
+	return filepath.Join(d.StateDir, "send-backs", jobID+".json")
+}
+
+func (d *Deps) clear(jobID string) error {
+	if err := os.Remove(d.path(jobID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}

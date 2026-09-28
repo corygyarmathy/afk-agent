@@ -177,6 +177,10 @@ func (tr *tracker) ReactToIssue(_ context.Context, _ int, content string) error 
 
 // Label applies a label to the pull request, which the tracker reads as an
 // issue.
+func (tr *tracker) Unlabel(context.Context, int, string) error {
+	return errors.New("the review kind never takes a label off")
+}
+
 func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()

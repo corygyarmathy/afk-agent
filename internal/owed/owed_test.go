@@ -121,6 +121,20 @@ func (tr *tracker) Label(_ context.Context, n int, label string) error {
 	return err
 }
 
+func (tr *tracker) Unlabel(_ context.Context, n int, label string) error {
+	lands, err := tr.write("unlabel")
+	if lands {
+		var kept []string
+		for _, l := range tr.labels[n] {
+			if l != label {
+				kept = append(kept, l)
+			}
+		}
+		tr.labels[n] = kept
+	}
+	return err
+}
+
 // said is the comments on n carrying marker.
 func (tr *tracker) said(n int, marker string) int {
 	count := 0
@@ -294,6 +308,27 @@ func TestAFailedEffectDoesNotLoseTheOnesAfterIt(t *testing.T) {
 	}
 	if f.state() != "next" {
 		t.Errorf("the job is in %q, want next", f.state())
+	}
+}
+
+// A label owed off is taken off, and read back as gone. One lost on the way is
+// taken off again, and one already gone is taken off once and never waited on.
+func TestALabelOwedOffIsTakenOff(t *testing.T) {
+	for name, lose := range map[string]int{"landed": 0, "lost": 1} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t, 3, owed.Unlabel("claim-unlabel-12", 12, "ready-for-review"))
+			f.tr.labels[12] = []string{"ready-for-review", "bug"}
+			f.tr.lose["unlabel"] = lose
+			if errs := f.drive(); len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			if l := strings.Join(f.tr.labels[12], ","); l != "bug" {
+				t.Errorf("labels on the pull request are %q, want only bug", l)
+			}
+			if f.tr.writes["unlabel"] != 1 || f.state() != "next" {
+				t.Errorf("%d removals and the job in %q, want 1 and next", f.tr.writes["unlabel"], f.state())
+			}
+		})
 	}
 }
 
