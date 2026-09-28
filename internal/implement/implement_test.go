@@ -63,6 +63,9 @@ type tracker struct {
 	reactions   map[int64][]github.Reaction
 	nextID      int64
 
+	// eyes is the reactions on the issue itself.
+	eyes []github.Reaction
+
 	// failComments is how many of the agent's next comments fail, without
 	// landing.
 	failComments int
@@ -141,13 +144,30 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	return nil
 }
 
-// Nothing here claims a pull request's description: that is the review's.
-func (tr *tracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
-	return nil, nil
+// Only the issue is claimed this way. A pull request's description is the
+// review's to claim.
+func (tr *tracker) IssueReactions(_ context.Context, n int) ([]github.Reaction, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if n != issue {
+		return nil, nil
+	}
+	return append([]github.Reaction(nil), tr.eyes...), nil
 }
 
-func (tr *tracker) ReactToIssue(context.Context, int, string) error {
-	return errors.New("the implement kind never claims a description")
+func (tr *tracker) ReactToIssue(_ context.Context, n int, content string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if n != issue {
+		return errors.New("the implement kind never claims a description")
+	}
+	for _, r := range tr.eyes {
+		if r.Login == agent && r.Content == content {
+			return nil
+		}
+	}
+	tr.eyes = append(tr.eyes, github.Reaction{Login: agent, Content: content})
+	return nil
 }
 
 func (tr *tracker) Label(_ context.Context, n int, label string) error {
@@ -391,6 +411,45 @@ func TestAnImplementCommandIsClaimedAndTheWorkStarts(t *testing.T) {
 	}
 }
 
+// Work nobody commanded - taken through the eligibility label, or by hand - is
+// the same job (ADR 0001 §14): it is claimed on the issue itself, and starts
+// the same way. Nothing asked, so
+// there is nothing to answer.
+func TestWorkNobodyCommandedIsClaimedOnTheIssue(t *testing.T) {
+	tr := newTracker()
+	f := setup(t, tr)
+
+	out, err := f.claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(out.Performed, " "); got != "claim-issue-7-0" {
+		t.Errorf("performed [%s], want [claim-issue-7-0]", got)
+	}
+	if !intake.Claimed(tr.eyes, agent) || len(tr.eyes) != 1 {
+		t.Errorf("reactions on the issue = %+v, want the agent's claim once", tr.eyes)
+	}
+	if j := f.now(); j.State != implement.Implementing || !j.NextRunAt.Equal(now) {
+		t.Errorf("job = %+v, want it due now in %s", j, implement.Implementing)
+	}
+	if posted := tr.byAgent(); len(posted) != 0 {
+		t.Errorf("the agent said %d things, want nothing: %+v", len(posted), posted)
+	}
+}
+
+// A job that claims a command claims that, and not the issue as well.
+func TestCommandedWorkDoesNotClaimTheIssue(t *testing.T) {
+	tr := newTracker(command(1))
+	f := setup(t, tr)
+
+	if _, err := f.claim(); err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.eyes) != 0 {
+		t.Errorf("reactions on the issue = %+v, want none", tr.eyes)
+	}
+}
+
 // Only a command is claimed: not a comment from an account without write
 // access, not the agent's own, and not one the agent already answered.
 func TestOnlyUnansweredCommandsAreClaimed(t *testing.T) {
@@ -416,20 +475,6 @@ func TestOnlyUnansweredCommandsAreClaimed(t *testing.T) {
 		if tr.claims(id) != 0 {
 			t.Errorf("comment %d was claimed, and it is not a command", id)
 		}
-	}
-}
-
-// A job nobody commanded is the same job (ADR 0001 §14): with no command on
-// the issue, the work starts all the same, and nothing is claimed.
-func TestAJobWithNoCommandStillStarts(t *testing.T) {
-	f := setup(t, newTracker())
-
-	out, err := f.claim()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out.Performed) != 0 || f.now().State != implement.Implementing {
-		t.Errorf("outcome = %s, want the work started and nothing performed", out)
 	}
 }
 

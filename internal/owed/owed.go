@@ -54,6 +54,7 @@ type what string
 const (
 	claimComment what = "claim-comment" // the agent's 👀 on a comment
 	claimPR      what = "claim-pr"      // the agent's 👀 on a pull request's description
+	claimIssue   what = "claim-issue"   // the agent's 👀 on an issue itself
 	comment      what = "comment"       // a comment of the agent's, carrying a marker
 	label        what = "label"         // a label
 )
@@ -98,6 +99,12 @@ func ClaimPullRequest(n int) Item {
 	return Item{What: claimPR, Stem: fmt.Sprintf("claim-pr-%d", n), On: n}
 }
 
+// ClaimIssue is the agent's 👀 on issue n itself: the claim on work nobody
+// asked for, which has no request to claim.
+func ClaimIssue(n int) Item {
+	return Item{What: claimIssue, Stem: fmt.Sprintf("claim-issue-%d", n), On: n}
+}
+
 // Reply is a comment on issue or pull request n answering command c. It is
 // read back by a marker naming c, so it is said once for each command.
 func Reply(stem string, n int, c github.Comment, text string) Item {
@@ -121,7 +128,7 @@ func (it Item) valid() error {
 	case it.Stem == "":
 		return errors.New("owed item has no key stem")
 	case it.What == claimComment && it.Comment != 0:
-	case it.What == claimPR && it.On > 0:
+	case (it.What == claimPR || it.What == claimIssue) && it.On > 0:
 	case it.What == comment && it.On > 0 && it.Marker != "" && strings.Contains(it.Body, it.Marker):
 	case it.What == label && it.On > 0 && it.Label != "":
 	default:
@@ -297,7 +304,7 @@ func (b *Book) do(it Item) func(context.Context) error {
 	switch it.What {
 	case claimComment:
 		return func(ctx context.Context) error { return b.Tracker.React(ctx, it.Comment, intake.Claim) }
-	case claimPR:
+	case claimPR, claimIssue:
 		return func(ctx context.Context) error { return b.Tracker.ReactToIssue(ctx, it.On, intake.Claim) }
 	case label:
 		return func(ctx context.Context) error { return b.Tracker.Label(ctx, it.On, it.Label) }
@@ -349,7 +356,7 @@ func (b *Book) there(ctx context.Context, it Item, comments map[int][]github.Com
 			return false, err
 		}
 		return intake.Claimed(reactions, b.Login), nil
-	case claimPR:
+	case claimPR, claimIssue:
 		reactions, err := b.Tracker.IssueReactions(ctx, it.On)
 		if err != nil {
 			return false, err

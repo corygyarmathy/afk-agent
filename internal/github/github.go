@@ -115,6 +115,13 @@ type Issue struct {
 	// Labels is the names of the labels on it.
 	Labels []string
 
+	// BlockedBy is how many open issues block it, from its native
+	// dependencies. DependenciesRead is whether the API said at all: an issue
+	// served without the summary has blockers nobody can read, which is not
+	// the same as none.
+	BlockedBy        int
+	DependenciesRead bool
+
 	// UpdatedAt is when it last changed. A new comment moves it.
 	UpdatedAt time.Time
 }
@@ -477,11 +484,20 @@ type wireIssue struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 
+	// Dependencies is the native dependencies' summary. Its blocked_by counts
+	// open blockers only; total_blocked_by counts closed ones too.
+	Dependencies *struct {
+		BlockedBy int `json:"blocked_by"`
+	} `json:"issue_dependencies_summary"`
+
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (w wireIssue) issue() Issue {
 	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, UpdatedAt: w.UpdatedAt}
+	if w.Dependencies != nil {
+		is.BlockedBy, is.DependenciesRead = w.Dependencies.BlockedBy, true
+	}
 	for _, l := range w.Labels {
 		is.Labels = append(is.Labels, l.Name)
 	}

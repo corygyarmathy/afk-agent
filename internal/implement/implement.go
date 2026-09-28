@@ -3,7 +3,7 @@
 //
 // An issue's whole way to a pull request handed off for review (#49-#53):
 //
-//	start        --implement-------------->  claiming      claim every unanswered command
+//	start        --implement-------------->  claiming      claim every unanswered command, or the issue
 //	claiming     --implement-claimed------>  implementing  the claims, and any reply, are on the tracker
 //	                                         start         ... and a pull request is open already: at rest
 //	                                         claiming      made again, under the next key
@@ -51,21 +51,23 @@
 // transiently has not had a go at the work, and a gate failure is not a
 // model's fault.
 //
-// Nothing here asks who made the job due. A command and, later, the unattended
-// queue produce the same job (ADR 0001 §14), and `implement` claims whatever
-// commands there are - none, for a job nobody commanded.
+// Nothing here asks who made the job due. A command and the unattended queue
+// produce the same job (ADR 0001 §14), and `implement` claims whatever
+// commands there are, or the issue itself when nobody commanded it.
 package implement
 
 import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -268,6 +270,14 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		// Nothing to implement, and nothing to say: the claims are
 		// enough to stop the commands being armed again.
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
+	}
+	if !slices.ContainsFunc(comments, func(c github.Comment) bool { return intake.IsCommand(c, d.Login, Word) }) {
+		// Nobody asked - the work was taken through the eligibility label,
+		// or by hand - so the claim goes on the issue itself. It is what
+		// stops intake taking the issue again once the store is gone. Work
+		// a command asked for is claimed on the command, even once it is
+		// answered and the job starts over.
+		items = append(items, owed.ClaimIssue(n))
 	}
 	pr, ok, err := d.open(ctx, d.forIssue(n))
 	if err != nil {

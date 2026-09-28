@@ -32,6 +32,17 @@ type tracker struct {
 	// in it was last changed at since.
 	updated map[int]time.Time
 
+	// labels is the labels on each issue, blocked how many open issues block
+	// it, and blind the issues listed with no dependency summary at all.
+	labels  map[int][]string
+	blocked map[int]int
+	blind   map[int]bool
+
+	// eyes is the reactions on each issue itself, and looked the issues
+	// whose reactions were read.
+	eyes   map[int][]github.Reaction
+	looked []int
+
 	// asked is the comments whose reactions were read, and read the subjects
 	// whose comments were.
 	asked []int64
@@ -44,7 +55,10 @@ var since = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
 	var out []github.Issue
 	for _, n := range tr.issues {
-		out = append(out, github.Issue{Number: n, State: "open", UpdatedAt: tr.updatedAt(n)})
+		out = append(out, github.Issue{
+			Number: n, State: "open", Labels: tr.labels[n], UpdatedAt: tr.updatedAt(n),
+			BlockedBy: tr.blocked[n], DependenciesRead: !tr.blind[n],
+		})
 	}
 	for _, n := range tr.prs {
 		out = append(out, github.Issue{Number: n, State: "open", PullRequest: true, UpdatedAt: tr.updatedAt(n)})
@@ -86,6 +100,11 @@ func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, er
 		return nil, err
 	}
 	return tr.reactions[id], nil
+}
+
+func (tr *tracker) IssueReactions(_ context.Context, n int) ([]github.Reaction, error) {
+	tr.looked = append(tr.looked, n)
+	return tr.eyes[n], nil
 }
 
 func comment(id int64, login, association, body string) github.Comment {
@@ -618,6 +637,166 @@ func TestAnIntakeThatCannotWorkIsRefused(t *testing.T) {
 			tr := &tracker{prs: []int{12}}
 			in := intakeFor(t, storetest.Open(t), tr)
 			tc.spoil(in)
+			if _, err := in.Pass(context.Background()); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// eligible is the eligibility label the fixtures configure.
+const eligible = "ready-for-agent"
+
+// unattended is an intake that takes an issue carrying the eligibility label
+// for implement work, as the command surface configures it.
+func unattended(t *testing.T, s store.Store, tr *tracker) *intake.Intake {
+	t.Helper()
+	in := intakeFor(t, s, tr)
+	in.Unattended = intake.Unattended{Label: eligible, Kind: store.KindImplement, Start: "start"}
+	return in
+}
+
+// An issue carrying the eligibility label, with nothing blocking it and nobody
+// having taken it, becomes the same due job `/implement` makes. Nothing asked,
+// so there is nothing to claim here: the job claims the issue itself. Label
+// names are case-insensitive on GitHub, so the label is too.
+func TestAnEligibleIssueBecomesADueImplementJob(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{issues: []int{7}, labels: map[int][]string{7: {"Ready-For-Agent"}}}
+	in := unattended(t, s, tr)
+
+	made := pass(t, in)
+	if got := ids(made); len(got) != 1 || got[0] != "implement-issue-7" {
+		t.Fatalf("made due %v, want [implement-issue-7]", got)
+	}
+	j := storetest.Job(t, s, "implement-issue-7")
+	if j.State != "start" || !j.NextRunAt.Equal(now) || j.Lease != nil {
+		t.Errorf("job = %+v, want state start, due now, no lease", j)
+	}
+
+	// The job is there, and that is enough: nothing is taken again, and
+	// nothing on the tracker is asked about it.
+	tr.looked = nil
+	if again := pass(t, in); len(again) != 0 {
+		t.Errorf("the next pass made %v due again", ids(again))
+	}
+	if len(tr.looked) != 0 {
+		t.Errorf("read the reactions of issues %v, which have a job", tr.looked)
+	}
+}
+
+// With no label configured nothing is taken unattended, and a label other than
+// the configured one is not it.
+func TestWithoutTheLabelNothingIsTakenUnattended(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{issues: []int{7, 8}, labels: map[int][]string{7: {eligible}, 8: {"ready"}}}
+
+	if made := pass(t, intakeFor(t, s, tr)); len(made) != 0 {
+		t.Errorf("no label configured, and made %v due", ids(made))
+	}
+	if made := pass(t, unattended(t, s, tr)); len(ids(made)) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due, want only the issue carrying %q", ids(made), eligible)
+	}
+}
+
+// An open blocker makes an issue ineligible whatever its labels say, and so
+// do blockers nobody can read. Once the blocker closes, the issue is taken.
+func TestABlockedIssueIsTakenOnceItsBlockerCloses(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues:  []int{7, 8},
+		labels:  map[int][]string{7: {eligible}, 8: {eligible}},
+		blocked: map[int]int{7: 1},
+		blind:   map[int]bool{8: true},
+	}
+	in := unattended(t, s, tr)
+
+	if made := pass(t, in); len(made) != 0 {
+		t.Fatalf("made %v due, and both issues are blocked or unreadable", ids(made))
+	}
+	tr.blocked[7] = 0
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due once the blocker closed, want [implement-issue-7]", ids(made))
+	}
+}
+
+// An issue the agent has claimed was taken, whatever the store says: a store
+// wiped under a claimed issue does not take it again. Nor is an issue taken
+// that has a job already, whatever made it: a command's work at rest, handed
+// off or back, is not the queue's to start over.
+func TestAnIssueAlreadyClaimedOrWithAJobIsNotTaken(t *testing.T) {
+	s := storetest.Open(t)
+	if _, err := s.Ensure(context.Background(), store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: 8}, "start", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	tr := &tracker{
+		issues: []int{7, 8, 9},
+		labels: map[int][]string{7: {eligible}, 8: {eligible}, 9: {eligible}},
+		eyes: map[int][]github.Reaction{
+			7: {{Login: "AFK-Bot", Content: intake.Claim}},
+			9: {{Login: "alice", Content: intake.Claim}},
+		},
+	}
+	in := unattended(t, s, tr)
+
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-9" {
+		t.Errorf("made %v due, want only the issue someone else reacted to", ids(made))
+	}
+	if j := storetest.Job(t, s, "implement-issue-8"); !j.NextRunAt.IsZero() {
+		t.Errorf("the job at rest on issue 8 was made due: %+v", j)
+	}
+
+	// A claim stays a claim, so it is read once rather than every pass.
+	tr.looked = nil
+	if made := pass(t, in); len(made) != 0 {
+		t.Errorf("the next pass made %v due", ids(made))
+	}
+	if len(tr.looked) != 0 {
+		t.Errorf("read the reactions of issues %v again", tr.looked)
+	}
+}
+
+// A command and the label on the same issue in the same pass are one job.
+func TestACommandAndTheLabelMakeOneJob(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues:   []int{7},
+		labels:   map[int][]string{7: {eligible}},
+		comments: map[int][]github.Comment{7: {comment(1, "alice", "OWNER", "/implement")}},
+	}
+	if made := pass(t, unattended(t, s, tr)); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due, want [implement-issue-7] once", ids(made))
+	}
+}
+
+// Intake takes eligible issues oldest first, which on GitHub is lowest number
+// first, whatever order the listing serves them in. A pull request is never
+// taken: the label opts an issue in.
+func TestEligibleIssuesAreTakenLowestNumberFirst(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues: []int{31, 4, 17, 9},
+		prs:    []int{2},
+		labels: map[int][]string{31: {eligible}, 4: {eligible}, 17: {eligible}, 9: {eligible}, 2: {eligible}},
+	}
+	made := pass(t, unattended(t, s, tr))
+	if got, want := strings.Join(ids(made), " "), "implement-issue-4 implement-issue-9 implement-issue-17 implement-issue-31"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+}
+
+func TestAnUnattendedIntakeThatCannotWorkIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spoil func(*intake.Unattended)
+		want  string
+	}{
+		{"no kind", func(u *intake.Unattended) { u.Kind = "" }, "unknown job kind"},
+		{"no start", func(u *intake.Unattended) { u.Start = "" }, "no start state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := unattended(t, storetest.Open(t), &tracker{})
+			tc.spoil(&in.Unattended)
 			if _, err := in.Pass(context.Background()); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want it to contain %q", err, tc.want)
 			}

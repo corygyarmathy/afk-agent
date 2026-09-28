@@ -20,6 +20,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
@@ -106,6 +107,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			args:     []string{"help"},
 			want:     ExitOK,
 			stdoutIs: "--sensitive <paths>   AFK_SENSITIVE",
+		},
+		{
+			name:     "help lists the eligibility label",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--eligibility-label <l>",
 		},
 		{
 			name:     "version",
@@ -779,9 +786,15 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 			t.Errorf("err = %v, want it to contain %q", err, tc.want)
 		}
 	}
-	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute)
+	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if in.Unattended != (intake.Unattended{}) {
+		t.Errorf("no eligibility label, and intake takes %+v unattended", in.Unattended)
+	}
+	if labelled, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, "ready-for-agent"); err != nil || labelled.Unattended != unattended("ready-for-agent") {
+		t.Errorf("with an eligibility label, intake takes %+v unattended (%v), want %+v", labelled.Unattended, err, unattended("ready-for-agent"))
 	}
 	if deps.Tracker != tr.client || in.Tracker != tr.client {
 		t.Error("review and intake do not share the command's client")
@@ -1002,6 +1015,27 @@ func TestAPoolAnswersOnlyTheCommandsItCanRun(t *testing.T) {
 	}
 	if got := runnable(commands(), catalogue(standaloneDeps(t))); len(got) != len(commands()) {
 		t.Errorf("a pool with every kind answers %d of %d commands", len(got), len(commands()))
+	}
+}
+
+// Unattended work is the job /implement makes, on an issue, and a pool that
+// cannot run it takes nothing unattended.
+func TestUnattendedWorkIsTheJobImplementMakes(t *testing.T) {
+	u := unattended("ready-for-agent")
+	var cmd intake.Command
+	for _, c := range commands() {
+		if c.Word == implement.Word {
+			cmd = c
+		}
+	}
+	if u.Label != "ready-for-agent" || u.Kind != cmd.Kind || u.Start != cmd.Start || subjectOf(u.Kind) != store.SubjectIssue {
+		t.Errorf("unattended = %+v, want %s's %s job from %q, on an issue", u, cmd.Word, cmd.Kind, cmd.Start)
+	}
+	if takeable(u, catalogue(&deps{review: standaloneDeps(t).review})) {
+		t.Error("a pool with no implement configured takes issues unattended")
+	}
+	if !takeable(u, catalogue(standaloneDeps(t))) {
+		t.Error("a pool with implement configured takes no issue unattended")
 	}
 }
 
