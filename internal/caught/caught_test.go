@@ -17,11 +17,13 @@ const login = "afk[bot]"
 // tracker serves runs by conclusion and jobs by run, and remembers who was
 // asked about.
 type tracker struct {
-	runs   map[string][]github.WorkflowRun
-	totals map[string]int
-	jobs   map[int64][]github.WorkflowJob
-	actors []string
-	err    error
+	runs    map[string][]github.WorkflowRun
+	totals  map[string]int
+	jobs    map[int64][]github.WorkflowJob
+	started int
+	actors  []string
+	read    []int64
+	err     error
 }
 
 func (t *tracker) WorkflowRuns(_ context.Context, actor, conclusion string) ([]github.WorkflowRun, int, error) {
@@ -33,7 +35,13 @@ func (t *tracker) WorkflowRuns(_ context.Context, actor, conclusion string) ([]g
 	return t.runs[conclusion], total, t.err
 }
 
+func (t *tracker) WorkflowRunCount(_ context.Context, actor string) (int, error) {
+	t.actors = append(t.actors, actor)
+	return t.started, t.err
+}
+
 func (t *tracker) WorkflowJobs(_ context.Context, run int64) ([]github.WorkflowJob, error) {
+	t.read = append(t.read, run)
 	return t.jobs[run], nil
 }
 
@@ -44,8 +52,8 @@ func at(day, hour int) time.Time { return time.Date(2026, 9, day, hour, 0, 0, 0,
 func TestAFailedOrTimedOutJobIsACatch(t *testing.T) {
 	tr := &tracker{
 		runs: map[string][]github.WorkflowRun{
-			"failure":   {{ID: 1, HeadSHA: "aaa", HeadBranch: "afk/issue-7", Created: at(20, 10)}},
-			"timed_out": {{ID: 2, HeadSHA: "bbb", HeadBranch: "afk/issue-8", Created: at(21, 10)}},
+			"failure":   {{ID: 1, Event: "pull_request", HeadSHA: "aaa", HeadBranch: "afk/issue-7", Created: at(20, 10)}},
+			"timed_out": {{ID: 2, Event: "pull_request", HeadSHA: "bbb", HeadBranch: "afk/issue-8", Created: at(21, 10)}},
 		},
 		jobs: map[int64][]github.WorkflowJob{
 			1: {{Name: "test", Conclusion: "failure", URL: "u1"}, {Name: "vet", Conclusion: "success"}, {Name: "lint", Conclusion: "cancelled"}, {Name: "deploy", Conclusion: "skipped"}},
@@ -78,10 +86,10 @@ func TestACheckIsCaughtOnceForEachHead(t *testing.T) {
 	tr := &tracker{
 		runs: map[string][]github.WorkflowRun{
 			"failure": {
-				{ID: 1, HeadSHA: "aaa", Created: at(20, 10)},
-				{ID: 2, HeadSHA: "aaa", Created: at(20, 11)},
-				{ID: 2, HeadSHA: "aaa", Created: at(20, 11)},
-				{ID: 3, HeadSHA: "bbb", Created: at(20, 12)},
+				{ID: 1, Event: "pull_request", HeadSHA: "aaa", Created: at(20, 10)},
+				{ID: 2, Event: "pull_request", HeadSHA: "aaa", Created: at(20, 11)},
+				{ID: 2, Event: "pull_request", HeadSHA: "aaa", Created: at(20, 11)},
+				{ID: 3, Event: "pull_request", HeadSHA: "bbb", Created: at(20, 12)},
 			},
 		},
 		jobs: map[int64][]github.WorkflowJob{
@@ -122,14 +130,15 @@ func TestTheReportCountsByCheckAndSaysWhatItCovers(t *testing.T) {
 			{Head: "aaaaaaaaaaaaaaaa", Branch: "afk/issue-7", Check: "test", URL: "u2", At: at(20, 10)},
 			{Head: "bbbbbbbbbbbbbbbb", Branch: "afk/issue-8", Check: "test", URL: "u3", At: at(27, 9)},
 		},
-		Runs: 2, Failed: 2,
+		Login: login, Started: 40,
+		Runs: 2, Listed: 2,
 	}
 
 	var b strings.Builder
 	if err := r.Write(&b, false); err != nil {
 		t.Fatal(err)
 	}
-	want := "2\ttest\n1\tvet\n3 catches on 2 heads, from 2026-09-20 to 2026-09-27.\n"
+	want := "2\ttest\n1\tvet\n3 catches on 2 heads, from 2026-09-20 to 2026-09-27, of 40 runs afk[bot] started.\n"
 	if b.String() != want {
 		t.Errorf("got\n%s\nwant\n%s", b.String(), want)
 	}
@@ -145,11 +154,100 @@ func TestTheReportCountsByCheckAndSaysWhatItCovers(t *testing.T) {
 
 func TestAReportOfNothingSaysSo(t *testing.T) {
 	var b strings.Builder
-	if err := (caught.Report{}).Write(&b, true); err != nil {
+	if err := (caught.Report{Login: login, Started: 1}).Write(&b, true); err != nil {
 		t.Fatal(err)
 	}
-	if want := "CI has caught nothing the local gate passed.\n"; b.String() != want {
+	if want := "CI has caught nothing the local gate passed, of 1 run afk[bot] started.\n"; b.String() != want {
 		t.Errorf("got %q, want %q", b.String(), want)
+	}
+}
+
+// A login that matches no run reads exactly like an agent CI never caught, so
+// a report of no runs at all says that it may be the login.
+func TestAReportOfNoRunsAtAllSaysToCheckTheLogin(t *testing.T) {
+	r, err := caught.Read(context.Background(), &tracker{}, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := r.Write(&b, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "CI has caught nothing the local gate passed, of 0 runs afk[bot] started.\n" +
+		"GitHub serves no run afk[bot] started: check that it is the agent's login.\n"
+	if b.String() != want {
+		t.Errorf("got\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+// A run the agent's push did not start on its head - a workflow on an issue
+// it claimed, or a comment it wrote - ran on the default branch, where the
+// gate never ran, so its jobs are not read.
+func TestARunOnAnotherEventIsNotACatch(t *testing.T) {
+	tr := &tracker{
+		runs: map[string][]github.WorkflowRun{
+			"failure": {
+				{ID: 1, Event: "issue_comment", HeadSHA: "main", HeadBranch: "main", Created: at(20, 10)},
+				{ID: 2, Event: "issues", HeadSHA: "main", HeadBranch: "main", Created: at(20, 11)},
+				{ID: 3, Event: "dynamic", HeadSHA: "aaa", HeadBranch: "refs/pull/7/head", Created: at(20, 12)},
+				{ID: 4, Event: "push", HeadSHA: "bbb", HeadBranch: "afk/issue-8", Created: at(20, 13)},
+			},
+		},
+		jobs: map[int64][]github.WorkflowJob{
+			1: {{Name: "triage", Conclusion: "failure"}},
+			2: {{Name: "triage", Conclusion: "failure"}},
+			3: {{Name: "Analyze (go)", Conclusion: "failure"}},
+			4: {{Name: "test", Conclusion: "failure"}},
+		},
+	}
+	r, err := caught.Read(context.Background(), tr, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range r.Catches {
+		got = append(got, c.Head+" "+c.Check)
+	}
+	if want := []string{"aaa Analyze (go)", "bbb test"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if want := []int64{3, 4}; !reflect.DeepEqual(tr.read, want) {
+		t.Errorf("read the jobs of runs %v, want only %v", tr.read, want)
+	}
+}
+
+// A human's push cancels the run on the agent's head, after one of its jobs
+// has already failed there. The failed job is a catch; the jobs cancelled
+// around it are not.
+func TestAFailedJobInACancelledRunIsACatch(t *testing.T) {
+	tr := &tracker{
+		runs: map[string][]github.WorkflowRun{
+			"cancelled": {{ID: 1, Event: "pull_request", HeadSHA: "aaa", HeadBranch: "afk/issue-7", Created: at(20, 10)}},
+		},
+		jobs: map[int64][]github.WorkflowJob{
+			1: {{Name: "test", Conclusion: "failure", URL: "u1"}, {Name: "vet", Conclusion: "cancelled"}},
+		},
+	}
+	r, err := caught.Read(context.Background(), tr, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []caught.Catch{{Head: "aaa", Branch: "afk/issue-7", Check: "test", URL: "u1", At: at(20, 10)}}
+	if !reflect.DeepEqual(r.Catches, want) {
+		t.Errorf("got %+v\nwant %+v", r.Catches, want)
+	}
+}
+
+// What the watch logs and what this counts are one definition.
+func TestACatchIsAFailedOrTimedOutCheck(t *testing.T) {
+	for conclusion, want := range map[string]bool{
+		"failure": true, "timed_out": true,
+		"cancelled": false, "action_required": false, "startup_failure": false, "stale": false,
+		"success": false, "neutral": false, "skipped": false,
+	} {
+		if got := caught.IsCatch(conclusion); got != want {
+			t.Errorf("IsCatch(%q) = %v, want %v", conclusion, got, want)
+		}
 	}
 }
 
@@ -158,7 +256,7 @@ func TestAReportOfNothingSaysSo(t *testing.T) {
 // whole.
 func TestAReportGitHubCutOffSaysSo(t *testing.T) {
 	tr := &tracker{
-		runs:   map[string][]github.WorkflowRun{"failure": {{ID: 1, HeadSHA: "aaa", Created: at(20, 10)}}},
+		runs:   map[string][]github.WorkflowRun{"failure": {{ID: 1, Event: "pull_request", HeadSHA: "aaa", Created: at(20, 10)}}},
 		totals: map[string]int{"failure": 1200},
 		jobs:   map[int64][]github.WorkflowJob{1: {{Name: "test", Conclusion: "failure"}}},
 	}
@@ -170,7 +268,7 @@ func TestAReportGitHubCutOffSaysSo(t *testing.T) {
 	if err := r.Write(&b, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.String(), "GitHub served 1 of 1200 failed runs; the oldest are not counted.") {
+	if !strings.Contains(b.String(), "GitHub served 1 of 1200 runs that did not pass; the oldest are not counted.") {
 		t.Errorf("got\n%s", b.String())
 	}
 }

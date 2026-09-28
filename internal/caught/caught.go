@@ -19,15 +19,40 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 )
 
-// failed is the conclusions of a job that ran and did not pass, and of the
-// run that holds one. A cancelled job is not one: CI cancels a pull request's
-// run when a newer push makes it obsolete.
+// failed is the conclusions of a check that ran and did not pass. A cancelled
+// check is not one: CI cancels a pull request's run when a newer push makes it
+// obsolete. Nor is one that never ran - waiting for approval, failing to
+// start, or gone stale - which no gate could have caught.
 var failed = []string{"failure", "timed_out"}
+
+// listed is the conclusions of a run that can hold a failed job. A cancelled
+// run can: a human's push to the branch cancels a run whose jobs have already
+// failed on the agent's head. It costs a request for each cancelled run.
+var listed = []string{"failure", "timed_out", "cancelled"}
+
+// onHead is the events whose runs are on the head a push made: the push
+// itself, the pull request it updated, and what GitHub starts beside those,
+// such as code scanning. The agent is the actor of other events as well - an
+// issue it claims, a comment it writes, a label it applies - and their runs
+// are on the default branch, where the gate never ran.
+var onHead = map[string]bool{"push": true, "pull_request": true, "dynamic": true}
+
+// IsCatch reports whether a check that finished with conclusion is a catch,
+// when the local gate passed its head.
+func IsCatch(conclusion string) bool {
+	for _, c := range failed {
+		if conclusion == c {
+			return true
+		}
+	}
+	return false
+}
 
 // Tracker is what reading the catches needs of the tracker. *github.Client is
 // one.
 type Tracker interface {
 	WorkflowRuns(ctx context.Context, actor, conclusion string) ([]github.WorkflowRun, int, error)
+	WorkflowRunCount(ctx context.Context, actor string) (int, error)
 	WorkflowJobs(ctx context.Context, run int64) ([]github.WorkflowJob, error)
 }
 
@@ -48,27 +73,40 @@ type Catch struct {
 type Report struct {
 	Catches []Catch
 
-	// Runs is how many failed runs were read, and Failed how many GitHub
-	// says there are. Fewer read than there are means GitHub cut the
+	// Login is the account whose runs were read, and Started how many runs
+	// GitHub says it started, whatever they concluded. None at all is more
+	// likely a wrong login than an agent that never pushed.
+	Login   string
+	Started int
+
+	// Runs is how many runs that did not pass were read, and Listed how many
+	// GitHub says there are. Fewer read than there are means GitHub cut the
 	// listing off, and the oldest were not counted.
-	Runs, Failed int
+	Runs, Listed int
 }
 
-// Read is every catch on a head login pushed.
+// Read is every catch on a head login pushed. It costs a request for each run
+// listed, on every call, which is fine by hand and is why nothing calls it on a
+// schedule.
 func Read(ctx context.Context, t Tracker, login string) (Report, error) {
-	var r Report
+	r := Report{Login: login}
+	started, err := t.WorkflowRunCount(ctx, login)
+	if err != nil {
+		return Report{}, err
+	}
+	r.Started = started
 	seen := map[int64]bool{}
 	caught := map[[2]string]bool{}
-	for _, conclusion := range failed {
+	for _, conclusion := range listed {
 		runs, total, err := t.WorkflowRuns(ctx, login, conclusion)
 		if err != nil {
 			return Report{}, err
 		}
-		r.Failed += total
+		r.Listed += total
 		r.Runs += len(runs)
 		for _, run := range runs {
 			// A listing paged while new runs land can serve one twice.
-			if seen[run.ID] {
+			if seen[run.ID] || !onHead[run.Event] {
 				continue
 			}
 			seen[run.ID] = true
@@ -77,7 +115,7 @@ func Read(ctx context.Context, t Tracker, login string) (Report, error) {
 				return Report{}, err
 			}
 			for _, j := range jobs {
-				if !isFailed(j.Conclusion) {
+				if !IsCatch(j.Conclusion) {
 					continue
 				}
 				// A second run on the same head - a re-run, or another
@@ -93,15 +131,6 @@ func Read(ctx context.Context, t Tracker, login string) (Report, error) {
 	}
 	sort.SliceStable(r.Catches, func(i, j int) bool { return r.Catches[i].At.Before(r.Catches[j].At) })
 	return r, nil
-}
-
-func isFailed(conclusion string) bool {
-	for _, c := range failed {
-		if conclusion == c {
-			return true
-		}
-	}
-	return false
 }
 
 // Count is how many times one check was caught.
@@ -148,23 +177,29 @@ func (r Report) Write(w io.Writer, list bool) error {
 	if _, err := fmt.Fprintln(w, r.summary()); err != nil {
 		return err
 	}
-	if r.Runs < r.Failed {
-		_, err := fmt.Fprintf(w, "GitHub served %d of %d failed runs; the oldest are not counted.\n", r.Runs, r.Failed)
+	if r.Started == 0 {
+		if _, err := fmt.Fprintf(w, "GitHub serves no run %s started: check that it is the agent's login.\n", r.Login); err != nil {
+			return err
+		}
+	}
+	if r.Runs < r.Listed {
+		_, err := fmt.Fprintf(w, "GitHub served %d of %d runs that did not pass; the oldest are not counted.\n", r.Runs, r.Listed)
 		return err
 	}
 	return nil
 }
 
 func (r Report) summary() string {
+	of := fmt.Sprintf("of %s %s started", plural(r.Started, "run", "runs"), r.Login)
 	if len(r.Catches) == 0 {
-		return "CI has caught nothing the local gate passed."
+		return fmt.Sprintf("CI has caught nothing the local gate passed, %s.", of)
 	}
 	heads := map[string]bool{}
 	for _, c := range r.Catches {
 		heads[c.Head] = true
 	}
 	first, last := r.Catches[0].At.UTC().Format(time.DateOnly), r.Catches[len(r.Catches)-1].At.UTC().Format(time.DateOnly)
-	return fmt.Sprintf("%s on %s, from %s to %s.", plural(len(r.Catches), "catch", "catches"), plural(len(heads), "head", "heads"), first, last)
+	return fmt.Sprintf("%s on %s, from %s to %s, %s.", plural(len(r.Catches), "catch", "catches"), plural(len(heads), "head", "heads"), first, last, of)
 }
 
 func plural(n int, one, many string) string {

@@ -502,6 +502,42 @@ func TestAFailureBesideAnApprovalWaitIsStillACatch(t *testing.T) {
 	f.caught("fixes so far 0:")
 }
 
+// A check cancelled beside a failure goes back for the fix with it, but is not
+// a catch: the log names what afk caught counts, and nothing else.
+func TestACancelledCheckIsNotACatch(t *testing.T) {
+	f := setup(t, newTracker())
+	f.model.then(commit("ok"), commit("fix"))
+	var first string
+	f.tr.checks = func(sha string, _ int) []github.CheckRun {
+		if first == "" {
+			first = sha
+		}
+		if sha != first {
+			return green(sha, 0)
+		}
+		return []github.CheckRun{
+			{Name: "test", Status: "completed", Conclusion: "failure"},
+			{Name: "lint", Status: "completed", Conclusion: "cancelled"},
+		}
+	}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != implement.Reviewing {
+		t.Fatalf("job in %q, want %q", j.State, implement.Reviewing)
+	}
+	if fix := f.model.asked[1]; !strings.Contains(fix.Prompt, "`lint`") {
+		t.Errorf("the fix was not told about lint:\n%s", fix.Prompt)
+	}
+	f.caught("`test` failure")
+	for _, l := range f.logged {
+		if strings.Contains(l, "CI caught") && strings.Contains(l, "lint") {
+			t.Errorf("logged the cancelled check as a catch: %s", l)
+		}
+	}
+}
+
 // A head with a failed run and another that never finishes waits out the
 // ceiling like any unfinished head, and the hand-back quotes the failure.
 func TestTheCeilingHandBackQuotesWhatHadAlreadyFailed(t *testing.T) {

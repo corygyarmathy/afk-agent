@@ -327,7 +327,7 @@ func TestWorkflowRunsAreAnActorsRunsWithOneConclusionToTheLastPage(t *testing.T)
 			return
 		}
 		if r.URL.Query().Get("page") == "2" {
-			fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":2,"head_sha":"def","head_branch":"afk/issue-8","conclusion":"failure","created_at":"2026-09-27T11:00:00Z"}]}`)
+			fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":2,"head_sha":"def","head_branch":"afk/issue-8","event":"pull_request","conclusion":"failure","created_at":"2026-09-27T11:00:00Z"}]}`)
 			return
 		}
 		// The first page is the one the client builds; the next is GitHub's.
@@ -338,7 +338,7 @@ func TestWorkflowRunsAreAnActorsRunsWithOneConclusionToTheLastPage(t *testing.T)
 			t.Errorf("query %s, want the login escaped", r.URL.RawQuery)
 		}
 		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/actions/runs?page=2>; rel="next"`, srvURL))
-		fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":1,"head_sha":"abc","head_branch":"afk/issue-7","conclusion":"failure","created_at":"2026-09-27T10:00:00Z","name":"ci"}]}`)
+		fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":1,"head_sha":"abc","head_branch":"afk/issue-7","event":"push","conclusion":"failure","created_at":"2026-09-27T10:00:00Z","name":"ci"}]}`)
 	})
 	srvURL = srv.URL
 
@@ -347,14 +347,37 @@ func TestWorkflowRunsAreAnActorsRunsWithOneConclusionToTheLastPage(t *testing.T)
 		t.Fatal(err)
 	}
 	want := []github.WorkflowRun{
-		{ID: 1, HeadSHA: "abc", HeadBranch: "afk/issue-7", Conclusion: "failure", Created: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)},
-		{ID: 2, HeadSHA: "def", HeadBranch: "afk/issue-8", Conclusion: "failure", Created: time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)},
+		{ID: 1, HeadSHA: "abc", HeadBranch: "afk/issue-7", Event: "push", Conclusion: "failure", Created: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)},
+		{ID: 2, HeadSHA: "def", HeadBranch: "afk/issue-8", Event: "pull_request", Conclusion: "failure", Created: time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)},
 	}
 	if !reflect.DeepEqual(runs, want) {
 		t.Errorf("got %+v\nwant %+v", runs, want)
 	}
 	if total != 1500 {
 		t.Errorf("total %d, want 1500", total)
+	}
+}
+
+// How many runs an actor started is GitHub's count of them, read from one run
+// of one page: no conclusion is asked for, and nothing is paged.
+func TestWorkflowRunCountIsGitHubsCountOfAnActorsRuns(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/actions/runs", "application/vnd.github+json") {
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("actor") != "afk[bot]" || q.Has("status") || q.Get("per_page") != "1" {
+			t.Errorf("query %s, want afk[bot]'s runs, any conclusion, one to a page", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `{"total_count":51,"workflow_runs":[{"id":1}]}`)
+	})
+
+	n, err := c.WorkflowRunCount(context.Background(), "afk[bot]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 51 {
+		t.Errorf("count %d, want 51", n)
 	}
 }
 

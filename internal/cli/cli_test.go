@@ -765,6 +765,56 @@ func TestTheLoginIsReadOnce(t *testing.T) {
 	}
 }
 
+// afk caught reads the agent's login from the App, then counts the catches on
+// the heads that login pushed, as the installation reads them.
+func TestCaughtCountsWhatTheAppsLoginPushed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch p := r.Method + " " + r.URL.Path; p {
+		case "GET /app":
+			fmt.Fprint(w, `{"slug":"afk-agent"}`)
+		case "GET /repos/o/n/installation":
+			fmt.Fprint(w, `{"id":1}`)
+		case "POST /app/installations/1/access_tokens":
+			fmt.Fprint(w, `{"token":"ghs_installation","expires_at":"2099-01-01T00:00:00Z"}`)
+		case "GET /repos/o/n/actions/runs":
+			if got := r.Header.Get("Authorization"); got != "Bearer ghs_installation" {
+				t.Errorf("runs read with %q, want the installation token", got)
+			}
+			q := r.URL.Query()
+			if q.Get("actor") != "afk-agent[bot]" {
+				t.Errorf("runs of %q, want the App's login", q.Get("actor"))
+			}
+			switch q.Get("status") {
+			case "":
+				fmt.Fprint(w, `{"total_count":12,"workflow_runs":[]}`)
+			case "failure":
+				fmt.Fprint(w, `{"total_count":1,"workflow_runs":[{"id":7,"head_sha":"abcdef0123456789","head_branch":"afk/7-1","event":"pull_request","conclusion":"failure","created_at":"2026-09-27T10:00:00Z"}]}`)
+			default:
+				fmt.Fprint(w, `{"total_count":0,"workflow_runs":[]}`)
+			}
+		case "GET /repos/o/n/actions/runs/7/jobs":
+			fmt.Fprint(w, `{"jobs":[{"name":"test","conclusion":"failure","html_url":"https://github.com/o/n/job/1"},{"name":"vet","conclusion":"success"}]}`)
+		default:
+			t.Errorf("unexpected request %s", p)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	app := &github.App{ID: "1", Key: testAppKey(), Repo: "o/n", BaseURL: srv.URL}
+	tr := &tracker{client: &github.Client{Repo: "o/n", Credential: app, BaseURL: srv.URL}, app: app}
+
+	var out strings.Builder
+	if err := readCaught(context.Background(), tr, true, &out); err != nil {
+		t.Fatal(err)
+	}
+	want := "2026-09-27T10:00:00Z\tabcdef012345\tafk/7-1\ttest\thttps://github.com/o/n/job/1\n" +
+		"1\ttest\n" +
+		"1 catch on 1 head, from 2026-09-27 to 2026-09-27, of 12 runs afk-agent[bot] started.\n"
+	if out.String() != want {
+		t.Errorf("got\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
 // A review is read from its parameters, and review and intake reach the
 // tracker through the one the command built, so a process has one token and
 // one login (ADR 0005 §5).
