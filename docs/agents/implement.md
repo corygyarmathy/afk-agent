@@ -17,12 +17,12 @@ the model as instructions. The agent never merges.
 
 The same job is made with nobody asking for an issue carrying the eligibility
 label, when `afk` is given `--eligibility-label`
-([`triage-labels.md`](triage-labels.md#the-eligibility-label)). Nothing asked,
-so the claim is a 👀 on the issue itself, and there is nothing to answer.
+([`triage-labels.md`](triage-labels.md#the-eligibility-label)). The claim is a
+👀 on the issue itself, and there is nothing to answer.
 
 | transition | from | does |
 | --- | --- | --- |
-| `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim), or to the issue itself if no `/implement` is on it. A closed issue stops there. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
+| `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
