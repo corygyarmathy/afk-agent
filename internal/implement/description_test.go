@@ -85,6 +85,32 @@ func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T
 	}
 }
 
+// A Closes pull request keeps the issue's title, which describes the job it
+// closes, whatever the file's first line says. That line is not in the body
+// either way: it is a title, and only a Part of pull request takes it.
+func TestAClosesPullRequestKeepsTheIssuesTitle(t *testing.T) {
+	for name, text := range map[string]string{
+		"titled":   "The first piece\n\n## Start here\n\nok:1 - where the behaviour lives.\n",
+		"untitled": "## Start here\n\nok:1 - where the behaviour lives.\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t, newTracker())
+			f.model.then(describe(text))
+
+			body := f.opened()
+			if got := f.tr.opened[0].Title; got != "Reserve a job" {
+				t.Errorf("title %q, want the issue's, %q", got, "Reserve a job")
+			}
+			if strings.Contains(body, "The first piece") {
+				t.Errorf("the title line is in the body:\n%s", body)
+			}
+			if !strings.Contains(body, "## Start here\n\nok:1 - where the behaviour lives.\n") {
+				t.Errorf("the session's part is not in the body:\n%s", body)
+			}
+		})
+	}
+}
+
 // With no file, one with no Start here, one that cannot be read, or one too
 // long for GitHub to take, the pull request opens with Go's parts only: the
 // diff is still reviewable. It is not a gate failure, and a file the agent

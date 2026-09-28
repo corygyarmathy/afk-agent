@@ -174,7 +174,9 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	session := sessionPart(p.Description)
+	// The session's title is for a Part of pull request's (#127). This one
+	// closes the issue, so it keeps the issue's title.
+	_, session := sessionPart(p.Description)
 	if session == "" && strings.TrimSpace(p.Description) != "" {
 		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])
 	}

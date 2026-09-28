@@ -56,12 +56,25 @@ func readDescription(ws string) (string, error) {
 	return string(b), err
 }
 
-// sessionPart is the session's sections, in the description's order under the
-// headings it names. A heading the prompt did not name goes with what is under
-// it, and so does anything before the first heading. A section with nothing to
-// say is left out, and without a Start here there is no session's part: the
-// pull request opens with Go's parts only, and the diff is still reviewable.
-func sessionPart(text string) string {
+// sessionPart is the title the session gives for the piece, and its sections,
+// in the description's order under the headings it names.
+//
+// The title is the file's first line, when that is not a heading: the prompt
+// asks for one only of work cut to a first piece, whose issue's title
+// describes the whole job (#111). It is never part of the body, and only a
+// Part of pull request takes it. A Closes one keeps the issue's title,
+// whatever the line says.
+//
+// A heading the prompt did not name goes with what is under it, and so does
+// anything else before the first heading. A section with nothing to say is
+// left out, and without a Start here there is no session's part: the pull
+// request opens with Go's parts only, and the diff is still reviewable.
+func sessionPart(text string) (title, part string) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if first := strings.TrimSpace(lines[0]); !strings.HasPrefix(first, "#") && !strings.HasPrefix(first, "```") {
+		title, lines = first, lines[1:]
+	}
+
 	found := map[string]string{}
 	var heading string
 	var body []string
@@ -72,7 +85,7 @@ func sessionPart(text string) string {
 		body = nil
 	}
 	fenced := false
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 		}
@@ -86,7 +99,7 @@ func sessionPart(text string) string {
 	flush()
 
 	if found[sections[0]] == "" {
-		return ""
+		return title, ""
 	}
 	var b strings.Builder
 	for _, s := range sections {
@@ -94,7 +107,7 @@ func sessionPart(text string) string {
 			fmt.Fprintf(&b, "\n## %s\n\n%s\n", s, found[s])
 		}
 	}
-	return b.String()
+	return title, b.String()
 }
 
 // named is the section a heading names, or "" for one the prompt did not. A
