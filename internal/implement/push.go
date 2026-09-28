@@ -35,6 +35,11 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if p.Cutting {
+		// The cut was decided, and the commit that sent the work back for
+		// it never happened. The work is still uncut, and is not pushed.
+		return transition.Result{State: Implementing, RunAt: in.Now}, nil
+	}
 
 	relayDir := d.relayPath(in.Job.ID)
 	head, err := relay(ctx, ws, relayDir, p.Branch)
@@ -57,6 +62,25 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{}, err
 	}
 	p.Lines, p.Tests = c.Lines, c.Tests
+
+	// Over the signal before its first push, the work goes back to its
+	// session to be cut to a first coherent piece, once (#107, #127). What
+	// comes back is gated and measured again, and pushed either way: still
+	// over, it is handed back when it would open. After the first push a
+	// fix is not cut: the pull request is the operator's to read by then.
+	if c.Over(d.SizeSignal) && !p.Cut && p.Pushed == "" {
+		instructions, err := d.instructions(ctx, in.Job.ID, in.Job.Subject.Number)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		if !Whole(instructions) {
+			p.Cut, p.Cutting = true, true
+			if err := d.save(in.Job.ID, p); err != nil {
+				return transition.Result{}, err
+			}
+			return transition.Result{State: Implementing, RunAt: in.Now}, nil
+		}
+	}
 
 	// Recomputed with each push, on what the pull request will show: a fix
 	// that newly touches a sensitive path adds it.
@@ -143,6 +167,11 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if pr, ok, err := d.open(ctx, from(p.Branch)); err != nil {
 		return transition.Result{}, err
 	} else if ok {
+		if p.piece() {
+			if res, done, err := d.rest(ctx, in, p, pr); err != nil || !done {
+				return res, err
+			}
+		}
 		return d.resensitize(ctx, in, p, pr)
 	}
 
@@ -155,7 +184,11 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 		if !Whole(instructions) {
-			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review. The branch is the work, kept: to have it as one pull request, open one from it by hand. To have it in pieces, split the issue.", p.Lines, p.Tests, d.SizeSignal), "")
+			cut := ""
+			if p.Cut {
+				cut = " It went back to the session once to be cut to a first coherent piece, and is still over: the session found no piece, or cut too little."
+			}
+			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review.%s The branch is the work, kept: to have it as one pull request, open one from it by hand. To have it in pieces, split the issue.", p.Lines, p.Tests, d.SizeSignal, cut), "")
 		}
 	}
 
@@ -174,9 +207,15 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	// The session's title is for a Part of pull request's (#127). This one
-	// closes the issue, so it keeps the issue's title.
-	_, session := sessionPart(p.Description)
+	// A first piece is part of the issue, and takes the title the session
+	// gave it: the issue's describes the whole job (#111, #127). A pull
+	// request that closes the issue keeps the issue's title, whatever the
+	// file says, and so does a piece the session gave no title.
+	title, session := sessionPart(p.Description)
+	if !p.piece() || title == "" {
+		title = is.Title
+	}
+	link := linkLine(n, p.piece(), 0)
 	if session == "" && strings.TrimSpace(p.Description) != "" {
 		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])
 	}
@@ -192,16 +231,16 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	// them again. Cutting the session's part would drop what the operator
 	// needed, so if it is still over, that part goes whole, as a missing one
 	// does.
-	body := description(n, d.ReviewProcedure, sensitive.Line(p.Sensitive), session)
+	body := description(n, link, d.ReviewProcedure, sensitive.Line(p.Sensitive), session)
 	if over(body) && len(p.Sensitive) > 0 {
 		d.logf("%s: the description is over GitHub's %d characters, so its sensitive paths are counted rather than listed", in.Job.ID, bodyLimit)
-		body = description(n, d.ReviewProcedure, sensitive.Counted(p.Sensitive), session)
+		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), session)
 	}
 	if over(body) {
 		d.logf("%s: the description is over GitHub's %d characters, so the pull request opens with the agent's parts only", in.Job.ID, bodyLimit)
-		body = description(n, d.ReviewProcedure, sensitive.Counted(p.Sensitive), "")
+		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), "")
 	}
-	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: body}
+	req := github.NewPullRequest{Title: title, Head: p.Branch, Base: p.Into, Body: body}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		// The key stops this run opening two. The tracker is what stops a
 		// round that follows a slow success from opening another.

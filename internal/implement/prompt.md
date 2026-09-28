@@ -17,15 +17,26 @@ not stop early to keep it small.
 A pull request is one concern, reviewable in one sitting, tests included. The
 agent counts your commits: over {{.Signal}} changed lines, not counting tests,
 generated, vendored or lock files, or files deleted whole, it opens no pull
-request, and hands the work back to a human. If the issue will not fit, stop at
-a coherent first piece that does - a refactor the rest needs is a natural one -
-commit that, and say in your reply what is left.
+request as it is: it sends the work back to you once, to be cut to a first
+piece. If the issue will not fit, stop at a coherent first piece that does - a
+refactor the rest needs is a natural one - commit that, and write what is left
+to `.git/afk-remainder.md`, in GitHub-flavoured markdown. The agent files it as
+a new issue, for a human to decide on, and the pull request is then part of
+the issue rather than closing it. If the work is the whole issue, do not write
+that file.
 {{- end}}
 {{- if .Failed}}
 
 This is not the first attempt. An earlier session worked on this branch, and
 its commits are still on it. Then a check failed: {{.Why}} The output is in
 `.git/afk-gate.log`. Read it first, and fix the cause.
+{{- end}}
+{{- if .Cutting}}
+
+This is not the first attempt. An earlier session did the work on this branch,
+and its commits are still on it.
+
+{{template "cut" .}}
 {{- end}}
 
 This workspace is not the one the skill expects, in three ways:

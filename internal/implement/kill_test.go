@@ -33,6 +33,7 @@ const (
 	envKillRemote = "AFK_IMPLEMENT_KILL_REMOTE"
 	envKillGate   = "AFK_IMPLEMENT_KILL_GATE"
 	envKillSignal = "AFK_IMPLEMENT_KILL_SIGNAL"
+	envKillCut    = "AFK_IMPLEMENT_KILL_CUT"
 )
 
 // An /implement produces one push per commit, one pull request, and one of each
@@ -249,6 +250,92 @@ func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
 	}
 }
 
+// Work over the size signal is cut once, and its piece is pushed once and
+// opened once, as part of the issue. The rest is filed once, blocked by the
+// issue once, and named in the link line, and killing the process anywhere on
+// the way, then running again, still does (#127).
+func TestKillingACutStillFilesTheRestOnceAndOpensOnce(t *testing.T) {
+	for _, at := range []string{
+		"model", "before-cut-commit", "after-cut", "before-push", "after-push", "before-pr", "after-pr",
+		"before-rest", "after-rest", "before-block", "after-block", "before-link",
+	} {
+		t.Run(at, func(t *testing.T) {
+			dir := t.TempDir()
+			remote := bareRemote(t)
+			if _, err := run(remote, "git", "config", "core.logAllRefUpdates", "always"); err != nil {
+				t.Fatal(err)
+			}
+			ft := &killTracker{path: filepath.Join(dir, "tracker.json")}
+			if err := ft.save(killFile{Comments: []github.Comment{command(1)}, Reactions: map[int64][]github.Reaction{}, NextID: 1000}); err != nil {
+				t.Fatal(err)
+			}
+
+			// The kill model's work is three lines, over a signal of two, and
+			// its cut one.
+			doomed := implementHelper(dir, remote, at, "", "2")
+			doomed.Env = append(doomed.Env, envKillCut+"=1")
+			doomed.Stdout, doomed.Stderr = os.Stderr, os.Stderr
+			if err := doomed.Start(); err != nil {
+				t.Fatalf("start the helper: %v", err)
+			}
+			t.Cleanup(func() { doomed.Process.Kill() })
+			waitForFile(t, filepath.Join(dir, "ready"))
+			if err := doomed.Process.Signal(syscall.SIGKILL); err != nil {
+				t.Fatalf("kill the helper: %v", err)
+			}
+			if err := doomed.Wait(); err == nil {
+				t.Fatal("the helper exited cleanly; it was supposed to be killed")
+			}
+
+			finish := implementHelper(dir, remote, "", "", "2")
+			finish.Env = append(finish.Env, envKillCut+"=1")
+			if out, err := finish.CombinedOutput(); err != nil {
+				t.Fatalf("finishing the work after the kill: %v\n%s", err, out)
+			}
+
+			got, err := ft.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1"); len(strings.Fields(pushes)) != 1 {
+				t.Errorf("%d pushes to afk/7-1 after a kill at %s, want 1: the piece, never the uncut work:\n%s", len(strings.Fields(pushes)), at, pushes)
+			}
+			if b, _ := run(remote, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "afk/7-1\nmain" {
+				t.Errorf("the remote has %q after a kill at %s, want main and afk/7-1", b, at)
+			}
+			if got.Opened != 1 || len(got.PRs) != 1 {
+				t.Fatalf("%d pull requests opened after a kill at %s, want 1", got.Opened, at)
+			}
+			pr := got.PRs[0]
+			if pr.Title != "Reserve a job: its first line" || !strings.Contains(pr.Body, "Part of #7. The rest is #201.") {
+				t.Errorf("the pull request after a kill at %s is %q:\n%s\nwant the piece's title, part of #7, naming the rest", at, pr.Title, pr.Body)
+			}
+			if len(got.Filed) != 1 || !strings.Contains(got.Filed[0].Body, "The other two lines.") {
+				t.Errorf("filed %+v after a kill at %s, want the rest once", got.Filed, at)
+			}
+			if b := got.Blocked[201]; len(b) != 1 || b[0] != issue {
+				t.Errorf("the rest is blocked by %v after a kill at %s, want #7 once", b, at)
+			}
+			var reviews, others int
+			for _, c := range got.Comments {
+				switch {
+				case c.Login != agent:
+				case strings.Contains(c.Body, "afk:review"):
+					reviews++
+				default:
+					others++
+				}
+			}
+			if reviews != 1 || others != 0 {
+				t.Errorf("%d reviews and %d other comments from the agent after a kill at %s, want 1 and 0", reviews, others, at)
+			}
+			if strings.Join(got.Labels, ",") != "needs-review" {
+				t.Errorf("labels %v after a kill at %s, want the hand-off once", got.Labels, at)
+			}
+		})
+	}
+}
+
 func implementHelper(dir, remote, killAt, gate string, signal ...string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRunsAnImplement$")
 	cmd.Env = append(os.Environ(), envKillDir+"="+dir, envKillAt+"="+killAt, envKillRemote+"="+remote, envKillGate+"="+gate)
@@ -301,7 +388,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 	}
 	d := &implement.Deps{
 		Tracker:      ft,
-		Model:        killModel{ft},
+		Model:        killModel{ft, os.Getenv(envKillCut) != ""},
 		Login:        agent,
 		BranchPrefix: prefix,
 		Remote: git.Remote{URL: remote, Token: func(context.Context) (string, error) {
@@ -426,9 +513,17 @@ func (a askStore) Ensure(ctx context.Context, kind store.Kind, subject store.Sub
 
 // Commit dies before the commit that decides a hand-back: the transition has
 // done everything it does ahead of the runner, and none of it is recorded.
+//
+// And before the commit that sends work over the size signal back to be cut:
+// its progress says so, and the job is still in pushing.
 func (a askStore) Commit(ctx context.Context, c store.Commit) error {
 	if c.State == implement.HandingBack {
 		a.ft.die("before-hand-back-commit")
+	}
+	if c.State == implement.Implementing {
+		if job, err := a.Store.Job(ctx, c.JobID); err == nil && job.State == implement.Pushing {
+			a.ft.die("before-cut-commit")
+		}
 	}
 	return a.Store.Commit(ctx, c)
 }
@@ -456,6 +551,11 @@ type killFile struct {
 	Labels    []string
 	LabelsOn  map[int][]string
 	NextID    int64
+
+	// Filed is the issues the agent filed, and Blocked each one's native
+	// blockers, by number.
+	Filed   []github.Issue
+	Blocked map[int][]int
 }
 
 // die stops this process dead at the named point, if it is the one to be
@@ -495,7 +595,63 @@ func (ft *killTracker) save(f killFile) error {
 
 func (ft *killTracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	f, err := ft.load()
-	return github.Issue{Number: n, State: "open", Title: "Reserve a job", Labels: f.LabelsOn[n]}, err
+	return github.Issue{Number: n, ID: issueID, State: "open", Title: "Reserve a job", Labels: f.LabelsOn[n]}, err
+}
+
+func (ft *killTracker) OpenIssues(context.Context) ([]github.Issue, error) {
+	f, err := ft.load()
+	return f.Filed, err
+}
+
+func (ft *killTracker) CreateIssue(_ context.Context, is github.NewIssue) (github.Issue, error) {
+	ft.die("before-rest")
+	f, err := ft.load()
+	if err != nil {
+		return github.Issue{}, err
+	}
+	n := 200 + len(f.Filed) + 1
+	filed := github.Issue{Number: n, ID: int64(n) * 1000, State: "open", Title: is.Title, Body: is.Body, Author: agent}
+	f.Filed = append(f.Filed, filed)
+	if err := ft.save(f); err != nil {
+		return github.Issue{}, err
+	}
+	ft.die("after-rest")
+	return filed, nil
+}
+
+func (ft *killTracker) BlockedBy(_ context.Context, n int) ([]github.Issue, error) {
+	f, err := ft.load()
+	var out []github.Issue
+	for _, b := range f.Blocked[n] {
+		out = append(out, github.Issue{Number: b})
+	}
+	return out, err
+}
+
+// AddBlockedBy refuses a dependency that is there already, as GitHub does.
+func (ft *killTracker) AddBlockedBy(_ context.Context, n int, blocker int64) error {
+	ft.die("before-block")
+	f, err := ft.load()
+	if err != nil {
+		return err
+	}
+	if blocker != issueID {
+		return errors.New("POST blocked_by: 404 Not Found")
+	}
+	for _, b := range f.Blocked[n] {
+		if b == issue {
+			return errors.New("POST blocked_by: 422 Unprocessable Entity")
+		}
+	}
+	if f.Blocked == nil {
+		f.Blocked = map[int][]int{}
+	}
+	f.Blocked[n] = append(f.Blocked[n], issue)
+	if err := ft.save(f); err != nil {
+		return err
+	}
+	ft.die("after-block")
+	return nil
 }
 
 func (ft *killTracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {
@@ -615,9 +771,21 @@ func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRe
 	return pr, nil
 }
 
-// Nothing here names a sensitive path, so no description is ever edited.
-func (ft *killTracker) EditPullRequest(context.Context, int, string) error {
-	return errors.New("no description is edited without a sensitive path")
+// Nothing here names a sensitive path, so the one edit is a first piece's link
+// line, naming its rest.
+func (ft *killTracker) EditPullRequest(_ context.Context, n int, body string) error {
+	ft.die("before-link")
+	f, err := ft.load()
+	if err != nil {
+		return err
+	}
+	for i := range f.PRs {
+		if f.PRs[i].Number == n {
+			f.PRs[i].Body = body
+			return ft.save(f)
+		}
+	}
+	return errors.New("PATCH pull request: 404 Not Found")
 }
 
 func (ft *killTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
@@ -626,11 +794,33 @@ func (ft *killTracker) CheckRuns(context.Context, string) ([]github.CheckRun, er
 }
 
 // killModel is a model that commits the work, unless this is the process to be
-// killed during the run.
-type killModel struct{ ft *killTracker }
+// killed during the run. Sent back to cut it, it cuts it if cuts says so, and
+// otherwise leaves it as it is.
+type killModel struct {
+	ft   *killTracker
+	cuts bool
+}
 
 func (m killModel) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
 	m.ft.die("model")
+	if m.cuts && strings.Contains(req.Prompt, "Cut the branch") {
+		// A cut to one line of the three, which says what is left. A cut
+		// run again after a kill finds its piece already cut.
+		b, err := os.ReadFile(filepath.Join(req.Dir, "ok"))
+		if err != nil {
+			return opencode.Reply{}, err
+		}
+		if strings.Count(string(b), "\n") > 1 {
+			if err := commitLines("ok", 1)(req.Dir); err != nil {
+				return opencode.Reply{}, err
+			}
+		}
+		if err := piece("Reserve a job: its first line", "The other two lines.")(req.Dir); err != nil {
+			return opencode.Reply{}, err
+		}
+		m.ft.die("after-cut")
+		return opencode.Reply{Text: "Cut.", Session: "ses_kill"}, nil
+	}
 	// A run after a kill finds its own work already done, as a real
 	// session reading the workspace would.
 	if _, err := os.Stat(filepath.Join(req.Dir, "ok")); err != nil {

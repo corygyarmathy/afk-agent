@@ -33,9 +33,16 @@ var promptText string
 //go:embed retry.md
 var retryText string
 
+//go:embed cut.md
+var cutText string
+
 var (
 	prompt = template.Must(template.New("implement").Parse(promptText))
 	retry  = template.Must(template.New("retry").Parse(retryText))
+
+	// cutPrompt continues the session that wrote the work. The prompt for a
+	// new session carries it too, for a cut whose session is gone.
+	cutPrompt = template.Must(prompt.New("cut").Parse(cutText))
 )
 
 // gateTail is how much of the gate's output is kept for the session that has
@@ -94,6 +101,22 @@ type progress struct {
 	// description's line, or none.
 	Sensitive []sensitive.Touched `json:"sensitive,omitempty"`
 
+	// Cut is work that came in over the size signal and was sent back to
+	// its session to be cut to a first piece: once, and never again for
+	// this workspace (#127). Cutting is that cut decided and not yet run
+	// to the end, which a replay of the push reads to send the work back
+	// again rather than push it uncut.
+	Cut     bool `json:"cut,omitempty"`
+	Cutting bool `json:"cutting,omitempty"`
+
+	// Remainder is what the session said is left of the issue, as its last
+	// run before the push left the file: the body of the issue filed for
+	// the rest. Not read of work asked for whole.
+	Remainder string `json:"remainder,omitempty"`
+
+	// Rest is the issue filed for the rest, once it is seen on the tracker.
+	Rest int `json:"rest,omitempty"`
+
 	// Fixes is how many times CI has sent the work back to the session,
 	// and FixedHead the head the last of them was counted for.
 	Fixes     int    `json:"fixes,omitempty"`
@@ -141,15 +164,19 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return d.lost(ctx, in)
 	}
 	ws := d.workspacePath(in.Job.ID)
-	if p.Session == "" && p.Failure == "" {
+	if p.Session == "" && p.Failure == "" && !p.Cut {
 		// No session has finished here, so anything in the workspace is one
 		// that failed before it did, and whose id went with it. The next
-		// starts from the base rather than inherit it unannounced.
+		// starts from the base rather than inherit it unannounced. Work
+		// sent back to be cut had a session finish, whether or not its id
+		// survived.
 		if err := reset(ctx, ws, p.Base); err != nil {
 			return transition.Result{}, err
 		}
-		if err := os.Remove(filepath.Join(ws, ".git", descriptionFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return transition.Result{}, err
+		for _, name := range []string{descriptionFile, remainderFile} {
+			if err := os.Remove(filepath.Join(ws, ".git", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return transition.Result{}, err
+			}
 		}
 	}
 	instructions, err := d.spec(ctx, in.Job.ID, ws, n)
@@ -164,13 +191,16 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	req := opencode.Request{Model: ref, Dir: ws, Session: p.Session}
-	if p.Failure == "" || p.Session == "" {
-		// Only a failure is worth continuing a session for. The first run
-		// is a new session, and so is a retry whose session was never
-		// recorded.
+	switch {
+	case p.Session == "" || (p.Failure == "" && !p.Cutting):
+		// Only a failure or a cut is worth continuing a session for. The
+		// first run is a new session, and so is a retry whose session was
+		// never recorded.
 		req.Session = ""
 		req.Prompt, err = d.render(prompt, n, p, whole)
-	} else {
+	case p.Cutting:
+		req.Prompt, err = d.render(cutPrompt, n, p, whole)
+	default:
 		req.Prompt, err = d.render(retry, n, p, whole)
 	}
 	if err != nil {
@@ -214,6 +244,19 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	p.Session = reply.Session
+	p.Cutting = false
+	// What is left is read only before the push: after it, the rest is
+	// filed from what the work was pushed with, or not at all. Asked for
+	// whole, it is not read: nothing is left over.
+	if p.Pushed == "" {
+		p.Remainder = ""
+		if !whole {
+			if p.Remainder, err = readRemainder(ws); err != nil {
+				p.Remainder = ""
+				d.logf("%s: the file of what is left could not be read, so the issue for the rest says the session did not say: %v", in.Job.ID, err)
+			}
+		}
+	}
 	// Read now, as the session left it. The file stays for a retry that
 	// continues the session to amend. One that cannot be read is no
 	// description: an error here would lose the session, and the work with
@@ -519,7 +562,11 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 		// Opened is work past its push, whose pull request's description
 		// is written and never rewritten: the session is not asked for one.
 		Opened bool
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != ""})
+		// Cutting is work over the signal sent back to be cut, and Lines
+		// and Tests are what the agent counted of it.
+		Cutting      bool
+		Lines, Tests int
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests})
 	return b.String(), err
 }
 

@@ -76,7 +76,15 @@ type tracker struct {
 	// failEdits is how many of the next edits of a pull request's
 	// description fail, without landing.
 	failEdits int
+
+	// filed is the issues the agent filed, and blocked the issues' native
+	// blockers, by number.
+	filed   []github.Issue
+	blocked map[int][]int
 }
+
+// issueID is the id of the issue the job is for, which is not its number.
+const issueID = 7007
 
 var errEdit = errors.New("PATCH pull request: 502 Bad Gateway")
 
@@ -97,7 +105,58 @@ func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 			labels = append(labels, tr.labels[i])
 		}
 	}
-	return github.Issue{Number: n, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest, Labels: labels}, nil
+	for _, is := range tr.filed {
+		if is.Number == n {
+			is.Labels = labels
+			return is, nil
+		}
+	}
+	return github.Issue{Number: n, ID: issueID, State: tr.state, Title: "Reserve a job", Body: tr.body, PullRequest: tr.pullRequest, Labels: labels}, nil
+}
+
+// OpenIssues is the issues the agent filed: the issue the job is for is not
+// one the agent reads this way.
+func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return append([]github.Issue(nil), tr.filed...), nil
+}
+
+func (tr *tracker) CreateIssue(_ context.Context, is github.NewIssue) (github.Issue, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	n := 200 + len(tr.filed) + 1
+	filed := github.Issue{Number: n, ID: int64(n) * 1000, State: "open", Title: is.Title, Body: is.Body, Author: agent}
+	tr.filed = append(tr.filed, filed)
+	return filed, nil
+}
+
+func (tr *tracker) BlockedBy(_ context.Context, n int) ([]github.Issue, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	var out []github.Issue
+	for _, b := range tr.blocked[n] {
+		out = append(out, github.Issue{Number: b})
+	}
+	return out, nil
+}
+
+func (tr *tracker) AddBlockedBy(_ context.Context, n int, blocker int64) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if blocker != issueID {
+		return errors.New("POST blocked_by: 404 Not Found")
+	}
+	if tr.blocked == nil {
+		tr.blocked = map[int][]int{}
+	}
+	for _, b := range tr.blocked[n] {
+		if b == issue {
+			return errors.New("POST blocked_by: 422 Unprocessable Entity")
+		}
+	}
+	tr.blocked[n] = append(tr.blocked[n], issue)
+	return nil
 }
 
 func (tr *tracker) OpenPullRequests(context.Context) ([]github.PullRequest, error) {

@@ -33,10 +33,25 @@ var sections = []string{
 	"Recipe",
 }
 
-// readDescription is the session's part as it left it, or nothing. Only a
-// regular file is read: the workspace's .git is the model's to write, and a
-// link there would put whatever it points at in the pull request.
+// readDescription is the session's part as it left it, or nothing.
 func readDescription(ws string) (string, error) {
+	return readGitFile(ws, descriptionFile)
+}
+
+// readRemainder is what the session says is left, or nothing, which includes
+// a file that says only "none".
+func readRemainder(ws string) (string, error) {
+	text, err := readGitFile(ws, remainderFile)
+	if err != nil || empty([]string{text}) {
+		return "", err
+	}
+	return strings.TrimSpace(strings.TrimPrefix(text, "\uFEFF")), nil
+}
+
+// readGitFile is a file the session wrote in the workspace's .git, or nothing.
+// Only a regular file is read: the .git is the model's to write, and a link
+// there would put whatever it points at on the tracker.
+func readGitFile(ws, name string) (string, error) {
 	root, err := os.OpenRoot(filepath.Join(ws, ".git"))
 	if errors.Is(err, fs.ErrNotExist) {
 		// The workspace went with the run. The gate is what says so.
@@ -46,7 +61,7 @@ func readDescription(ws string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
-	fi, err := root.Lstat(descriptionFile)
+	fi, err := root.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -56,7 +71,7 @@ func readDescription(ws string) (string, error) {
 	if !fi.Mode().IsRegular() {
 		return "", nil
 	}
-	b, err := root.ReadFile(descriptionFile)
+	b, err := root.ReadFile(name)
 	return string(b), err
 }
 
@@ -150,27 +165,27 @@ func empty(body []string) bool {
 
 // description is the pull request's body: the marker, the link line, the
 // sensitive line and the reminder, which are Go's, then the session's part,
-// already linked.
+// already linked. The link line is linkLine's.
 //
 // It is written once, when the pull request opens. Nothing rewrites the
 // session's part: a revision changing what the operator already read would
 // defeat the reading. The sensitive line is Go's to recompute on every push
 // (sensitive.With).
-func description(n int, procedure, line, session string) string {
+func description(n int, link, procedure, line, session string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\nCloses #%d\n\n", PRMarker(n), n)
+	fmt.Fprintf(&b, "%s\n%s\n\n", PRMarker(n), link)
 	if line != "" {
 		b.WriteString(line + "\n\n")
 	}
-	link := "the agent has no link to the procedure"
+	to := "the agent has no link to the procedure"
 	if procedure != "" {
-		link = fmt.Sprintf("[procedure](%s)", procedure)
+		to = fmt.Sprintf("[procedure](%s)", procedure)
 	}
 	from := ""
 	if session != "" {
 		from = " from **Start here**"
 	}
-	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", sensitive.Reminder, link, n, from)
+	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", sensitive.Reminder, to, n, from)
 	b.WriteString(session)
 	return b.String()
 }

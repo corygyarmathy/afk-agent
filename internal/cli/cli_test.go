@@ -1185,6 +1185,12 @@ func (closedTracker) EditPullRequest(context.Context, int, string) error { retur
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }
+func (closedTracker) OpenIssues(context.Context) ([]github.Issue, error) { return nil, nil }
+func (closedTracker) CreateIssue(context.Context, github.NewIssue) (github.Issue, error) {
+	return github.Issue{}, nil
+}
+func (closedTracker) BlockedBy(context.Context, int) ([]github.Issue, error) { return nil, nil }
+func (closedTracker) AddBlockedBy(context.Context, int, int64) error         { return nil }
 
 // The floor and the fold cut are the skill's inputs, passed through (#124).
 // Unset is not an error: the skill's own defaults hold, and none is chosen here.
