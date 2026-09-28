@@ -1,8 +1,9 @@
 // Package notify is the operator's interrupt channel (ADR 0001 §13).
 //
-// Three conditions reach a person who is not watching: a job that has come to
-// rest and needs them, a budget that is spent, and a job whose model tier
-// stays exhausted (ADR 0001 §10). Nothing else. Not a pull request ready for
+// Four conditions reach a person who is not watching: a job that has come to
+// rest and needs them, a budget that is spent, a job whose model tier stays
+// exhausted (ADR 0001 §10), and the first job admitted under a budget waiver.
+// Nothing else. Not a pull request ready for
 // review, not a job handed back, not a red CI run - those are states queried
 // when the operator chooses to look, and notifying on them spends the one
 // resource this agent exists to protect.
@@ -51,6 +52,7 @@ const (
 	tagParked    = "octagonal_sign"
 	tagExhausted = "money_with_wings"
 	tagTier      = "hourglass"
+	tagWaived    = "moneybag"
 )
 
 // Notifier publishes to ntfy.
@@ -163,6 +165,30 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	body += "\nWork already in flight is untouched, and `afk run` still works."
 
 	return n.send(ctx, key, "afk-agent: the "+w.Name+" budget is spent", tagExhausted, body)
+}
+
+// Waived reports work starting through a spent window the operator waived (ADR
+// 0001 §11, §13).
+//
+// The fourth condition, and the one that needs no action: the operator set the
+// waiver, and this is their confirmation that work is now spending the
+// pay-as-you-go balance. It is worth the interruption because the endpoint
+// cannot show whether the provider's fallback to the balance is on, and a
+// waiver set with it off fails every run as a transient failure - so hearing
+// sooner is the whole point.
+func (n *Notifier) Waived(ctx context.Context, wa budget.Waiver) error {
+	// The waiver's timestamp is in the key, so a waiver renewed for the next
+	// period is a new occurrence. One occurrence is once per waiver, per
+	// process: the pool's workers re-observe the spent window on every pass,
+	// and the first job admitted under it is the thing worth saying.
+	key := fmt.Sprintf("waived:%s:%s", wa.Window, wa.Until.Format(time.RFC3339))
+
+	body := fmt.Sprintf("The operator waived the %s window until %s, so a spent %s window is not stopping work: new jobs are starting and spending the account's balance.",
+		wa.Window, wa.Until.Format(time.RFC3339), wa.Window)
+	body += "\n\nThis needs no action. A spent " + wa.Window + " window defers work again once the waiver lapses."
+	body += "\n\nWork already in flight is untouched, and `afk run` still works."
+
+	return n.send(ctx, key, "afk-agent: the "+wa.Window+" budget is waived", tagWaived, body)
 }
 
 // TierExhausted reports a job whose model tier has run out and keeps running

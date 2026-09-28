@@ -11,7 +11,7 @@ import (
 // absolute timestamp, rather than polling and suppressing.
 func TestLimitedDefersToTheResetTimestamp(t *testing.T) {
 	now := at(t, "2026-09-11T12:00:00Z")
-	adm := decode(t, live, now).Admit(0, now)
+	adm := decode(t, live, now).Admit(0, nil, now)
 
 	if adm.Decision != budget.Defer {
 		t.Fatalf("decision is %s, want defer", adm.Decision)
@@ -40,7 +40,7 @@ func TestADeferralNamesTheWindowItsTimestampCameFrom(t *testing.T) {
 	if peak := s.Peak(); peak.Name != "rolling" {
 		t.Fatalf("the peak window is %q, want rolling: the test needs them to differ", peak.Name)
 	}
-	adm := s.Admit(0, now)
+	adm := s.Admit(0, nil, now)
 	if adm.Decision != budget.Defer {
 		t.Fatalf("decision is %s, want defer", adm.Decision)
 	}
@@ -65,7 +65,7 @@ func TestApproachingALimitWaitsRatherThanDefers(t *testing.T) {
 	}}`
 	s := decode(t, doc, now)
 
-	adm := s.Admit(80, now)
+	adm := s.Admit(80, nil, now)
 	if adm.Decision != budget.Wait {
 		t.Fatalf("decision is %s, want wait", adm.Decision)
 	}
@@ -77,12 +77,12 @@ func TestApproachingALimitWaitsRatherThanDefers(t *testing.T) {
 	}
 
 	// The same observation, under a threshold it does not reach.
-	if adm := s.Admit(90, now); !adm.Starts() {
+	if adm := s.Admit(90, nil, now); !adm.Starts() {
 		t.Fatalf("86%% stopped work under a 90%% threshold: %s", adm)
 	}
 	// And with no threshold at all, which is a coherent configuration: only an
 	// actual limit stops work.
-	if adm := s.Admit(0, now); !adm.Starts() {
+	if adm := s.Admit(0, nil, now); !adm.Starts() {
 		t.Fatalf("a budget with no threshold stopped work: %s", adm)
 	}
 }
@@ -97,7 +97,7 @@ func TestLimitedWithNoFutureResetWaits(t *testing.T) {
 		"already past": `{"usage":{"monthly":{"status":"rate-limited","percent":100,"resetsAt":"2026-09-11T11:00:00Z"}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			adm := decode(t, doc, now).Admit(0, now)
+			adm := decode(t, doc, now).Admit(0, nil, now)
 			if adm.Decision != budget.Wait {
 				t.Fatalf("decision is %s, want wait: a deferral here parks the job", adm.Decision)
 			}
@@ -114,7 +114,7 @@ func TestAnUnobservedBudgetAdmits(t *testing.T) {
 	if none.Known() {
 		t.Fatal("the zero state reports itself as an observation")
 	}
-	if adm := none.Admit(80, time.Now()); !adm.Starts() {
+	if adm := none.Admit(80, nil, time.Now()); !adm.Starts() {
 		t.Fatalf("an unobserved budget stopped work: %s", adm)
 	}
 }

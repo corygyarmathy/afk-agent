@@ -472,8 +472,19 @@ func budgetCmd(args []string, stdout io.Writer) error {
 	if _, err := fmt.Fprintln(stdout, state); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, state.Admit(observer.Threshold, time.Now()))
-	return err
+	now := time.Now()
+	if _, err := fmt.Fprintln(stdout, state.Admit(observer.Threshold, observer.Waivers, now)); err != nil {
+		return err
+	}
+	// The waivers themselves, whatever the windows read: the point of showing
+	// them by hand is to check one before relying on it, and a waiver that is
+	// not being applied yet is exactly what the operator wants to see.
+	for _, wa := range observer.Waivers.Live(now) {
+		if _, err := fmt.Fprintf(stdout, "%s is waived until %s\n", wa.Window, wa.Until.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // caughtCmd implements `afk caught`: what CI caught that the local gate did

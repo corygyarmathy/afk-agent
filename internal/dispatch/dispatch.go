@@ -385,6 +385,14 @@ func (d *Dispatcher) admit(ctx context.Context, holder string, job store.Job) bo
 		d.logf("%s: reading the budget: %v", holder, err)
 	}
 	if adm.Starts() {
+		// A job admitted under a waiver is the operator's confirmation that
+		// work is now spending the balance (ADR 0001 §13). It is told once per
+		// waiver, and a notifier that has seen it suppresses the rest, so every
+		// pass of every worker may offer it.
+		for _, wa := range adm.Waived {
+			wa := wa
+			d.notify(ctx, holder, func(c context.Context) error { return d.Notify.Waived(c, wa) })
+		}
 		return true
 	}
 

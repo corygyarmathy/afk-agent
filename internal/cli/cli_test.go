@@ -7,17 +7,20 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -242,6 +245,22 @@ func TestMain_ExitCodes(t *testing.T) {
 			stderrIs: "--budget-key needs --budget-age",
 		},
 		{
+			// A waiver is nothing without an observation to apply it to.
+			name:     "a budget waiver with nothing to observe",
+			args:     []string{"budget", "--budget-waive", "monthly=2026-09-27T00:00:00Z"},
+			want:     ExitUsage,
+			stderrIs: "need --budget-key",
+		},
+		{
+			// Malformed is refused at the command line, before the key file is
+			// read, rather than discovered to be wrong when the account is
+			// spent.
+			name:     "a malformed budget waiver",
+			args:     []string{"budget", "--budget-key", "/nonexistent/key", "--budget-waive", "monthly=soon"},
+			want:     ExitUsage,
+			stderrIs: "is not an RFC 3339 timestamp",
+		},
+		{
 			name:     "budget has nothing to read",
 			args:     []string{"budget"},
 			want:     ExitUsage,
@@ -351,6 +370,7 @@ func TestNoBudgetParametersIsNoObserver(t *testing.T) {
 	t.Setenv("AFK_BUDGET_KEY", "")
 	t.Setenv("AFK_BUDGET_AGE", "")
 	t.Setenv("AFK_BUDGET_AT", "")
+	t.Setenv("AFK_BUDGET_WAIVE", "")
 
 	var p params
 	o, err := p.budget()
@@ -359,6 +379,52 @@ func TestNoBudgetParametersIsNoObserver(t *testing.T) {
 	}
 	if o != nil {
 		t.Fatalf("observer = %+v, want none", o)
+	}
+}
+
+// The waiver parameter names a window and the resetsAt it lasts until, may be
+// given more than once, and is refused when malformed or when one window is
+// waived twice. It is the module that restricts which windows may be waived, so
+// nothing here checks the name against a list.
+func TestBudgetWaiverParameters(t *testing.T) {
+	t.Setenv("AFK_BUDGET_WAIVE", "")
+	monthly := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	weekly := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	want := budget.Waivers{{Window: "monthly", Until: monthly}, {Window: "weekly", Until: weekly}}
+
+	// The flag, repeated, keeps them in the order they were given.
+	var p params
+	fs := flag.NewFlagSet("afk budget", flag.ContinueOnError)
+	p.bindBudget(fs)
+	if err := fs.Parse([]string{"--budget-waive", "monthly=2026-09-27T00:00:00Z", "--budget-waive", "weekly=2026-09-15T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.waivers(); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("waivers() = %+v, %v; want %+v", got, err, want)
+	}
+
+	// The environment, comma-separated, for the line the module sets.
+	t.Setenv("AFK_BUDGET_WAIVE", "monthly=2026-09-27T00:00:00Z,weekly=2026-09-15T00:00:00Z")
+	var env params
+	if got, err := env.waivers(); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("waivers() = %+v, %v; want %+v", got, err, want)
+	}
+
+	for _, tc := range []struct {
+		name, value, want string
+	}{
+		{name: "not window=timestamp", value: "monthly", want: "is not <window>=<RFC3339>"},
+		{name: "no window", value: "=2026-09-27T00:00:00Z", want: "names no window"},
+		{name: "not a timestamp", value: "monthly=soon", want: "is not an RFC 3339 timestamp"},
+		{name: "one window twice", value: "monthly=2026-09-27T00:00:00Z,monthly=2026-10-27T00:00:00Z", want: "is waived twice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFK_BUDGET_WAIVE", tc.value)
+			var p params
+			if _, err := p.waivers(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
 	}
 }
 

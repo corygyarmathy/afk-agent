@@ -207,7 +207,7 @@ func resolver(p params, m modelParams) (string, func(context.Context) (model.Can
 			// Observe returns the last good observation alongside the error
 			// (ADR 0001 §12).
 			state, _ := observer.Observe(ctx)
-			budget = state.Resolver()
+			budget = observer.Resolver(state)
 		}
 		return model.Resolve(reqs, cat, enrol, budget)
 	}

@@ -44,6 +44,11 @@ type Observer struct {
 	// limit. Zero is no threshold. A parameter, from configuration.
 	Threshold float64
 
+	// Waivers are the windows the operator has waived, and until when (ADR
+	// 0001 §11). A parameter, from configuration. They bind admission and
+	// resolution alike, so both read them from here.
+	Waivers Waivers
+
 	// Now is the clock, for tests. Nil means time.Now.
 	Now func() time.Time
 
@@ -70,7 +75,7 @@ type Observer struct {
 // start" and spending the rest of the window failing at the provider.
 func (o *Observer) Admit(ctx context.Context) (Admission, error) {
 	state, err := o.Observe(ctx)
-	return state.Admit(o.Threshold, o.now()), err
+	return state.Admit(o.Threshold, o.Waivers, o.now()), err
 }
 
 // Observe returns the budget as this process currently sees it, refreshing it
