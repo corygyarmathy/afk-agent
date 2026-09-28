@@ -498,3 +498,67 @@ func TestReactionsNameWhoReacted(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
+
+// An issue the agent files carries a title and a body and nothing else: no
+// label, so nothing marks it as the agent's to work on.
+func TestCreateIssueSendsOnlyItsTitleAndBody(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "POST", "/repos/o/n/issues", "application/vnd.github+json") {
+			return
+		}
+		var in map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"title": "The rest of #7", "body": "What is left."}
+		if fmt.Sprint(in) != fmt.Sprint(want) {
+			t.Errorf("posted %v, want %v", in, want)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":9001,"number":41,"state":"open","title":"The rest of #7","body":"What is left.","user":{"login":"afk-agent[bot]"}}`)
+	})
+	is, err := c.CreateIssue(context.Background(), github.NewIssue{Title: "The rest of #7", Body: "What is left."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if is.Number != 41 || is.ID != 9001 || is.Author != "afk-agent[bot]" {
+		t.Errorf("got %+v, want #41, id 9001, by the agent", is)
+	}
+}
+
+// A dependency names its blocker by the issue's id, which is not its number.
+func TestAddBlockedBySendsTheBlockersID(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "POST", "/repos/o/n/issues/41/dependencies/blocked_by", "application/vnd.github+json") {
+			return
+		}
+		var in map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]any{"issue_id": float64(7007)}; fmt.Sprint(in) != fmt.Sprint(want) {
+			t.Errorf("posted %v, want %v", in, want)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":9001,"number":41}`)
+	})
+	if err := c.AddBlockedBy(context.Background(), 41, 7007); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBlockedByListsTheBlockers(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/issues/41/dependencies/blocked_by", "application/vnd.github+json") {
+			return
+		}
+		fmt.Fprint(w, `[{"id":7007,"number":7,"state":"open","title":"Reserve a job"}]`)
+	})
+	blockers, err := c.BlockedBy(context.Background(), 41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blockers) != 1 || blockers[0].Number != 7 || blockers[0].ID != 7007 {
+		t.Errorf("got %+v, want #7 with id 7007", blockers)
+	}
+}
