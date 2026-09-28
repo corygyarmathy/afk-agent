@@ -21,8 +21,8 @@ the model as instructions. The agent never merges.
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
-| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, and counts the work's size, then pushes the commit it checked. A denied path hands back. |
-| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request, with its [description](#the-description), if it is not open already. Work over the size signal hands back on the issue instead, with its branch pushed. |
+| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. |
+| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings its sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
@@ -84,20 +84,24 @@ has the reasoning. The code is
 Its sections, in this order, each left out when it has nothing to say:
 
 1. **The link line**, `Closes #N`. The agent's.
-2. **The reminder**, a blockquote the agent writes: read the issue, then the
+2. **The sensitive line**, only on a pull request that touches a sensitive
+   path: `**Sensitive:** job store schema (…), CI (…)`, each label the
+   operator named that matched, in the operator's order, with the files it
+   matched. The agent's.
+3. **The reminder**, a blockquote the agent writes: read the issue, then the
    description, then the diff from **Start here**; do your own reading before
    the advisory review; end by merging, sending back or closing. It links
    `--review-procedure`. Without that parameter it says it has no link to the
    procedure.
-3. **Start here**, the entry point and where the behaviour lives.
-4. **Where the ticket didn't decide**, the choices the session made where the
+4. **Start here**, the entry point and where the behaviour lives.
+5. **Where the ticket didn't decide**, the choices the session made where the
    issue was silent, including the paths it took because nobody was there to
    ask.
-5. **Not verified**, what the session could not check, and behaviour the diff
+6. **Not verified**, what the session could not check, and behaviour the diff
    cannot show.
-6. **Recipe**, only on a deliberately large, single-concern change.
+7. **Recipe**, only on a deliberately large, single-concern change.
 
-- **Sections 3-6 are the session's**, written to `.git/afk-description.md`
+- **Sections 4-7 are the session's**, written to `.git/afk-description.md`
   under those headings. The prompt gives the soft target (an item one or two
   lines, the whole on one screen) and what not to write: a file-by-file
   account, a restatement of the issue, "tests pass", a self-rating, or a list
@@ -111,6 +115,30 @@ Its sections, in this order, each left out when it has nothing to say:
   failure. Each but the missing file is a log line.
 - **Written once**, when the pull request opens. A session after that - a CI
   fix, or a new session that takes one over - is not asked for the file.
+- **The sensitive line is recomputed on every push**, the first and each fix
+  after it, so a later push that newly touches a sensitive path adds it. Only
+  that line is edited: the rest of the description stays as it opened. An
+  edit that never lands after `--effect-rounds` is a log line, and the work
+  goes on.
+
+### Sensitive paths
+
+`--sensitive` names the paths that deserve closer reading
+([#112](https://github.com/corygyarmathy/afk-agent/issues/112)): the
+operator's review reads the files the line lists line by line. It is one-sided:
+nothing is ever marked safe to skim.
+
+- **The operator names them**, as `<label>=<globs>` entries separated by `;`,
+  with the globs separated by `,`:
+  `job store schema=internal/store/**;CI=.github/workflows/**`. A label may
+  have spaces in it.
+- **The agent matches them**, with the denylist's glob matching, against the
+  paths the pull request's diff changes: net, base to head, as the pull request
+  shows them. No model rates anything.
+- **Empty by default**, which is the feature off. It is never a file in the
+  repository: the agent could edit that in its own pull request.
+- **Nothing else reads it.** It adds no label, and the advisory review and the
+  review queue are unaware of it.
 
 ## The size signal
 
@@ -179,8 +207,8 @@ non-test lines the work may have before its size needs a decision. The code is
 The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
-(branch, base, session, the session's description, gate attempts and fixes,
-the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
+(branch, base, session, the session's description, the sensitive line, gate
+attempts and fixes, the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
@@ -194,12 +222,13 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 `--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
 `--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`,
 plus model choice,
-`--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` and
-`--review-procedure` are optional.
+`--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
+`--review-procedure` and `--sensitive` are optional.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the
   version current when it opens.
+- `--sensitive` is the sensitive paths: [Sensitive paths](#sensitive-paths).
 - `--effect-rounds` bounds the rounds of a push, a pull request, a review
   request or a hand-off label that never appears. Out of rounds, the work is
   handed back - on the issue while there is no pull request, and on the pull
