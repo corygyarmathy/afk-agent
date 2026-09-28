@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -11,6 +12,7 @@ import (
 type deps struct {
 	review    *review.Deps
 	implement *implement.Deps
+	revise    *revise.Deps
 }
 
 // catalogue is the set of transitions this build knows.
@@ -36,7 +38,8 @@ type deps struct {
 // assigns to it.
 var catalogue = func(d *deps) *transition.Registry {
 	if d == nil {
-		return transition.MustRegistry(append(review.Transitions(nil), implement.Transitions(nil)...)...)
+		ts := append(review.Transitions(nil), implement.Transitions(nil)...)
+		return transition.MustRegistry(append(ts, revise.Transitions(nil)...)...)
 	}
 	var ts []transition.Transition
 	if d.review != nil {
@@ -44,6 +47,9 @@ var catalogue = func(d *deps) *transition.Registry {
 	}
 	if d.implement != nil {
 		ts = append(ts, implement.Transitions(d.implement)...)
+	}
+	if d.revise != nil {
+		ts = append(ts, revise.Transitions(d.revise)...)
 	}
 	return transition.MustRegistry(ts...)
 }

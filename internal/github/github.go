@@ -86,6 +86,11 @@ type PullRequest struct {
 	// requests are recognised by it.
 	HeadRef string
 
+	// HeadRepo is the repository HeadRef is in, as owner/name: the base
+	// repository's own, or a fork's. Empty when that repository has been
+	// deleted.
+	HeadRepo string
+
 	// Login is the author's account.
 	Login string
 
@@ -560,6 +565,24 @@ func (c *Client) Label(ctx context.Context, number int, label string) error {
 	return c.postJSON(ctx, u, map[string][]string{"labels": {label}}, nil)
 }
 
+// Unlabel takes a label off an issue or a pull request. Taking off a label it
+// does not have is not an error: either way, it does not have it now.
+func (c *Client) Unlabel(ctx context.Context, number int, label string) error {
+	u, err := c.repoURL("/issues/%d/labels/%s", number, url.PathEscape(label))
+	if err != nil {
+		return err
+	}
+	resp, err := c.send(ctx, http.MethodDelete, u, mediaJSON, nil)
+	if se := (*StatusError)(nil); errors.As(err, &se) && se.Code == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	drain(resp.Body)
+	return nil
+}
+
 // NewIssue is an issue to file.
 type NewIssue struct {
 	Title string
@@ -637,8 +660,11 @@ type wirePR struct {
 	Title  string `json:"title"`
 	Body   string `json:"body"`
 	Head   struct {
-		SHA string `json:"sha"`
-		Ref string `json:"ref"`
+		SHA  string `json:"sha"`
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	User struct {
 		Login string `json:"login"`
@@ -652,6 +678,9 @@ func (w wirePR) pullRequest() PullRequest {
 	pr := PullRequest{
 		Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, HeadRef: w.Head.Ref,
 		Login: w.User.Login, Title: w.Title, Body: w.Body,
+	}
+	if w.Head.Repo != nil {
+		pr.HeadRepo = w.Head.Repo.FullName
 	}
 	for _, l := range w.Labels {
 		pr.Labels = append(pr.Labels, l.Name)

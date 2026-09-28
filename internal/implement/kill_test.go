@@ -718,6 +718,10 @@ func (ft *killTracker) React(_ context.Context, id int64, content string) error 
 	return nil
 }
 
+func (ft *killTracker) Unlabel(context.Context, int, string) error {
+	return errors.New("the implement kind never takes a label off")
+}
+
 func (ft *killTracker) Label(_ context.Context, n int, label string) error {
 	if label == "needs-decision" {
 		ft.die("before-hand-back-label")

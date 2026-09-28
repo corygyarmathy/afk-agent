@@ -75,6 +75,24 @@ func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	}
 }
 
+// A pull request from a fork names the fork, and one whose head repository was
+// deleted names none.
+func TestPullRequestNamesItsHeadRepository(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"number":12,"head":{"sha":"abc","ref":"f","repo":{"full_name":"someone/fork"}}}`: "someone/fork",
+		`{"number":12,"head":{"sha":"abc","ref":"f","repo":null}}`:                         "",
+	} {
+		c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
+		pr, err := c.PullRequest(context.Background(), 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pr.HeadRepo != want {
+			t.Errorf("%s: head repository %q, want %q", body, pr.HeadRepo, want)
+		}
+	}
+}
+
 // A description nobody wrote is null on the wire, and empty here.
 func TestAPullRequestWithNoDescriptionHasAnEmptyBody(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -520,6 +538,32 @@ func TestLabelAddsTheLabel(t *testing.T) {
 	})
 	if err := c.Label(context.Background(), 7, "needs-decision"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnlabelTakesTheLabelOff(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "DELETE", "/repos/o/n/issues/7/labels/ready for review", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.RawPath != "" && r.URL.RawPath != "/repos/o/n/issues/7/labels/ready%20for%20review" {
+			t.Errorf("path sent as %q, want the label escaped", r.URL.RawPath)
+		}
+		fmt.Fprint(w, `[]`)
+	})
+	if err := c.Unlabel(context.Background(), 7, "ready for review"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The API answers 404 for a label the issue does not have, which is what
+// taking it off was for.
+func TestUnlabelingALabelThatIsNotThereIsNotAnError(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Label does not exist"}`, http.StatusNotFound)
+	})
+	if err := c.Unlabel(context.Background(), 7, "ready-for-review"); err != nil {
+		t.Errorf("Unlabel = %v, want nil", err)
 	}
 }
 

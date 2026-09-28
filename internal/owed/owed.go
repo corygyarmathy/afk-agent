@@ -1,6 +1,7 @@
 // Package owed is what a transition's decision owes the tracker, and the read
 // back that makes sure the tracker gets it: the claims on the requests a job
-// took, the replies it gave them, and a hand-back's comment and label.
+// took, the replies it gave them, a hand-back's comment and label, and a label
+// a claim takes off.
 //
 // The runner commits a decision and then performs its effects (ADR 0001 §5).
 // A process killed between the two, or an effect that errors, loses the
@@ -46,6 +47,7 @@ type Tracker interface {
 	React(ctx context.Context, commentID int64, content string) error
 	ReactToIssue(ctx context.Context, number int, content string) error
 	Label(ctx context.Context, number int, label string) error
+	Unlabel(ctx context.Context, number int, label string) error
 }
 
 // What an item is.
@@ -57,6 +59,7 @@ const (
 	claimIssue   what = "claim-issue"   // the agent's 👀 on an issue itself
 	comment      what = "comment"       // a comment of the agent's, carrying a marker
 	label        what = "label"         // a label
+	unlabel      what = "unlabel"       // a label taken off
 )
 
 // Item is one thing owed to the tracker. Made by the constructors below, and
@@ -108,8 +111,14 @@ func ClaimIssue(n int) Item {
 // Reply is a comment on issue or pull request n answering command c. It is
 // read back by a marker naming c, so it is said once for each command.
 func Reply(stem string, n int, c github.Comment, text string) Item {
-	marker := fmt.Sprintf("<!-- afk:reply comment=%d -->", c.ID)
+	marker := ReplyMarker(c.ID)
 	return Comment(stem, n, marker, marker+"\n"+text)
+}
+
+// ReplyMarker is the hidden line the agent's answer to the command with id
+// carries.
+func ReplyMarker(id int64) string {
+	return fmt.Sprintf("<!-- afk:reply comment=%d -->", id)
 }
 
 // Comment is a comment on issue or pull request n, read back by marker, which
@@ -123,6 +132,12 @@ func Label(stem string, n int, name string) Item {
 	return Item{What: label, Stem: stem, On: n, Label: name}
 }
 
+// Unlabel is label name taken off issue or pull request n. It is there once
+// the label is not.
+func Unlabel(stem string, n int, name string) Item {
+	return Item{What: unlabel, Stem: stem, On: n, Label: name}
+}
+
 func (it Item) valid() error {
 	switch {
 	case it.Stem == "":
@@ -130,7 +145,7 @@ func (it Item) valid() error {
 	case it.What == claimComment && it.Comment != 0:
 	case (it.What == claimPR || it.What == claimIssue) && it.On > 0:
 	case it.What == comment && it.On > 0 && it.Marker != "" && strings.Contains(it.Body, it.Marker):
-	case it.What == label && it.On > 0 && it.Label != "":
+	case (it.What == label || it.What == unlabel) && it.On > 0 && it.Label != "":
 	default:
 		return fmt.Errorf("owed item %s is malformed", it.Stem)
 	}
@@ -308,6 +323,8 @@ func (b *Book) do(it Item) func(context.Context) error {
 		return func(ctx context.Context) error { return b.Tracker.ReactToIssue(ctx, it.On, intake.Claim) }
 	case label:
 		return func(ctx context.Context) error { return b.Tracker.Label(ctx, it.On, it.Label) }
+	case unlabel:
+		return func(ctx context.Context) error { return b.Tracker.Unlabel(ctx, it.On, it.Label) }
 	}
 	return func(ctx context.Context) error {
 		// The key stops this run posting twice. The tracker is what stops a
@@ -372,7 +389,7 @@ func (b *Book) there(ctx context.Context, it Item, comments map[int][]github.Com
 			comments[it.On] = cs
 		}
 		return b.said(cs, it.Marker), nil
-	case label:
+	case label, unlabel:
 		ls, ok := labels[it.On]
 		if !ok {
 			is, err := b.Tracker.Issue(ctx, it.On)
@@ -382,12 +399,13 @@ func (b *Book) there(ctx context.Context, it Item, comments map[int][]github.Com
 			ls = is.Labels
 			labels[it.On] = ls
 		}
+		on := false
 		for _, l := range ls {
 			if strings.EqualFold(l, it.Label) {
-				return true, nil
+				on = true
 			}
 		}
-		return false, nil
+		return on == (it.What == label), nil
 	}
 	return false, fmt.Errorf("owed item %s is malformed", it.Stem)
 }
