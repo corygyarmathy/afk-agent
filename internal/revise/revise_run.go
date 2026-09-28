@@ -17,6 +17,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
@@ -60,6 +61,16 @@ type progress struct {
 	// file. Posting it is #149's; a hand-back shows it as the points done so
 	// far.
 	Reply string `json:"reply,omitempty"`
+
+	// Lines and Tests are the size of the whole pull request at the head
+	// last pushed (package size), for the reply's size line. Over the size
+	// signal is a note there, never a cut or a hand-back.
+	Lines int `json:"lines"`
+	Tests int `json:"tests"`
+
+	// Sensitive is the sensitive paths the pull request touches at that
+	// head, which its description's sensitive line names.
+	Sensitive []sensitive.Touched `json:"sensitive,omitempty"`
 }
 
 // run is `revise-run`: one candidate model does the send-back's points in the

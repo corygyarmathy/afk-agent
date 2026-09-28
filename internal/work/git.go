@@ -84,6 +84,17 @@ func FetchInto(ctx context.Context, relayDir string, remote git.Remote, ref stri
 	return git.RunEnv(ctx, relayDir, git.Isolated, "rev-parse", ref)
 }
 
+// FetchAlso fetches ref from the remote into relayDir, a relay already made,
+// carrying the token, and returns the commit ref is at: a second ref beside
+// the one the relay was made with, such as the branch a pull request merges
+// into. It runs in the relay for the reason FetchInto does.
+func FetchAlso(ctx context.Context, relayDir string, remote git.Remote, ref string) (string, error) {
+	if _, err := remote.Run(ctx, relayDir, "fetch", "--quiet", "--no-tags", "--force", remote.URL, "+"+ref+":"+ref); err != nil {
+		return "", err
+	}
+	return git.RunEnv(ctx, relayDir, git.Isolated, "rev-parse", ref)
+}
+
 // Import brings ref from the agent's relay into the workspace, locally and
 // with no token, and leaves branch checked out at commit. The recorded commit
 // is what a revision starts from, which may be behind the ref's tip; the

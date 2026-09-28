@@ -13,10 +13,11 @@
 //	gating    --revise-gate----->  pushing    the local gate passed
 //	                               revising   it failed: back to the session that wrote it
 //	                               handing-back  out of attempts, or the session rewrote the read head
-//	pushing   --revise-push----->  pushed     the denylist, and the leased push
+//	pushing   --revise-push----->  pushed     the denylist, the size and the sensitive paths, and the leased push
 //	                               pushing    the push did not land: again, under the next key
 //	                               handing-back  a denied path, the read head rewritten, or out of rounds
-//	pushed    --revise-pushed--->  watching   the push is on the remote: CI is #147's
+//	pushed    --revise-pushed--->  watching   the push is on the remote, and the sensitive line right or given up on: CI is #147's
+//	                               pushed     the sensitive line edited: read back
 //	                               pushing    not landed yet: again
 //	                               handing-back  someone else pushed during the revision
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
@@ -24,7 +25,13 @@
 //
 // The revision's own commits go on top of the head the send-back was written
 // against, and are pushed under a lease pinned to that head: a push made while
-// the revision ran is never overwritten (#146). The workspace, the relay, the
+// the revision ran is never overwritten (#146).
+//
+// Each push is measured as the pull request will show it after the revision:
+// the whole of it, against its base branch's current tip, which a rebase the
+// operator made before sending it back has moved (#148). The description's
+// sensitive line is brought to what it touches, and the size kept for the
+// reply. The rest of the description is never rewritten. The workspace, the relay, the
 // gate and its retries, the denylist and the leased push are package work,
 // shared with implement.
 //
@@ -73,6 +80,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -98,6 +106,7 @@ const Word = "/revise"
 type Tracker interface {
 	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
+	EditPullRequest(ctx context.Context, number int, body string) error
 }
 
 // Model runs one model. opencode.Command is one.
@@ -151,6 +160,11 @@ type Deps struct {
 	// Denylist is the paths the agent may never push, as globs (see work).
 	// A parameter.
 	Denylist []string
+
+	// Sensitive is the paths the operator named as deserving closer reading,
+	// which the description's sensitive line names when the pull request
+	// touches one. Empty is the feature off. A parameter.
+	Sensitive []sensitive.Path
 
 	// HandOffLabel is the label the hand-off applies, which a claim that
 	// moves on to the work takes off. A parameter.

@@ -13,10 +13,6 @@ import (
 // part of the pull request's description.
 const descriptionFile = "afk-description.md"
 
-// bodyLimit is the most characters GitHub takes in a pull request's body.
-// It is GitHub's, not the operator's to set.
-const bodyLimit = 65536
-
 // titleLimit is the most characters GitHub takes in a pull request's title.
 // It is GitHub's, not the operator's to set.
 const titleLimit = 256
@@ -158,9 +154,4 @@ func description(n int, link, procedure, line, session string) string {
 	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", sensitive.Reminder, to, n, from)
 	b.WriteString(session)
 	return b.String()
-}
-
-// over reports whether GitHub would refuse body as a pull request's.
-func over(body string) bool {
-	return utf8.RuneCountInString(body) > bodyLimit
 }

@@ -28,6 +28,10 @@ import (
 // DefaultBaseURL is the API root a Client with no BaseURL talks to.
 const DefaultBaseURL = "https://api.github.com"
 
+// BodyLimit is the most characters GitHub takes in a pull request's or an
+// issue's body. It is GitHub's, not the operator's to set.
+const BodyLimit = 65536
+
 // Media types. The API version is pinned so that a change upstream arrives as a
 // deliberate bump here rather than as a different response one morning.
 const (
@@ -90,6 +94,10 @@ type PullRequest struct {
 	// repository's own, or a fork's. Empty when that repository has been
 	// deleted.
 	HeadRepo string
+
+	// BaseRef is the branch the pull request asks to merge into. The
+	// operator may change it, so it is read when it is needed.
+	BaseRef string
 
 	// Login is the author's account.
 	Login string
@@ -677,6 +685,9 @@ type wirePR struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
@@ -688,7 +699,7 @@ type wirePR struct {
 func (w wirePR) pullRequest() PullRequest {
 	pr := PullRequest{
 		Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, HeadRef: w.Head.Ref,
-		Login: w.User.Login, Title: w.Title, Body: w.Body,
+		BaseRef: w.Base.Ref, Login: w.User.Login, Title: w.Title, Body: w.Body,
 	}
 	if w.Head.Repo != nil {
 		pr.HeadRepo = w.Head.Repo.FullName

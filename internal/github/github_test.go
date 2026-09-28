@@ -61,7 +61,7 @@ func expect(t *testing.T, w http.ResponseWriter, r *http.Request, method, path, 
 func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"user":{"login":"alice"},"labels":[{"name":"needs-review"}]}`)
+			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"base":{"ref":"main"},"user":{"login":"alice"},"labels":[{"name":"needs-review"}]}`)
 		}
 	})
 
@@ -69,7 +69,7 @@ func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", Login: "alice", Labels: []string{"needs-review"}, Title: "Reserve a job", Body: "Closes #7."}
+	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", BaseRef: "main", Login: "alice", Labels: []string{"needs-review"}, Title: "Reserve a job", Body: "Closes #7."}
 	if fmt.Sprint(pr) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", pr, want)
 	}

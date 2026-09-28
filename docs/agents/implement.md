@@ -145,6 +145,14 @@ Its sections, in this order, each left out when it has nothing to say:
   the files are counted rather than listed when listing them would take it
   over GitHub's limit. An edit that never lands after `--effect-rounds`, or
   one over the limit even counted, is a log line, and the work goes on.
+- **A revision's push recomputes it too**
+  ([#148](https://github.com/corygyarmathy/afk-agent/issues/148)), with the
+  same edit. The diff it matches is the whole pull request's, from where its
+  head meets the base branch's current tip, fetched at the push: a pull
+  request the operator rebased onto a newer tip before sending it back does
+  not count the commits between the two as its own. The size is measured on
+  the same diff and kept for the revision's reply, where over the signal is a
+  note, never a cut or a hand-back.
 
 ### Sensitive paths
 
@@ -293,7 +301,8 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
 `--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
-gate, attempts, denylist and tier: there is no revise tier of its own.
+gate, attempts, denylist, sensitive paths and tier: there is no revise tier of
+its own.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the
