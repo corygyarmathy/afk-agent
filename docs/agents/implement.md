@@ -26,8 +26,8 @@ label, when `afk` is given `--eligibility-label`
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
-| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. |
-| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings its sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
+| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push goes back to the session instead, once, to be [cut](#the-size-signal). |
+| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, files a first piece's rest, blocks it and names it in the link line, then brings the sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
@@ -88,7 +88,9 @@ has the reasoning. The code is
 [`internal/implement/description.go`](../../internal/implement/description.go).
 Its sections, in this order, each left out when it has nothing to say:
 
-1. **The link line**, `Closes #N`. The agent's.
+1. **The link line**, `Closes #N`, or `Part of #N` on a first piece, which
+   names the issue filed for the rest once it is filed
+   ([the size signal](#the-size-signal)). The agent's.
 2. **The sensitive line**, only on a pull request that touches a sensitive
    path: `**Sensitive:** job store schema (…), CI (…)`, each label the
    operator named that matched, in the operator's order, with the files it
@@ -118,8 +120,9 @@ Its sections, in this order, each left out when it has nothing to say:
   ([#111](https://github.com/corygyarmathy/afk-agent/issues/111),
   [#127](https://github.com/corygyarmathy/afk-agent/issues/127)). A line longer
   than GitHub takes for a title (256 characters) is no title rather than a cut
-  one. The prompt asks for that line only when the size rule is in force and
-  the session stops at a first piece, and the line is never part of the body.
+  one, and a piece with no title keeps the issue's. The prompt asks for that
+  line only when the size rule is in force and the session stops at a first
+  piece, or is cut to one, and the line is never part of the body.
 - **The agent orders them**, drops a heading it did not name and a section that
   says only "none", and links each `path:line` that names a file to that line
   at the pushed head, as the advisory review's citations are.
@@ -172,10 +175,34 @@ non-test lines the work may have before its size needs a decision. The code is
   binary files and files deleted whole are left out, and tests are counted
   beside it. [`internal/size`](../../internal/size/size.go) says what falls in
   each.
-- **Over it**, the work is pushed and no pull request is opened. The issue gets
-  a hand-back with both counts, the signal and the branch, so the work is kept
-  and a human decides what becomes of it. At the signal or under it, nothing
-  changes.
+- **Over it, the work is cut once**
+  ([#127](https://github.com/corygyarmathy/afk-agent/issues/127)). Before its
+  first push, it goes back to the session that wrote it, as a fix does, told
+  the counts and the signal: leave the branch at a first coherent piece, write
+  what is left to `.git/afk-remainder.md`, and give the piece a title as the
+  description file's first line. A refactor the rest needs is the natural
+  first piece, and an incidental one goes in the rest. The piece is gated and
+  measured again. There is no second cut, and a fix after the push is never
+  cut.
+- **A piece under the signal opens as part of the issue**: `Part of #N` in
+  place of `Closes #N`, under the session's title. Then the agent files the
+  rest as a new issue in the same repository: what the session said is left,
+  and a link to the pull request. It is blocked by the issue with a native
+  dependency, and carries no label, so whether and when it is worked is the
+  operator's decision. Last, the pull request's link line names it:
+  `Part of #N. The rest is #R.` Each of the three is read back from the
+  tracker and made under the next key until it is there. A rest never filed
+  hands the pull request back. A dependency or a link line that never lands
+  is a log line, and the work goes on.
+- **A session may stop at a first piece by itself**, as the prompt tells it
+  it can, and say what is left in the same file. Its pull request is a piece
+  too, with no cut: `Part of`, not `Closes`, so merging it does not close an
+  issue with work left.
+- **A piece still over the signal**, or work the session left as it was
+  because it found no coherent piece, is pushed and no pull request is opened.
+  The issue gets a hand-back with both counts, the signal, the cut and the
+  branch, so the work is kept and a human decides what becomes of it. At the
+  signal or under it, nothing changes.
 - **The override** is the instructions of the command the job claimed, and
   only those: "don't split" or "do not split", anywhere in them, opens the pull
   request whatever its size, and the session is told not to stop early. A
@@ -208,7 +235,7 @@ non-test lines the work may have before its size needs a decision. The code is
   | --- | --- | --- | --- |
   | Contents | write | the push, and the clone and every read of the remote's branches (write includes read) | the grant confirmed on the App by the operator, 2026-09-25; a read of a private repository not observed |
   | Pull requests | write | opening the pull request, its labels | confirmed on the App by the operator, 2026-09-25 |
-  | Issues | write | the claim, replies, hand-backs and labels on the issue | by GitHub's documentation; not verified |
+  | Issues | write | the claim, replies, hand-backs and labels on the issue; filing a first piece's rest, and its native dependency | by GitHub's documentation for the claim and the rest; the dependency endpoints' documentation names no permission; not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
 
   The base branch's required checks are read with Metadata: read, which the
@@ -224,8 +251,9 @@ non-test lines the work may have before its size needs a decision. The code is
 The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
-(branch, base, session, the session's description, the sensitive line, gate
-attempts and fixes, the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
+(branch, base, session, the session's description and what it says is left,
+whether the work was cut, the rest's issue, the sensitive line, gate attempts
+and fixes, the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
