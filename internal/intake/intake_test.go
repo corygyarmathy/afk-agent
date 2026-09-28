@@ -38,6 +38,10 @@ type tracker struct {
 	blocked map[int]int
 	blind   map[int]bool
 
+	// authors is who opened each pull request. A pull request not in it is
+	// the agent's.
+	authors map[int]string
+
 	// eyes is the reactions on each issue itself, and looked the issues
 	// whose reactions were read.
 	eyes   map[int][]github.Reaction
@@ -61,7 +65,11 @@ func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
 		})
 	}
 	for _, n := range tr.prs {
-		out = append(out, github.Issue{Number: n, State: "open", PullRequest: true, UpdatedAt: tr.updatedAt(n)})
+		author, ok := tr.authors[n]
+		if !ok {
+			author = agent
+		}
+		out = append(out, github.Issue{Number: n, State: "open", PullRequest: true, Author: author, Labels: tr.labels[n], UpdatedAt: tr.updatedAt(n)})
 	}
 	return out, nil
 }
@@ -853,6 +861,8 @@ func TestAnUnattendedIntakeThatCannotWorkIsRefused(t *testing.T) {
 	}{
 		{"no kind", func(u *intake.Unattended) { u.Kind = "" }, "unknown job kind"},
 		{"no start", func(u *intake.Unattended) { u.Start = "" }, "no start state"},
+		{"a limit and no hand-off label", func(u *intake.Unattended) { u.Queue = intake.ReviewQueue{Limit: 1} }, "no hand-off label"},
+		{"a negative limit", func(u *intake.Unattended) { u.Queue = intake.ReviewQueue{Limit: -1, Label: handOff} }, "limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := unattended(t, storetest.Open(t), &tracker{})
@@ -861,5 +871,179 @@ func TestAnUnattendedIntakeThatCannotWorkIsRefused(t *testing.T) {
 				t.Errorf("err = %v, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// handOff is the hand-off label the fixtures configure.
+const handOff = "ready-for-review"
+
+// limited is an unattended intake with a review-queue limit, which logs to
+// what it returns.
+func limited(t *testing.T, s store.Store, tr *tracker, limit int) (*intake.Intake, *[]string) {
+	t.Helper()
+	in := unattended(t, s, tr)
+	in.Unattended.Queue = intake.ReviewQueue{Limit: limit, Label: handOff}
+	var logged []string
+	in.Log = func(msg string) { logged = append(logged, msg) }
+	return in, &logged
+}
+
+// labelledIssues is issues numbered ns, each carrying the eligibility label.
+func labelledIssues(tr *tracker, ns ...int) {
+	if tr.labels == nil {
+		tr.labels = map[int][]string{}
+	}
+	for _, n := range ns {
+		tr.issues = append(tr.issues, n)
+		tr.labels[n] = append(tr.labels[n], eligible)
+	}
+}
+
+// With room for k in the review queue, a pass takes the first k eligible
+// issues and no more. The rest are not taken at all: no job, and nothing asked
+// of the tracker beyond what deciding they could be taken reads.
+func TestIntakeTakesOnlyWhatTheReviewQueueHasRoomFor(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{50}, labels: map[int][]string{50: {handOff}}}
+	labelledIssues(tr, 9, 4, 17)
+	in, _ := limited(t, s, tr, 3)
+
+	made := pass(t, in)
+	if got, want := strings.Join(ids(made), " "), "implement-issue-4 implement-issue-9"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+	if _, err := s.Job(context.Background(), "implement-issue-17"); !errors.Is(err, store.ErrNoJob) {
+		t.Errorf("issue 17 was held, and has a job: err = %v", err)
+	}
+}
+
+// With the queue at the limit, nothing labelled is taken and nothing reaches
+// the tracker: it is still the operator's to /implement.
+func TestAFullReviewQueueTakesNothing(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{50, 51}, labels: map[int][]string{50: {handOff}, 51: {handOff}}}
+	labelledIssues(tr, 7)
+	in, _ := limited(t, s, tr, 2)
+
+	if made := pass(t, in); len(made) != 0 {
+		t.Errorf("made %v due with the review queue full", ids(made))
+	}
+	jobs, err := s.Jobs(context.Background())
+	if err != nil || len(jobs) != 0 {
+		t.Errorf("jobs = %v, err = %v; want none", jobs, err)
+	}
+}
+
+// An implement job taken but not handed off is in the review queue, whatever
+// started it: due, waiting on CI, or leased. One at rest - handed off, handed
+// back, or parked - is not.
+func TestAnImplementInFlightCountsTowardsTheQueue(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := context.Background()
+	// Due now, as /implement's arming or a pass's taking leaves it.
+	storetest.Seed(t, s, store.KindImplement, 1, "start")
+	// Leased, with nothing scheduled.
+	storetest.Seed(t, s, store.KindImplement, 2, "start")
+	storetest.Rest(t, s, "implement-issue-2", "implementing", 0, now)
+	if _, ok, err := s.Acquire(ctx, "implement-issue-2", "a-worker", now, time.Hour); err != nil || !ok {
+		t.Fatalf("Acquire = %v, %v", ok, err)
+	}
+	// At rest: handed back, and nothing will run it.
+	storetest.Seed(t, s, store.KindImplement, 3, "start")
+	storetest.Rest(t, s, "implement-issue-3", "start", 0, now)
+	// Not an implement.
+	storetest.Seed(t, s, store.KindReview, 60, "start")
+
+	tr := &tracker{}
+	labelledIssues(tr, 7, 8)
+	in, _ := limited(t, s, tr, 3)
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due, want only [implement-issue-7]", ids(made))
+	}
+
+	// What that pass took is in flight too, so the next one takes nothing.
+	if made := pass(t, in); len(made) != 0 {
+		t.Errorf("the next pass made %v due, and the queue is full", ids(made))
+	}
+}
+
+// Only the agent's handed-off pull requests are waiting on the operator. A
+// sent-back one whose revision claimed it has no hand-off label; a hand-back
+// has the hand-back label instead; the operator's own pull request is theirs,
+// labelled or not.
+func TestOnlyTheAgentsHandedOffPullRequestsCount(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		prs:     []int{50, 51, 52, 53},
+		labels:  map[int][]string{50: {"Ready-For-Review"}, 51: {"handed-back"}, 53: {handOff}},
+		authors: map[int]string{53: "alice"},
+	}
+	labelledIssues(tr, 7, 8)
+	in, _ := limited(t, s, tr, 2)
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due, want only [implement-issue-7]", ids(made))
+	}
+}
+
+// The limit holds only what the eligibility label would take. A command still
+// arms its job with the queue full, whether it is /implement on an issue or
+// /review on a pull request.
+func TestCommandsRunWithTheQueueFull(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues: []int{7},
+		prs:    []int{50},
+		labels: map[int][]string{50: {handOff}},
+		comments: map[int][]github.Comment{
+			7:  {comment(1, "alice", "OWNER", "/implement")},
+			50: {comment(2, "alice", "OWNER", "/review")},
+		},
+	}
+	in, _ := limited(t, s, tr, 1)
+	if got, want := strings.Join(ids(pass(t, in)), " "), "implement-issue-7 review-pr-50"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+}
+
+// Intake says when it starts holding an issue back and when it stops, once
+// each: a pass that holds as the last one did says nothing.
+func TestHoldingIsLoggedOncePerChange(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{50}, labels: map[int][]string{50: {handOff}}}
+	labelledIssues(tr, 7)
+	in, logged := limited(t, s, tr, 1)
+
+	pass(t, in)
+	if len(*logged) != 1 || !strings.Contains((*logged)[0], "holding") {
+		t.Fatalf("logged %q, want one line saying intake is holding", *logged)
+	}
+	pass(t, in)
+	if len(*logged) != 1 {
+		t.Errorf("a steady pass logged %q", (*logged)[1:])
+	}
+
+	// The operator merges the pull request: the queue has room, the issue is
+	// taken, and intake says it has stopped holding.
+	tr.prs = nil
+	if made := pass(t, in); len(made) != 1 {
+		t.Errorf("made %v due once the queue had room, want [implement-issue-7]", ids(made))
+	}
+	if len(*logged) != 2 || !strings.Contains((*logged)[1], "stopped holding") {
+		t.Errorf("logged %q, want a second line saying intake stopped holding", *logged)
+	}
+	pass(t, in)
+	if len(*logged) != 2 {
+		t.Errorf("a steady pass logged %q", (*logged)[2:])
+	}
+}
+
+// Without a limit, intake takes every eligible issue however many pull
+// requests are waiting.
+func TestWithoutALimitIntakeIsUnlimited(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{50}, labels: map[int][]string{50: {handOff}}}
+	labelledIssues(tr, 7, 8)
+	if made := pass(t, unattended(t, s, tr)); len(made) != 2 {
+		t.Errorf("made %v due, want both", ids(made))
 	}
 }

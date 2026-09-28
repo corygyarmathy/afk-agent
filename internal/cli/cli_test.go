@@ -115,6 +115,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--eligibility-label <l>",
 		},
 		{
+			name:     "help lists the review-queue limit",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--review-queue-limit <n>",
+		},
+		{
 			name:     "version",
 			args:     []string{"version"},
 			want:     ExitOK,
@@ -786,14 +792,14 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 			t.Errorf("err = %v, want it to contain %q", err, tc.want)
 		}
 	}
-	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, "")
+	in, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, intake.Unattended{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if in.Unattended != (intake.Unattended{}) {
 		t.Errorf("no eligibility label, and intake takes %+v unattended", in.Unattended)
 	}
-	if labelled, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, "ready-for-agent"); err != nil || labelled.Unattended != unattended("ready-for-agent") {
+	if labelled, err := newIntake(context.Background(), tr, nil, "holder", time.Minute, unattended("ready-for-agent")); err != nil || labelled.Unattended != unattended("ready-for-agent") {
 		t.Errorf("with an eligibility label, intake takes %+v unattended (%v), want %+v", labelled.Unattended, err, unattended("ready-for-agent"))
 	}
 	if deps.Tracker != tr.client || in.Tracker != tr.client {
@@ -970,6 +976,73 @@ func withLoggingImplement(t *testing.T, interrupt bool) {
 		})
 	}
 	t.Cleanup(func() { catalogue, implementDeps = was, wasImplement })
+}
+
+// What intake takes with nobody asking is the eligibility label, held at the
+// review-queue limit if there is one. Without the flag there is no limit. A
+// limit counts the pull requests carrying the hand-off label, so it needs one.
+func TestTakingIsReadFromTheParameters(t *testing.T) {
+	for _, env := range []string{"AFK_ELIGIBILITY_LABEL", "AFK_REVIEW_QUEUE_LIMIT", "AFK_HAND_OFF_LABEL"} {
+		t.Setenv(env, "")
+	}
+	for _, tc := range []struct {
+		name string
+		p    params
+		want intake.Unattended
+		err  string
+	}{
+		{name: "nothing", p: params{}},
+		{name: "no limit", p: params{eligibilityLabel: "ready-for-agent", handOffLabel: "ready-for-review"}, want: unattended("ready-for-agent")},
+		{
+			name: "a limit",
+			p:    params{eligibilityLabel: "ready-for-agent", reviewQueueLimit: "3", handOffLabel: "ready-for-review"},
+			want: func() intake.Unattended {
+				u := unattended("ready-for-agent")
+				u.Queue = intake.ReviewQueue{Limit: 3, Label: "ready-for-review"}
+				return u
+			}(),
+		},
+		{name: "a limit with no hand-off label", p: params{eligibilityLabel: "ready-for-agent", reviewQueueLimit: "3"}, err: "--hand-off-label"},
+		{name: "a limit of none", p: params{eligibilityLabel: "ready-for-agent", reviewQueueLimit: "0", handOffLabel: "l"}, err: "--review-queue-limit"},
+		{name: "a limit that is not a number", p: params{eligibilityLabel: "ready-for-agent", reviewQueueLimit: "three", handOffLabel: "l"}, err: "--review-queue-limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.p.taking()
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Errorf("err = %v, want it to contain %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("taking = %+v, %v; want %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// afk intake and afk work both take issues, so both take the limit, and afk
+// intake the hand-off label it counts by. Bound on afk work alone, a hand-run
+// pass could take every eligible issue at once.
+func TestIntakeAndWorkBothTakeTheLimit(t *testing.T) {
+	for _, env := range []string{"AFK_REPO", "AFK_APP_ID", "AFK_APP_KEY", "AFK_STORE", "AFK_LEASE"} {
+		t.Setenv(env, "")
+	}
+	for _, args := range [][]string{
+		{"intake", "--review-queue-limit", "0", "--hand-off-label", "l", "--eligibility-label", "e", "--repo", "o/n", "--app-id", "1", "--app-key", "/nonexistent"},
+		{"work", "--review-queue-limit", "0", "--hand-off-label", "l", "--eligibility-label", "e"},
+	} {
+		var stdout, stderr bytes.Buffer
+		Main(args, &stdout, &stderr)
+		if strings.Contains(stderr.String(), "not defined") {
+			t.Errorf("afk %s: %s", args[0], stderr.String())
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"intake", "--review-queue-limit", "0", "--eligibility-label", "e", "--hand-off-label", "l", "--repo", "o/n", "--app-id", "1", "--app-key", "/nonexistent"}, &stdout, &stderr)
+	if code != ExitUsage || !strings.Contains(stderr.String(), "--review-queue-limit") {
+		t.Errorf("exit = %d, stderr:\n%s\nwant a usage error naming --review-queue-limit", code, stderr.String())
+	}
 }
 
 // afk intake is nothing without a repository, and says so before it opens

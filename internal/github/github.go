@@ -115,6 +115,9 @@ type Issue struct {
 	// Labels is the names of the labels on it.
 	Labels []string
 
+	// Author is the login of the account that opened it.
+	Author string
+
 	// BlockedBy is how many open issues block it, from its native
 	// dependencies. DependenciesRead is whether the API said at all: an issue
 	// served without the summary has blockers nobody can read, which is not
@@ -480,6 +483,10 @@ type wireIssue struct {
 	// that is a pull request.
 	PullRequest *struct{} `json:"pull_request"`
 
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+
 	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
@@ -494,7 +501,7 @@ type wireIssue struct {
 }
 
 func (w wireIssue) issue() Issue {
-	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, UpdatedAt: w.UpdatedAt}
+	is := Issue{Number: w.Number, State: w.State, Title: w.Title, Body: w.Body, PullRequest: w.PullRequest != nil, Author: w.User.Login, UpdatedAt: w.UpdatedAt}
 	if w.Dependencies != nil {
 		is.BlockedBy, is.DependenciesRead = w.Dependencies.BlockedBy, true
 	}
