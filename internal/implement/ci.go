@@ -161,6 +161,8 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 //
 // Logged as it is decided, before the runner commits: a run that fails to
 // commit is run again, and logs the catch again.
+// `afk caught` counts catches from GitHub rather than from this line
+// (ADR 0006), so the second line changes no count.
 func (d *Deps) caught(in transition.In, pr int, p progress, failed []github.CheckRun) {
 	var ran []github.CheckRun
 	for _, r := range failed {

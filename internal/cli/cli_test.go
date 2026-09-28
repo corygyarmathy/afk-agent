@@ -246,6 +246,31 @@ func TestMain_ExitCodes(t *testing.T) {
 			want:     ExitUsage,
 			stderrIs: "budget needs --budget-key",
 		},
+		{
+			name:     "caught has no repository to read",
+			args:     []string{"caught"},
+			want:     ExitUsage,
+			stderrIs: "caught needs --repo",
+		},
+		{
+			name:     "caught reads through the App",
+			args:     []string{"caught", "--repo", "o/n"},
+			want:     ExitUsage,
+			stderrIs: "--repo needs --app-id",
+		},
+		{
+			// It reads the repository and nothing intake is configured by.
+			name:     "caught takes no intake parameter",
+			args:     []string{"caught", "--repo", "o/n", "--eligibility-label", "afk"},
+			want:     ExitUsage,
+			stderrIs: "flag provided but not defined: -eligibility-label",
+		},
+		{
+			name:     "caught takes no argument",
+			args:     []string{"caught", "extra"},
+			want:     ExitUsage,
+			stderrIs: `unexpected argument "extra"`,
+		},
 	}
 
 	for _, tt := range tests {
