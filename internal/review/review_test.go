@@ -214,9 +214,11 @@ type reviewer struct {
 	answers []error
 	// replies, by call, replace the fixture's reply text.
 	replies []string
-	asked   []opencode.Request
-	diffs   []string
-	specs   []string
+	// unread is how many sub-agents' sessions every reply could not read.
+	unread int
+	asked  []opencode.Request
+	diffs  []string
+	specs  []string
 }
 
 func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
@@ -236,7 +238,7 @@ func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 	if i := len(m.asked) - 1; i < len(m.replies) {
 		text = m.replies[i]
 	}
-	return opencode.Reply{Text: text, Cost: 0.0123}, nil
+	return opencode.Reply{Text: text, Cost: 0.0123, Unread: m.unread}, nil
 }
 
 func transient(ref model.Ref) error {
@@ -1149,6 +1151,31 @@ func TestAReviewIsPostedCollapsedUnderASummaryNamingOnlyTheHead(t *testing.T) {
 	for _, want := range []string{review.Marker(head), "does not gate or block merging", "Reserve has no test"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("the review does not contain %q:\n%s", want, b)
+		}
+	}
+}
+
+// The review says what the run cost, and when some of its sub-agents' cost
+// could not be read, that the figure is a floor rather than the whole (#99).
+func TestAReviewSaysWhatItCostAndWhetherThatIsAllOfIt(t *testing.T) {
+	for _, tc := range []struct {
+		unread    int
+		want, not string
+	}{
+		{0, "· $0.0123</sub>", "≥"},
+		{1, "· ≥ $0.0123, with 1 sub-agent's cost unread</sub>", ""},
+		{2, "· ≥ $0.0123, with 2 sub-agents' cost unread</sub>", ""},
+	} {
+		f := setup(t, newTracker(command(1)), &reviewer{unread: tc.unread})
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		b := f.tr.byAgent()[0].Body
+		if !strings.Contains(b, tc.want) {
+			t.Errorf("with %d unread, the review does not contain %q:\n%s", tc.unread, tc.want, b)
+		}
+		if tc.not != "" && strings.Contains(b, tc.not) {
+			t.Errorf("with %d unread, the review contains %q:\n%s", tc.unread, tc.not, b)
 		}
 	}
 }
