@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,14 @@ const (
 	envStderr = "AFK_OPENCODE_STDERR"
 	envRecord = "AFK_OPENCODE_RECORD"
 	envPids   = "AFK_OPENCODE_PIDS"
+
+	// envExports is a directory of `opencode export` output, one <session>.json
+	// each. A session with no file is one opencode does not have.
+	envExports = "AFK_OPENCODE_EXPORTS"
+
+	// envExportHang is a file an export writes when it starts, and then hangs
+	// rather than exporting anything.
+	envExportHang = "AFK_OPENCODE_EXPORT_HANG"
 )
 
 var ref = model.Ref{Provider: "opencode-go", Model: "muse-spark-1.3-contributor"}
@@ -78,6 +87,13 @@ func request(t *testing.T) opencode.Request {
 	return opencode.Request{Model: ref, Dir: t.TempDir(), Prompt: "Reply with the single word: ok"}
 }
 
+// costed is a request that asks for its sub-agents' cost.
+func costed(t *testing.T) opencode.Request {
+	req := request(t)
+	req.Cost = true
+	return req
+}
+
 // A run that succeeded, recorded from the real binary on 2026-09-13.
 func TestAReplyIsReadFromARecordedRun(t *testing.T) {
 	c := fake(t, "replay", map[string]string{envStream: fixture(t, "ok.jsonl"), envExit: "0"})
@@ -95,6 +111,209 @@ func TestAReplyIsReadFromARecordedRun(t *testing.T) {
 	if got != want {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}
+}
+
+// A run that handed work to a sub-agent, recorded from the real binary on
+// 2026-09-28 with the child's export beside it. The sub-agent ran in a session
+// of its own, and nothing of it is in the run's stream but the task tool call
+// naming that session: its cost is read from its export and counted, or a
+// review that fans out reports a fraction of what it spent (#99).
+func TestASubAgentsCostIsCounted(t *testing.T) {
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: dir})
+
+	got, err := c.Run(context.Background(), costed(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The run's own steps, then the sub-agent's session.
+	const want = 0.001925676 + 0.00007284 + 0.001617276
+	if math.Abs(got.Cost-want) > 1e-12 {
+		t.Errorf("cost %v, want %v: the run's and its sub-agent's", got.Cost, want)
+	}
+	wantTokens := opencode.Tokens{Input: 12306 + 188 + 10730, Output: 124 + 4 + 4, CacheRead: 1792 + 14080 + 1792}
+	if got.Tokens != wantTokens {
+		t.Errorf("tokens %+v, want %+v", got.Tokens, wantTokens)
+	}
+	if got.SubAgents != 1 || got.Unread != 0 {
+		t.Errorf("%d sub-agents with %d unread, want 1 with none", got.SubAgents, got.Unread)
+	}
+	if got.Text != "pong" || got.Session != "ses_f1815410dffe1YAxJ0v1eQ7qFL" {
+		t.Errorf("text %q in %s, want the run's own reply in its own session", got.Text, got.Session)
+	}
+}
+
+// A sub-agent whose cost cannot be read does not fail the run: the cost
+// informs and decides nothing. The reply says how many went uncounted, so
+// that what it reports reads as the floor it is.
+func TestASubAgentWhoseCostCannotBeReadIsUnread(t *testing.T) {
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: exports(t, nil)})
+
+	got, err := c.Run(context.Background(), costed(t))
+	if err != nil {
+		t.Fatalf("got %v, want the reply: an uncounted sub-agent is not a failed run", err)
+	}
+	if got.Unread != 1 {
+		t.Errorf("%d sub-agents unread, want 1", got.Unread)
+	}
+	const want = 0.001925676 + 0.00007284
+	if math.Abs(got.Cost-want) > 1e-12 {
+		t.Errorf("cost %v, want the run's own %v", got.Cost, want)
+	}
+}
+
+// A sub-agent's own sub-agents are counted too, each session once however
+// many times it is named. opencode 1.18.31 denies the general sub-agent the
+// task tool, so this is a shape the recording could not show: the export's
+// task part is the one the parent's session holds for the same call.
+func TestASubAgentsSubAgentsAreCounted(t *testing.T) {
+	c := fake(t, "replay", map[string]string{
+		envExit: "0",
+		envStream: stream(t,
+			`{"type":"step_start","sessionID":"ses_p","part":{"type":"step-start"}}`,
+			taskEvent("ses_p", "ses_c"),
+			taskEvent("ses_p", "ses_c"),
+			`{"type":"text","sessionID":"ses_p","part":{"type":"text","text":"done"}}`,
+			`{"type":"step_finish","sessionID":"ses_p","part":{"type":"step-finish","cost":1}}`,
+		),
+		envExports: exports(t, map[string]string{
+			"ses_c": exported("ses_c", 2, "ses_g"),
+			"ses_g": exported("ses_g", 4),
+		}),
+	})
+
+	got, err := c.Run(context.Background(), costed(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cost != 7 || got.SubAgents != 2 || got.Unread != 0 {
+		t.Errorf("cost %v across %d sub-agents with %d unread, want 7 across 2 with none: the run, its sub-agent and that one's, once each", got.Cost, got.SubAgents, got.Unread)
+	}
+}
+
+// A request that does not ask for its sub-agents' cost does not read their
+// sessions: its reply's cost is the run's own, and a caller that has no use
+// for the figure does not wait on the reads.
+func TestSubAgentsAreNotReadUnlessAskedFor(t *testing.T) {
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: dir})
+
+	got, err := c.Run(context.Background(), request(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = 0.001925676 + 0.00007284
+	if math.Abs(got.Cost-want) > 1e-12 || got.SubAgents != 0 || got.Unread != 0 {
+		t.Errorf("cost %v across %d sub-agents with %d unread, want the run's own %v and none read", got.Cost, got.SubAgents, got.Unread, want)
+	}
+}
+
+// The reads of the sub-agents' sessions have what is left of the run's bound,
+// not a bound of their own, so a run and its reads together stay inside the
+// one the lease is sized against. Here the run exits as its bound runs out,
+// which leaves nothing for the read: the sub-agent is unread, and the run
+// still succeeded.
+func TestSubAgentsAreReadWithinTheRunsBound(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "pids")
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "linger", map[string]string{envPids: pids, envStream: fixture(t, "task.jsonl"), envExit: "0", envExports: dir})
+	c.Timeout = 500 * time.Millisecond
+
+	got, err := c.Run(context.Background(), costed(t))
+	if err != nil {
+		t.Fatalf("got %v, want the reply: an unread sub-agent is not a failed run", err)
+	}
+	if got.SubAgents != 1 || got.Unread != 1 {
+		t.Errorf("%d sub-agents with %d unread, want the one unread: the bound had run out", got.SubAgents, got.Unread)
+	}
+	for _, pid := range waitForPids(t, pids) {
+		gone(t, pid)
+	}
+}
+
+// A caller that stops while a finished run's sub-agents' sessions are being
+// read gets the reply, with those unread. The run succeeded; throwing it away
+// over a figure that decides nothing would lose its session to a retry.
+func TestStoppingWhileSubAgentsAreReadKeepsTheReply(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "export")
+	c := fake(t, "replay", map[string]string{envStream: fixture(t, "task.jsonl"), envExit: "0", envExportHang: started})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		reply opencode.Reply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := c.Run(ctx, costed(t))
+		done <- result{r, err}
+	}()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the export never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("got %v, want the reply the run wrote", r.err)
+		}
+		if r.reply.Text != "pong" || r.reply.Session != "ses_f1815410dffe1YAxJ0v1eQ7qFL" {
+			t.Errorf("text %q in %s, want the run's reply in its session", r.reply.Text, r.reply.Session)
+		}
+		if r.reply.Unread != 1 {
+			t.Errorf("%d sub-agents unread, want the one whose read was stopped", r.reply.Unread)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+}
+
+// taskEvent is a finished task tool call in a run's stream, as opencode 1.18.31
+// writes it, trimmed to what names the sub-agent's session.
+func taskEvent(parent, child string) string {
+	return fmt.Sprintf(`{"type":"tool_use","sessionID":%q,"part":{"type":"tool","tool":"task","state":{"status":"completed","metadata":{"parentSessionId":%[1]q,"sessionId":%q}}}}`, parent, child)
+}
+
+// exported is a session's `opencode export`, trimmed to its cost and to a
+// task tool call for each of children.
+func exported(session string, cost float64, children ...string) string {
+	var parts []string
+	for _, c := range children {
+		parts = append(parts, fmt.Sprintf(`{"type":"tool","tool":"task","state":{"status":"completed","metadata":{"sessionId":%q}}}`, c))
+	}
+	return fmt.Sprintf(`{"info":{"id":%q,"cost":%v,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}},"messages":[{"info":{"role":"assistant"},"parts":[%s]}]}`,
+		session, cost, strings.Join(parts, ","))
+}
+
+// exports writes the sessions opencode has, by id, for the fake's export.
+func exports(t *testing.T, sessions map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for id, body := range sessions {
+		if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func readFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(fixture(t, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 // An unknown model, recorded from the real binary. The stream says only
@@ -505,6 +724,9 @@ func TestHelperIsOpencode(t *testing.T) {
 }
 
 func helper(mode string, args []string) int {
+	if len(args) == 2 && args[0] == "export" {
+		return export(args[1])
+	}
 	switch mode {
 	case "replay":
 		fmt.Fprint(os.Stderr, os.Getenv(envStderr))
@@ -568,4 +790,24 @@ func replay() int {
 	}
 	code, _ := strconv.Atoi(os.Getenv(envExit))
 	return code
+}
+
+// export is `opencode export <session>`, which writes its progress to stderr
+// and the session to stdout.
+func export(session string) int {
+	fmt.Fprintf(os.Stderr, "Exporting session: %s\n", session)
+	if p := os.Getenv(envExportHang); p != "" {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 3
+		}
+		time.Sleep(time.Hour)
+	}
+	b, err := os.ReadFile(filepath.Join(os.Getenv(envExports), session+".json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Session not found")
+		return 1
+	}
+	os.Stdout.Write(b)
+	return 0
 }

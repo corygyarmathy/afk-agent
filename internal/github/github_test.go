@@ -336,6 +336,97 @@ func TestCheckRunsAreReadToTheLastPage(t *testing.T) {
 	}
 }
 
+// A bot's login carries brackets, which go on the wire escaped; GitHub's count
+// comes back with the runs, so a listing it cut off can say so.
+func TestWorkflowRunsAreAnActorsRunsWithOneConclusionToTheLastPage(t *testing.T) {
+	var srvURL string
+	c, srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/actions/runs", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":2,"head_sha":"def","head_branch":"afk/issue-8","event":"pull_request","conclusion":"failure","created_at":"2026-09-27T11:00:00Z"}]}`)
+			return
+		}
+		// The first page is the one the client builds; the next is GitHub's.
+		if q := r.URL.Query(); q.Get("actor") != "afk[bot]" || q.Get("status") != "failure" {
+			t.Errorf("query %s, want actor afk[bot] and status failure", r.URL.RawQuery)
+		}
+		if !strings.Contains(r.URL.RawQuery, "actor=afk%5Bbot%5D") {
+			t.Errorf("query %s, want the login escaped", r.URL.RawQuery)
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/actions/runs?page=2>; rel="next"`, srvURL))
+		fmt.Fprint(w, `{"total_count":1500,"workflow_runs":[{"id":1,"head_sha":"abc","head_branch":"afk/issue-7","event":"push","conclusion":"failure","created_at":"2026-09-27T10:00:00Z","name":"ci"}]}`)
+	})
+	srvURL = srv.URL
+
+	runs, total, err := c.WorkflowRuns(context.Background(), "afk[bot]", "failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []github.WorkflowRun{
+		{ID: 1, HeadSHA: "abc", HeadBranch: "afk/issue-7", Event: "push", Conclusion: "failure", Created: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)},
+		{ID: 2, HeadSHA: "def", HeadBranch: "afk/issue-8", Event: "pull_request", Conclusion: "failure", Created: time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)},
+	}
+	if !reflect.DeepEqual(runs, want) {
+		t.Errorf("got %+v\nwant %+v", runs, want)
+	}
+	if total != 1500 {
+		t.Errorf("total %d, want 1500", total)
+	}
+}
+
+// How many runs an actor started is GitHub's count of them, read from one run
+// of one page: no conclusion is asked for, and nothing is paged.
+func TestWorkflowRunCountIsGitHubsCountOfAnActorsRuns(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/actions/runs", "application/vnd.github+json") {
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("actor") != "afk[bot]" || q.Has("status") || q.Get("per_page") != "1" {
+			t.Errorf("query %s, want afk[bot]'s runs, any conclusion, one to a page", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `{"total_count":51,"workflow_runs":[{"id":1}]}`)
+	})
+
+	n, err := c.WorkflowRunCount(context.Background(), "afk[bot]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 51 {
+		t.Errorf("count %d, want 51", n)
+	}
+}
+
+func TestWorkflowJobsAreReadToTheLastPage(t *testing.T) {
+	var srvURL string
+	c, srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/actions/runs/7/jobs", "application/vnd.github+json") {
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `{"total_count":2,"jobs":[{"name":"vet","conclusion":"success","html_url":"https://github.com/o/n/job/2"}]}`)
+			return
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/o/n/actions/runs/7/jobs?page=2>; rel="next"`, srvURL))
+		fmt.Fprint(w, `{"total_count":2,"jobs":[{"name":"test","conclusion":"failure","html_url":"https://github.com/o/n/job/1"}]}`)
+	})
+	srvURL = srv.URL
+
+	got, err := c.WorkflowJobs(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []github.WorkflowJob{
+		{Name: "test", Conclusion: "failure", URL: "https://github.com/o/n/job/1"},
+		{Name: "vet", Conclusion: "success", URL: "https://github.com/o/n/job/2"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
 // A branch's required checks are gathered from every rule that requires any,
 // across pages, once each; its other rules say nothing about checks.
 func TestRequiredChecksAreEveryContextTheBranchsRulesRequire(t *testing.T) {

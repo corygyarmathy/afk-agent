@@ -305,7 +305,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	reply, err := d.Model.Run(ctx, opencode.Request{Model: ref, Dir: ws, Prompt: text.String()})
+	reply, err := d.Model.Run(ctx, opencode.Request{Model: ref, Dir: ws, Prompt: text.String(), Cost: true})
 	var transient *opencode.TransientError
 	if errors.As(err, &transient) {
 		if d.Log != nil {
@@ -552,8 +552,27 @@ func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
 	if issue != 0 {
 		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
 	}
-	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n\n</details>\n",
-		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
+	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s</sub>\n\n</details>\n",
+		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), cost(ref, reply))
+}
+
+// cost is who ran the review and what it cost, sub-agents and all (#99). A
+// sub-agent runs on ref unless its agent is configured with a model of its
+// own (opencode 1.18.31), so a run that started any is named as the total it
+// is rather than as ref's alone. One whose sub-agents' cost was not all read
+// is marked as the floor it is, rather than passed off as the whole.
+func cost(ref model.Ref, reply opencode.Reply) string {
+	who := ref.String()
+	if reply.SubAgents > 0 {
+		who += " and its sub-agents"
+	}
+	switch reply.Unread {
+	case 0:
+		return fmt.Sprintf("%s · $%.4f", who, reply.Cost)
+	case 1:
+		return fmt.Sprintf("%s · ≥ $%.4f, with 1 sub-agent's cost unread", who, reply.Cost)
+	}
+	return fmt.Sprintf("%s · ≥ $%.4f, with %d sub-agents' cost unread", who, reply.Cost, reply.Unread)
 }
 
 // pending is a reply written and not yet seen on the tracker. From is the

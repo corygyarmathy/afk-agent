@@ -81,6 +81,12 @@ type Request struct {
 
 	// Session is the session to continue, or empty for a new one.
 	Session string
+
+	// Cost asks for what the run cost with its sub-agents', which reads each
+	// of their sessions once the run is done (#99). Without it, a reply's Cost
+	// and Tokens are its own session's alone, and a caller that does not read
+	// them does not wait on the reads.
+	Cost bool
 }
 
 // Reply is what a run that succeeded wrote, and what it cost.
@@ -90,14 +96,25 @@ type Reply struct {
 	// what the model wrote once it stopped calling them.
 	Text string
 
-	// Cost is the run's cost in dollars, as opencode reports it. It informs;
-	// it decides nothing (ADR 0001 §11).
+	// Cost is the run's cost in dollars, as opencode reports it, with its
+	// sub-agents' when the request asked for them. It informs; it decides
+	// nothing (ADR 0001 §11).
 	Cost float64
 
 	// Session is the session the run was in, to continue it later.
 	Session string
 
+	// Tokens is the run's token usage, with its sub-agents' when the request
+	// asked for them.
 	Tokens Tokens
+
+	// SubAgents is how many sub-agents' sessions the run started, theirs
+	// included, when the request asked for their cost.
+	SubAgents int
+
+	// Unread is how many of those sessions could not be read, and are missing
+	// from Cost and Tokens. Cost is a floor when it is not zero.
+	Unread int
 }
 
 // Tokens is a run's token usage, summed across its steps.
@@ -148,7 +165,9 @@ func (e *FatalError) Unwrap() error { return e.Err }
 // language servers of its own, and a run abandoned by its transition must not
 // leave them behind. The error is then ctx's, and is neither transient nor
 // fatal: nothing failed, the caller stopped. A run that outlives Timeout is
-// killed the same way, and that is a failure: the run did not finish.
+// killed the same way, and that is a failure: the run did not finish. Either
+// arriving once the run has finished, while its sub-agents' sessions are read
+// for Request.Cost, leaves those unread rather than discarding the reply.
 func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	if err := c.check(req); err != nil {
 		return Reply{}, &FatalError{err}
@@ -188,7 +207,7 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		return Reply{}, &FatalError{fmt.Errorf("starting %s: %w", c.Path, err)}
 	}
 
-	reply, reported, decodeErr := decode(stdout)
+	reply, children, reported, decodeErr := decode(stdout)
 	if decodeErr != nil {
 		// Stop reading, so stop the run: nothing it writes after this can be
 		// understood either.
@@ -238,7 +257,83 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	case strings.TrimSpace(reply.Text) == "":
 		return Reply{}, c.transient(req, errors.New("the run finished without writing a reply"), &stderr)
 	}
+	if req.Cost {
+		c.subAgents(bounded, req.Dir, &reply, children)
+	}
 	return reply, nil
+}
+
+// subAgents adds the cost and tokens of the sessions a run's sub-agents ran
+// in, and of theirs, to its reply. A sub-agent runs in a child session, and
+// the run's stream carries none of it but the task tool call naming that
+// session (#99), so each is read after the run with `opencode export`.
+//
+// A session that cannot be read is counted as unread rather than failing the
+// run, which has already succeeded: the cost informs and decides nothing. A
+// session resumed from an earlier run brings that run's spending with it,
+// which only a retry that continues a session could do.
+//
+// The reads have what is left of the run's bound, ctx, rather than one of
+// their own: the bound is on everything a run does, and it is what the lease
+// is sized against, so reads past it could outlive the lease. Each is a local
+// read of a few seconds. One that the bound or the caller cuts short is
+// unread, like any other, and the run it counts for still succeeded.
+func (c Command) subAgents(ctx context.Context, dir string, reply *Reply, children []string) {
+	seen := map[string]bool{}
+	for len(children) > 0 {
+		id := children[0]
+		children = children[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		reply.SubAgents++
+		s, err := c.export(ctx, dir, id)
+		if err != nil {
+			reply.Unread++
+			continue
+		}
+		reply.Cost += s.Info.Cost
+		reply.Tokens.add(s.Info.Tokens)
+		for _, m := range s.Messages {
+			for _, p := range m.Parts {
+				if id := p.child(); id != "" {
+					children = append(children, id)
+				}
+			}
+		}
+	}
+}
+
+// export reads one session as `opencode export` writes it: the session on
+// stdout, and nothing else there. Unlike a run it starts no process of its
+// own (traced on opencode 1.18.31), so it needs no process group for a kill
+// to reach all of it.
+func (c Command) export(ctx context.Context, dir, session string) (exported, error) {
+	cmd := exec.CommandContext(ctx, c.Path, "export", session)
+	cmd.Dir = dir
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		return exported{}, fmt.Errorf("exporting %s: %w", session, err)
+	}
+	var s exported
+	if err := json.Unmarshal(out, &s); err != nil {
+		return exported{}, fmt.Errorf("exporting %s: %w", session, err)
+	}
+	return s, nil
+}
+
+// exported is `opencode export <session>`, as far as this package reads it.
+// testdata/ holds one recorded from a real sub-agent's session.
+type exported struct {
+	Info struct {
+		Cost   float64 `json:"cost"`
+		Tokens tokens  `json:"tokens"`
+	} `json:"info"`
+	Messages []struct {
+		Parts []part `json:"parts"`
+	} `json:"messages"`
 }
 
 func (c Command) check(req Request) error {
@@ -277,20 +372,8 @@ func (c Command) transient(req Request, err error, stderr *tail) *TransientError
 type event struct {
 	Type    string `json:"type"`
 	Session string `json:"sessionID"`
-	Part    struct {
-		Text   string  `json:"text"`
-		Cost   float64 `json:"cost"`
-		Tokens *struct {
-			Input     int `json:"input"`
-			Output    int `json:"output"`
-			Reasoning int `json:"reasoning"`
-			Cache     struct {
-				Read  int `json:"read"`
-				Write int `json:"write"`
-			} `json:"cache"`
-		} `json:"tokens"`
-	} `json:"part"`
-	Error *struct {
+	Part    part   `json:"part"`
+	Error   *struct {
 		Name string `json:"name"`
 		Data struct {
 			Message string `json:"message"`
@@ -298,16 +381,61 @@ type event struct {
 	} `json:"error"`
 }
 
+// part is a message part, as an event carries it and as an export lists them.
+type part struct {
+	Text   string  `json:"text"`
+	Cost   float64 `json:"cost"`
+	Tokens *tokens `json:"tokens"`
+
+	// Tool and State are a tool call's. A task tool call's metadata names the
+	// session its sub-agent ran in.
+	Tool  string `json:"tool"`
+	State struct {
+		Metadata struct {
+			Session string `json:"sessionId"`
+		} `json:"metadata"`
+	} `json:"state"`
+}
+
+// child is the session of the sub-agent a task tool call ran, or empty for any
+// other part.
+func (p part) child() string {
+	if p.Tool != "task" {
+		return ""
+	}
+	return p.State.Metadata.Session
+}
+
+type tokens struct {
+	Input     int `json:"input"`
+	Output    int `json:"output"`
+	Reasoning int `json:"reasoning"`
+	Cache     struct {
+		Read  int `json:"read"`
+		Write int `json:"write"`
+	} `json:"cache"`
+}
+
+func (t *Tokens) add(u tokens) {
+	t.Input += u.Input
+	t.Output += u.Output
+	t.Reasoning += u.Reasoning
+	t.CacheRead += u.Cache.Read
+	t.CacheWrite += u.Cache.Write
+}
+
 // decode reads the event stream to its end. It returns the reply as far as the
-// stream built one, the first error the run reported, and an error of its own
-// if a line was not an event.
+// stream built one, the sessions its sub-agents ran in, the first error the
+// run reported, and an error of its own if a line was not an event.
 //
-// Event types it does not read - tool calls, and whatever a later release adds
-// - are skipped rather than refused. An unknown type is upstream saying more,
-// and a line that is not JSON is upstream saying something else entirely.
-func decode(r io.Reader) (Reply, error, error) {
+// Event types it does not read - tool calls other than a task's, and whatever
+// a later release adds - are skipped rather than refused. An unknown type is
+// upstream saying more, and a line that is not JSON is upstream saying
+// something else entirely.
+func decode(r io.Reader) (Reply, []string, error, error) {
 	var (
 		reply    Reply
+		children []string
 		step     []string
 		reported error
 	)
@@ -320,10 +448,10 @@ func decode(r io.Reader) (Reply, error, error) {
 		}
 		var ev event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return reply, reported, fmt.Errorf("line %q: %w", truncate(line), err)
+			return reply, children, reported, fmt.Errorf("line %q: %w", truncate(line), err)
 		}
 		if ev.Type == "" {
-			return reply, reported, fmt.Errorf("line %q has no event type", truncate(line))
+			return reply, children, reported, fmt.Errorf("line %q has no event type", truncate(line))
 		}
 		if reply.Session == "" {
 			reply.Session = ev.Session
@@ -336,11 +464,11 @@ func decode(r io.Reader) (Reply, error, error) {
 		case "step_finish":
 			reply.Cost += ev.Part.Cost
 			if t := ev.Part.Tokens; t != nil {
-				reply.Tokens.Input += t.Input
-				reply.Tokens.Output += t.Output
-				reply.Tokens.Reasoning += t.Reasoning
-				reply.Tokens.CacheRead += t.Cache.Read
-				reply.Tokens.CacheWrite += t.Cache.Write
+				reply.Tokens.add(*t)
+			}
+		case "tool_use":
+			if id := ev.Part.child(); id != "" {
+				children = append(children, id)
 			}
 		case "error":
 			if reported == nil {
@@ -349,10 +477,10 @@ func decode(r io.Reader) (Reply, error, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return reply, reported, err
+		return reply, children, reported, err
 	}
 	reply.Text = strings.Join(step, "\n")
-	return reply, reported, nil
+	return reply, children, reported, nil
 }
 
 func reportedError(ev event) error {

@@ -1,0 +1,157 @@
+{
+  "info": {
+    "id": "ses_f18153054ffe81GX1wynCfZBXI",
+    "slug": "neon-lagoon",
+    "projectID": "global",
+    "directory": "/tmp/rec",
+    "path": "tmp/rec",
+    "parentID": "ses_f1815410dffe1YAxJ0v1eQ7qFL",
+    "title": "Ping test (@general subagent)",
+    "agent": "general",
+    "model": {
+      "id": "deepseek-v4-flash",
+      "providerID": "opencode-go",
+      "variant": "default"
+    },
+    "version": "1.18.31",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0.001617276,
+    "tokens": {
+      "input": 10730,
+      "output": 4,
+      "reasoning": 0,
+      "cache": {
+        "read": 1792,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "task",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1790597320619,
+      "updated": 1790597321533
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1790597320635
+        },
+        "agent": "general",
+        "model": {
+          "providerID": "opencode-go",
+          "modelID": "deepseek-v4-flash"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_0e7eacfb8001qANX5p8saLCAEZ",
+        "sessionID": "ses_f18153054ffe81GX1wynCfZBXI"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Reply with the single word pong and nothing else. Use no tools.",
+          "id": "prt_0e7eacfbf001wtMIASppC4Sqm7",
+          "sessionID": "ses_f18153054ffe81GX1wynCfZBXI",
+          "messageID": "msg_0e7eacfb8001qANX5p8saLCAEZ"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_0e7eacfb8001qANX5p8saLCAEZ",
+        "role": "assistant",
+        "mode": "general",
+        "agent": "general",
+        "path": {
+          "cwd": "/tmp/rec",
+          "root": "/"
+        },
+        "cost": 0.001617276,
+        "tokens": {
+          "total": 12526,
+          "input": 10730,
+          "output": 4,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 1792
+          }
+        },
+        "modelID": "deepseek-v4-flash",
+        "providerID": "opencode-go",
+        "time": {
+          "created": 1790597320662,
+          "completed": 1790597321489
+        },
+        "finish": "stop",
+        "id": "msg_0e7eacfd6001zuQbpF5D6UB9fL",
+        "sessionID": "ses_f18153054ffe81GX1wynCfZBXI"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_0e7ead2f4001DM5nE0XRAv9uib",
+          "sessionID": "ses_f18153054ffe81GX1wynCfZBXI",
+          "messageID": "msg_0e7eacfd6001zuQbpF5D6UB9fL"
+        },
+        {
+          "type": "text",
+          "text": "pong",
+          "time": {
+            "start": 1790597321467,
+            "end": 1790597321473
+          },
+          "id": "prt_0e7ead2fb001DPylJAp78YmRr0",
+          "sessionID": "ses_f18153054ffe81GX1wynCfZBXI",
+          "messageID": "msg_0e7eacfd6001zuQbpF5D6UB9fL"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 12526,
+            "input": 10730,
+            "output": 4,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 1792
+            }
+          },
+          "cost": 0.001617276,
+          "id": "prt_0e7ead308001aQSZrhVU6mQnlS",
+          "sessionID": "ses_f18153054ffe81GX1wynCfZBXI",
+          "messageID": "msg_0e7eacfd6001zuQbpF5D6UB9fL"
+        }
+      ]
+    }
+  ]
+}

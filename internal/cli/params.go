@@ -128,7 +128,7 @@ needs the heavy-build token's capacity. Without --review-procedure, a
 description's reminder says it has no link to the procedure. Without
 --sensitive, no pull request says it touches a sensitive path.
 
-The tracker, for afk intake, afk run and afk work:
+The tracker, for afk intake, afk run and afk work; afk caught takes the first three:
 
   --repo <owner/name>   AFK_REPO          repository commands are read from
   --app-id <id>         AFK_APP_ID        the GitHub App's client ID or app ID
@@ -577,11 +577,17 @@ func readKey(path, flagName string) (string, error) {
 // GitHub App the agent is on it (ADR 0005). The key is a path, read once (ADR
 // 0005 §6).
 func (p *params) bindTracker(fs *flag.FlagSet) {
+	p.bindRepo(fs)
+	fs.StringVar(&p.eligibilityLabel, "eligibility-label", "", "the label that opts an issue in to unattended work (AFK_ELIGIBILITY_LABEL)")
+	fs.StringVar(&p.reviewQueueLimit, "review-queue-limit", "", "pull requests waiting on the operator's review before no issue is taken unattended (AFK_REVIEW_QUEUE_LIMIT)")
+}
+
+// bindRepo binds the tracker without what intake takes from it: the
+// repository, and the App the agent is on it.
+func (p *params) bindRepo(fs *flag.FlagSet) {
 	fs.StringVar(&p.repo, "repo", "", "repository commands are read from, owner/name (AFK_REPO)")
 	fs.StringVar(&p.appID, "app-id", "", "the GitHub App's client ID or app ID (AFK_APP_ID)")
 	fs.StringVar(&p.appKey, "app-key", "", "file holding the GitHub App's private key (AFK_APP_KEY)")
-	fs.StringVar(&p.eligibilityLabel, "eligibility-label", "", "the label that opts an issue in to unattended work (AFK_ELIGIBILITY_LABEL)")
-	fs.StringVar(&p.reviewQueueLimit, "review-queue-limit", "", "pull requests waiting on the operator's review before no issue is taken unattended (AFK_REVIEW_QUEUE_LIMIT)")
 }
 
 // bindHandOff binds the hand-off label, which the hand-off applies and the

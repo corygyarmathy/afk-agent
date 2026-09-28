@@ -218,9 +218,12 @@ type reviewer struct {
 	answers []error
 	// replies, by call, replace the fixture's reply text.
 	replies []string
-	asked   []opencode.Request
-	diffs   []string
-	specs   []string
+	// subAgents is how many sub-agents' sessions every reply's run started,
+	// and unread how many of those it could not read.
+	subAgents, unread int
+	asked             []opencode.Request
+	diffs             []string
+	specs             []string
 }
 
 func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
@@ -240,7 +243,7 @@ func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 	if i := len(m.asked) - 1; i < len(m.replies) {
 		text = m.replies[i]
 	}
-	return opencode.Reply{Text: text, Cost: 0.0123}, nil
+	return opencode.Reply{Text: text, Cost: 0.0123, SubAgents: m.subAgents, Unread: m.unread}, nil
 }
 
 func transient(ref model.Ref) error {
@@ -1153,6 +1156,39 @@ func TestAReviewIsPostedCollapsedUnderASummaryNamingOnlyTheHead(t *testing.T) {
 	for _, want := range []string{review.Marker(head), "does not gate or block merging", "Reserve has no test"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("the review does not contain %q:\n%s", want, b)
+		}
+	}
+}
+
+// The review asks for its sub-agents' cost, and says what the run cost: as
+// the model's alone when it started none, as the total of it and its
+// sub-agents when it did, since a sub-agent need not run on the same model,
+// and as a floor rather than the whole when some of theirs could not be read
+// (#99).
+func TestAReviewSaysWhatItCostAndWhetherThatIsAllOfIt(t *testing.T) {
+	for _, tc := range []struct {
+		subAgents, unread int
+		want, not         string
+	}{
+		{0, 0, "<sub>opencode-go/first · $0.0123</sub>", "≥"},
+		{2, 0, "<sub>opencode-go/first and its sub-agents · $0.0123</sub>", "≥"},
+		{2, 1, "<sub>opencode-go/first and its sub-agents · ≥ $0.0123, with 1 sub-agent's cost unread</sub>", ""},
+		{2, 2, "<sub>opencode-go/first and its sub-agents · ≥ $0.0123, with 2 sub-agents' cost unread</sub>", ""},
+	} {
+		m := &reviewer{subAgents: tc.subAgents, unread: tc.unread}
+		f := setup(t, newTracker(command(1)), m)
+		if errs := f.drive(); len(errs) != 0 {
+			t.Fatalf("errors: %v", errs)
+		}
+		if len(m.asked) == 0 || !m.asked[0].Cost {
+			t.Errorf("the review did not ask for its sub-agents' cost: %+v", m.asked)
+		}
+		b := f.tr.byAgent()[0].Body
+		if !strings.Contains(b, tc.want) {
+			t.Errorf("with %d sub-agents and %d unread, the review does not contain %q:\n%s", tc.subAgents, tc.unread, tc.want, b)
+		}
+		if tc.not != "" && strings.Contains(b, tc.not) {
+			t.Errorf("with %d sub-agents and %d unread, the review contains %q:\n%s", tc.subAgents, tc.unread, tc.not, b)
 		}
 	}
 }

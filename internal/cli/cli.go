@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/caught"
 	"github.com/corygyarmathy/afk-agent/internal/dispatch"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/store"
@@ -60,6 +61,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		err = intakeCmd(args[1:], stdout, stderr)
 	case "budget":
 		err = budgetCmd(args[1:], stdout)
+	case "caught":
+		err = caughtCmd(args[1:], stdout)
 	case "version":
 		_, err = fmt.Fprintln(stdout, Version)
 	case "help", "-h", "--help":
@@ -473,6 +476,49 @@ func budgetCmd(args []string, stdout io.Writer) error {
 	return err
 }
 
+// caughtCmd implements `afk caught`: what CI caught that the local gate did
+// not, counted across every job from what GitHub keeps (ADR 0006). With
+// --list, each catch as well.
+func caughtCmd(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("afk caught", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var p params
+	p.bindRepo(fs)
+	list := fs.Bool("list", false, "print every catch, not only the counts")
+
+	if err := fs.Parse(args); err != nil {
+		return errUsage{err}
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		return usagef("unexpected argument %q", rest[0])
+	}
+	if optional(p.repo, "AFK_REPO") == "" {
+		return usagef("caught needs --repo (or set AFK_REPO)")
+	}
+	tr, err := p.tracker()
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return readCaught(ctx, tr, *list, stdout)
+}
+
+// readCaught reads the catches on the heads the agent pushed, as the App
+// knows the agent, and writes them to stdout.
+func readCaught(ctx context.Context, tr *tracker, list bool, stdout io.Writer) error {
+	login, err := tr.Login(ctx)
+	if err != nil {
+		return err
+	}
+	r, err := caught.Read(ctx, tr.client, login)
+	if err != nil {
+		return err
+	}
+	return r.Write(stdout, list)
+}
+
 // holder names this process in a lease. Host and pid, because the store's
 // leases are local (CONTEXT.md: lease) and the pair is unique among the live
 // processes that can reach one store.
@@ -500,6 +546,7 @@ Usage:
   afk work
   afk intake
   afk budget
+  afk caught [--list]
   afk version
   afk help
 
