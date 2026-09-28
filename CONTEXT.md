@@ -88,6 +88,10 @@ _Avoid_: Change request, triage, feedback
 What one `/revise` produces for one send-back: commits added on top of the head the send-back was written against, never rewriting it, and one reply saying which points were done. Does only the send-back's points; anything else it noticed is a suggested follow-up in the reply, owed no answer.
 _Avoid_: Round, iteration, fix
 
+**Sensitive path**:
+A path the operator has named as deserving closer reading. A pull request that touches one says which, and the operator's review reads those files line by line. One-sided: nothing is ever marked as safe to skim. Named in the operator's configuration, never assessed by a model.
+_Avoid_: Risk level, high-risk, critical
+
 **Hand-off**:
 The agent declaring a pull request ready for human review. A signal, not a control: nothing merges on it.
 _Avoid_: Completion, ready state
