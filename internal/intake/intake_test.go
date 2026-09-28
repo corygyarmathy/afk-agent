@@ -699,24 +699,54 @@ func TestWithoutTheLabelNothingIsTakenUnattended(t *testing.T) {
 	}
 }
 
-// An open blocker makes an issue ineligible whatever its labels say, and so
-// do blockers nobody can read. Once the blocker closes, the issue is taken.
+// An open blocker makes an issue ineligible whatever its labels say. Once the
+// blocker closes, the issue is taken.
 func TestABlockedIssueIsTakenOnceItsBlockerCloses(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{
-		issues:  []int{7, 8},
-		labels:  map[int][]string{7: {eligible}, 8: {eligible}},
+		issues:  []int{7},
+		labels:  map[int][]string{7: {eligible}},
 		blocked: map[int]int{7: 1},
-		blind:   map[int]bool{8: true},
 	}
 	in := unattended(t, s, tr)
 
 	if made := pass(t, in); len(made) != 0 {
-		t.Fatalf("made %v due, and both issues are blocked or unreadable", ids(made))
+		t.Fatalf("made %v due, and the issue is blocked", ids(made))
 	}
 	tr.blocked[7] = 0
 	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
 		t.Errorf("made %v due once the blocker closed, want [implement-issue-7]", ids(made))
+	}
+}
+
+// An issue listed with no dependency summary has blockers nobody can read, so
+// it is not taken. That is said once, not on every pass, and said again if it
+// is listed blind after being read.
+func TestALabelledIssueWithUnreadableBlockersIsReportedOnce(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues: []int{8},
+		labels: map[int][]string{8: {eligible}},
+		blind:  map[int]bool{8: true},
+	}
+	in := unattended(t, s, tr)
+
+	made, err := in.Pass(context.Background())
+	if len(made) != 0 {
+		t.Errorf("made %v due, and its blockers cannot be read", ids(made))
+	}
+	if err == nil || !strings.Contains(err.Error(), "issue 8") {
+		t.Errorf("err = %v, want it to name issue 8", err)
+	}
+	if again, err := in.Pass(context.Background()); err != nil || len(again) != 0 {
+		t.Errorf("the next pass made %v due, err = %v; want nothing, said once", ids(again), err)
+	}
+
+	tr.blind[8], tr.blocked = false, map[int]int{8: 1}
+	pass(t, in)
+	tr.blind[8] = true
+	if _, err := in.Pass(context.Background()); err == nil {
+		t.Error("listed blind again after being read, and nothing was said")
 	}
 }
 
@@ -746,13 +776,43 @@ func TestAnIssueAlreadyClaimedOrWithAJobIsNotTaken(t *testing.T) {
 		t.Errorf("the job at rest on issue 8 was made due: %+v", j)
 	}
 
-	// A claim stays a claim, so it is read once rather than every pass.
-	tr.looked = nil
-	if made := pass(t, in); len(made) != 0 {
-		t.Errorf("the next pass made %v due", ids(made))
+	// The operator takes the claim back to queue the issue again, and the
+	// next pass takes it.
+	tr.eyes[7] = nil
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due once the claim was taken back, want [implement-issue-7]", ids(made))
 	}
-	if len(tr.looked) != 0 {
-		t.Errorf("read the reactions of issues %v again", tr.looked)
+}
+
+// Work a command asked for and the agent claimed was taken, even with no claim
+// on the issue itself: a store wiped under it does not take it again. A
+// command nobody has claimed yet is the command's to arm, not a claim.
+func TestAnIssueWithAClaimedCommandIsNotTaken(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues: []int{7},
+		labels: map[int][]string{7: {eligible}},
+		comments: map[int][]github.Comment{7: {
+			comment(1, "alice", "OWNER", "/review"),
+			comment(2, "alice", "OWNER", "/implement"),
+		}},
+		reactions: map[int64][]github.Reaction{
+			1: {{Login: agent, Content: intake.Claim}},
+			2: {{Login: agent, Content: intake.Claim}},
+		},
+	}
+	in := unattended(t, s, tr)
+
+	if made := pass(t, in); len(made) != 0 {
+		t.Errorf("made %v due, and its /implement is claimed", ids(made))
+	}
+
+	// Only a claimed command for the same work counts: a claimed /review is
+	// not an /implement.
+	tr.comments[7] = tr.comments[7][:1]
+	tr.updated = map[int]time.Time{7: since.Add(time.Hour)}
+	if made := pass(t, in); len(made) != 1 || made[0].ID != "implement-issue-7" {
+		t.Errorf("made %v due, want [implement-issue-7]", ids(made))
 	}
 }
 

@@ -437,16 +437,17 @@ func TestWorkNobodyCommandedIsClaimedOnTheIssue(t *testing.T) {
 	}
 }
 
-// A job that claims a command claims that, and not the issue as well.
-func TestCommandedWorkDoesNotClaimTheIssue(t *testing.T) {
+// A job that claims a command claims the issue as well: the claim on the issue
+// is what intake reads to tell the issue was taken, whoever asked.
+func TestCommandedWorkClaimsTheIssueToo(t *testing.T) {
 	tr := newTracker(command(1))
 	f := setup(t, tr)
 
 	if _, err := f.claim(); err != nil {
 		t.Fatal(err)
 	}
-	if len(tr.eyes) != 0 {
-		t.Errorf("reactions on the issue = %+v, want none", tr.eyes)
+	if !intake.Claimed(tr.eyes, agent) || len(tr.eyes) != 1 {
+		t.Errorf("reactions on the issue = %+v, want the agent's claim once", tr.eyes)
 	}
 }
 
@@ -468,8 +469,8 @@ func TestOnlyUnansweredCommandsAreClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(out.Performed, " "); got != "claim-comment-1-0" {
-		t.Errorf("performed [%s], want [claim-comment-1-0]", got)
+	if got := strings.Join(out.Performed, " "); got != "claim-comment-1-0 claim-issue-7-0" {
+		t.Errorf("performed [%s], want [claim-comment-1-0 claim-issue-7-0]", got)
 	}
 	for _, id := range []int64{2, 4, 5} {
 		if tr.claims(id) != 0 {
@@ -576,7 +577,9 @@ func TestOnlyTheAgentsPullRequestForThisIssueCounts(t *testing.T) {
 	})
 }
 
-// A command already claimed is not claimed again when the job starts over.
+// A command already claimed is not claimed again when the job starts over. The
+// issue's claim is asked for again, and a reaction the agent already made is
+// not a second one.
 func TestAClaimIsMadeOnce(t *testing.T) {
 	tr := newTracker(command(1))
 	f := setup(t, tr)
@@ -590,11 +593,11 @@ func TestAClaimIsMadeOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Performed) != 0 || len(out.Skipped) != 0 {
-		t.Errorf("outcome = %s, want nothing to claim", out)
+	if got := strings.Join(out.Performed, " "); strings.Contains(got, "claim-comment") {
+		t.Errorf("performed [%s], want the command not claimed again", got)
 	}
-	if tr.claims(1) != 1 {
-		t.Errorf("%d claims, want 1", tr.claims(1))
+	if tr.claims(1) != 1 || len(tr.eyes) != 1 {
+		t.Errorf("%d claims on the command and %d on the issue, want 1 of each", tr.claims(1), len(tr.eyes))
 	}
 }
 

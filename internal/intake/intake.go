@@ -32,10 +32,12 @@
 // command - it says the issue may be taken - so it is read from the listing on
 // every pass rather than settled, and a blocker closing need not move the
 // blocked issue's updated_at. An issue is taken once: not if it has a job,
-// whatever made that job, and not if it carries the agent's claim, which is
-// what stops a wiped store taking it again. The job claims the issue itself,
-// since nothing asked. Eligible issues are taken lowest number first, which on
-// GitHub is oldest first.
+// whatever made that job, and not if it carries the agent's claim, on the
+// issue or on a command for the same work, which is what stops a wiped store
+// taking it again. The job claims the issue itself, whoever asked. A labelled
+// issue listed with no dependency summary is not taken, and is reported once.
+// Eligible issues are taken lowest number first, which on GitHub is oldest
+// first.
 package intake
 
 import (
@@ -126,10 +128,9 @@ type Intake struct {
 	// requests share.
 	seen map[int]reading
 
-	// claimed is the eligible issues a pass found carrying the agent's
-	// claim with no job in the store. The agent never takes a claim back,
-	// so it is read once rather than on every pass.
-	claimed map[int]bool
+	// blind is the labelled issues the last pass found listed with no
+	// dependency summary, so each is reported once rather than every pass.
+	blind map[int]bool
 }
 
 // reading is what passes last made of a subject's updated_at.
@@ -211,21 +212,34 @@ func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, e
 	if in.Unattended.Label == "" {
 		return nil, nil
 	}
-	var eligible []github.Issue
+	var (
+		eligible []github.Issue
+		errs     []error
+		blind    = make(map[int]bool)
+	)
 	for _, is := range open {
-		if in.eligible(is) {
+		if is.PullRequest || !in.labelled(is) {
+			continue
+		}
+		switch {
+		case !is.DependenciesRead:
+			// Said once, not every pass: the listing stays as blind until
+			// something changes it.
+			if !in.blind[is.Number] {
+				errs = append(errs, fmt.Errorf("issue %d: carries the eligibility label, and the listing gave no dependency summary; not taken", is.Number))
+			}
+			blind[is.Number] = true
+		case is.BlockedBy == 0:
 			eligible = append(eligible, is)
 		}
 	}
+	// Built afresh, so an issue closed, unlabelled or read again is forgotten.
+	in.blind = blind
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].Number < eligible[j].Number })
 
-	var (
-		made    []store.Job
-		errs    []error
-		claimed = make(map[int]bool)
-	)
+	var made []store.Job
 	for _, is := range eligible {
-		job, ok, err := in.takeIssue(ctx, is.Number, claimed)
+		job, ok, err := in.takeIssue(ctx, is.Number)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("issue %d: %w", is.Number, err))
 		}
@@ -233,15 +247,13 @@ func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, e
 			made = append(made, job)
 		}
 	}
-	// Built afresh, so an issue closed, unlabelled or since given a job is
-	// forgotten.
-	in.claimed = claimed
 	return made, errors.Join(errs...)
 }
 
-// takeIssue makes issue n's unattended work due, unless it has a job or the
-// agent's claim. What it finds claimed goes in claimed.
-func (in *Intake) takeIssue(ctx context.Context, n int, claimed map[int]bool) (store.Job, bool, error) {
+// takeIssue makes issue n's unattended work due, unless it has a job or was
+// taken before one: it carries the agent's claim, or one of its commands for
+// the same work does.
+func (in *Intake) takeIssue(ctx context.Context, n int) (store.Job, bool, error) {
 	u := in.Unattended
 	subject := store.Subject{Type: store.SubjectIssue, Number: n}
 	_, err := in.Store.Job(ctx, store.ID(u.Kind, subject))
@@ -251,31 +263,47 @@ func (in *Intake) takeIssue(ctx context.Context, n int, claimed map[int]bool) (s
 	if !errors.Is(err, store.ErrNoJob) {
 		return store.Job{}, false, err
 	}
-	if !in.claimed[n] {
-		reactions, err := in.Tracker.IssueReactions(ctx, n)
-		if err != nil {
-			return store.Job{}, false, err
-		}
-		if !Claimed(reactions, in.Login) {
-			// Created due rather than armed: there is no job to lease, and
-			// the job being there is what stops the next pass.
-			job, err := in.Store.Ensure(ctx, u.Kind, subject, u.Start, in.now())
-			return job, err == nil, err
-		}
+	taken, err := in.taken(ctx, n)
+	if err != nil || taken {
+		return store.Job{}, false, err
 	}
-	claimed[n] = true
-	return store.Job{}, false, nil
+	// Created due rather than armed: there is no job to lease, and the job
+	// being there is what stops the next pass.
+	job, err := in.Store.Ensure(ctx, u.Kind, subject, u.Start, in.now())
+	return job, err == nil, err
 }
 
-// eligible reports whether an open issue may be taken unattended: an issue
-// rather than a pull request, carrying the eligibility label, and with no
-// open blocker. An issue whose blockers the listing did not say is not.
-func (in *Intake) eligible(is github.Issue) bool {
-	if is.PullRequest || !is.DependenciesRead || is.BlockedBy > 0 {
-		return false
+// taken reports whether issue n carries the agent's claim, on the issue itself
+// or on a command for the unattended work. It is read on every pass the issue
+// has no job, because an operator takes a claim back to queue the issue again.
+func (in *Intake) taken(ctx context.Context, n int) (bool, error) {
+	reactions, err := in.Tracker.IssueReactions(ctx, n)
+	if err != nil {
+		return false, err
 	}
+	if Claimed(reactions, in.Login) {
+		return true, nil
+	}
+	comments, err := in.Tracker.Comments(ctx, n)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range comments {
+		if cmd, ok := in.command(c, store.SubjectIssue); !ok || cmd.Kind != in.Unattended.Kind {
+			continue
+		}
+		answered, err := in.answered(ctx, c.ID)
+		if err != nil || answered {
+			return answered, err
+		}
+	}
+	return false, nil
+}
+
+// labelled reports whether an issue carries the eligibility label. Label names
+// are case-insensitive on GitHub.
+func (in *Intake) labelled(is github.Issue) bool {
 	for _, l := range is.Labels {
-		// Label names are case-insensitive on GitHub.
 		if strings.EqualFold(l, in.Unattended.Label) {
 			return true
 		}
