@@ -32,6 +32,7 @@ type tracker struct {
 	pr        github.PullRequest
 	comments  map[int][]github.Comment
 	reactions map[int64][]github.Reaction
+	issues    map[int]github.Issue
 	nextID    int64
 
 	// writes counts every write, by what it was.
@@ -46,6 +47,7 @@ func newTracker() *tracker {
 		},
 		comments:  map[int][]github.Comment{},
 		reactions: map[int64][]github.Reaction{},
+		issues:    map[int]github.Issue{},
 		nextID:    1000,
 		writes:    map[string]int{},
 	}
@@ -76,6 +78,9 @@ func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, er
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	if n == 12 {
 		return github.Issue{Number: 12, State: tr.pr.State, PullRequest: true, Labels: tr.pr.Labels}, nil
+	}
+	if is, ok := tr.issues[n]; ok {
+		return is, nil
 	}
 	return github.Issue{Number: n, State: "open"}, nil
 }

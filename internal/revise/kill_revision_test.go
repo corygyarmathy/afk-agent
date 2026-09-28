@@ -36,8 +36,12 @@ const (
 // Done by actually killing a process: SIGKILL runs no defer and releases no
 // lease. The remote is a real bare repository, and counts the pushes that land
 // through a pre-receive hook.
+//
+// "session" kills the process inside the model's run, after the session has
+// committed and written a reply: what it left is not the revision, and the
+// session that finishes starts again from the send-back's head.
 func TestKillingARevisionStillPushesOnce(t *testing.T) {
-	for _, at := range []string{"gating", "pushed", "watching"} {
+	for _, at := range []string{"session", "gating", "pushed", "watching"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
 			remote, head, count := revisionRemoteCounting(t, dir)
@@ -84,6 +88,12 @@ func TestKillingARevisionStillPushesOnce(t *testing.T) {
 			if !isAncestor(t, remote, head, after) {
 				t.Errorf("the send-back's head %s is not an ancestor of %s", head, after)
 			}
+			if _, err := run(remote, "git", "cat-file", "-e", after+":half.txt"); err == nil {
+				t.Error("the killed session's commit was pushed")
+			}
+			if reply := keptReply(t, state); reply != finishedReply {
+				t.Errorf("the reply kept is %q, want the finished session's %q", reply, finishedReply)
+			}
 		})
 	}
 }
@@ -121,7 +131,19 @@ func TestHelperRevisions(t *testing.T) {
 	defer s.Close()
 
 	var st store.Store = s
-	if killAt != "" {
+	session := reviseOn("bar.txt", finishedReply)
+	switch killAt {
+	case "":
+	case "session":
+		ready := os.Getenv("AFK_REV_KILL_READY")
+		session = func(dir string) error {
+			if err := reviseOn("half.txt", "## Points\n\n- half done")(dir); err != nil {
+				return err
+			}
+			os.WriteFile(ready, nil, 0o644)
+			select {}
+		}
+	default:
 		st = &killStore{Store: s, at: killAt, ready: os.Getenv("AFK_REV_KILL_READY")}
 	}
 
@@ -130,7 +152,7 @@ func TestHelperRevisions(t *testing.T) {
 	tr.pr.HeadRef = "feature"
 	d := &revise.Deps{
 		Tracker:       tr,
-		Model:         &reviser{turns: []func(string) error{reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done.")}},
+		Model:         &reviser{turns: []func(string) error{session}},
 		Store:         st,
 		Login:         agent,
 		Repo:          repo,
@@ -169,6 +191,25 @@ func TestHelperRevisions(t *testing.T) {
 		r.Run(ctx, next.Name, id)
 	}
 	t.Fatalf("the revision never finished; it is in %q", jobState(t, s, id))
+}
+
+// finishedReply is the reply the session that finishes the revision writes.
+const finishedReply = "## Points\n\n- \"Rename Foo\" done."
+
+// keptReply is the reply the revision's progress kept.
+func keptReply(t *testing.T, state string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(state, "progress", jobID()+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Reply string `json:"reply"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Reply
 }
 
 func jobState(t *testing.T, s store.Store, id string) string {

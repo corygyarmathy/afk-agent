@@ -15,7 +15,6 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
@@ -108,16 +107,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	// not be the model that wrote the session. That is intended: opencode
 	// continues a session under any model, and the tier's order is the
 	// preference (ADR 0001 §9).
-	//
-	// The stays are the candidates that failed transiently only because
-	// that is the one stay this transition makes. Another way to stay here
-	// would move the work on to the next candidate as well (#62).
-	ref, wait, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if !wait.Until.IsZero() {
-		return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
+	ref, res, ok, err := d.tier().Choose(ctx, in, Deferred)
+	if err != nil || !ok {
+		return res, err
 	}
 
 	n := in.Job.Subject.Number
@@ -172,40 +164,17 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	reply, err := d.Model.Run(ctx, req)
-	var gone *opencode.SessionGoneError
-	if errors.As(err, &gone) {
-		// The session went with opencode's data - a rebuilt host, say.
-		// The retry is weaker without it, but the job carries on, in a
-		// new session given the failure (ADR 0001 §6).
+	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, func() (string, error) {
+		// The session went with opencode's data: the next run is a new
+		// session, given the failure.
 		p.Session = ""
 		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
+			return "", err
 		}
-		if req.Prompt, err = d.render(prompt, n, p, whole); err != nil {
-			return transition.Result{}, err
-		}
-		req.Session = ""
-		reply, err = d.Model.Run(ctx, req)
-	}
-	var transient *opencode.TransientError
-	if errors.As(err, &transient) {
-		if d.Log != nil {
-			d.Log(fmt.Sprintf("%s: %v", in.Job.ID, transient))
-		}
-		// A tier with no candidate left defers from here, with the failure
-		// that ran it out (#98).
-		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
-			return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
-		}
-		// Stay, and the stay moves the next run to the next candidate
-		// (ADR 0001 §10). An error returned instead would not: it is an
-		// attempt, and every other error here is one that is not the
-		// model's.
-		return transition.Result{State: Implementing, RunAt: in.Now}, nil
-	}
-	if err != nil {
-		return transition.Result{}, err
+		return d.render(prompt, n, p, whole)
+	}, Implementing, Deferred, d.logf)
+	if err != nil || !ok {
+		return res, err
 	}
 
 	p.Session = reply.Session
@@ -499,6 +468,11 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 
 // work is the shared machinery this kind works through: its state directory
 // and the remote its checkouts and pushes reach.
+// tier is the candidates implementing runs on.
+func (d *Deps) tier() work.Tier {
+	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait}
+}
+
 func (d *Deps) work() work.Workspace {
 	return work.Workspace{StateDir: d.StateDir, Remote: d.Remote}
 }

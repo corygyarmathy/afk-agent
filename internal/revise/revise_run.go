@@ -15,7 +15,6 @@ import (
 	"text/template"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
-	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
@@ -47,6 +46,12 @@ const replyFile = "afk-reply.md"
 type progress struct {
 	work.Progress
 
+	// Read is the head the send-back was written against: what the operator
+	// read, which the revision adds to and never rewrites. Progress.Pushed
+	// starts there too, as the lease, and moves on with the agent's own
+	// pushes; Read does not.
+	Read string `json:"read"`
+
 	// Points is the send-back's command ids, in order: the revision's marks
 	// for the commands it answers.
 	Points []int64 `json:"points,omitempty"`
@@ -60,26 +65,46 @@ type progress struct {
 // run is `revise-run`: one candidate model does the send-back's points in the
 // workspace, on top of the head the send-back was written against.
 func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, error) {
-	ref, wait, err := model.Choose(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait)
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if !wait.Until.IsZero() {
-		return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
+	ref, res, ok, err := d.tier().Choose(ctx, in, Deferred)
+	if err != nil || !ok {
+		return res, err
 	}
 
+	n := in.Job.Subject.Number
 	sb, err := d.Load(in.Job.ID)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		// The send-back went with the state directory: there is nothing to
 		// say what the points were. The pull request is still there.
 		return d.handBackLost(ctx, in)
 	}
-	p, err := d.workspace(ctx, in.Job.ID, sb)
+	if err != nil {
+		// A send-back that is there and cannot be read is the host's to
+		// look at, not the operator's to be told was lost. The workspace
+		// beside it is kept for when it can be.
+		return transition.Result{}, err
+	}
+	p, gone, err := d.workspace(ctx, in.Job.ID, n, sb)
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if gone != "" {
+		return d.handBack(ctx, in, p, gone, "")
+	}
 	ws := d.work().Dir(in.Job.ID)
-	if err := d.spec(ctx, ws, in.Job.Subject.Number, sb, p); err != nil {
+	if p.Session == "" && p.Failure == "" {
+		// No session has finished here, so anything in the workspace is one
+		// that failed before it did - killed, or failed transiently - and
+		// whose id went with it. The next starts from the last push, which
+		// is the send-back's head until there is one, rather than inherit
+		// its commits unannounced, and writes its own reply.
+		if err := work.Reset(ctx, ws, p.Pushed); err != nil {
+			return transition.Result{}, err
+		}
+		if err := os.Remove(filepath.Join(ws, ".git", replyFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return transition.Result{}, err
+		}
+	}
+	if err := d.spec(ctx, ws, n, sb, p); err != nil {
 		return transition.Result{}, err
 	}
 	if p.Failure != "" {
@@ -93,42 +118,26 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	case p.Session == "" || p.Failure == "":
 		// The first run is a fresh session, as the fresh diff deserves; a
 		// retry whose session was never recorded starts one too.
-		req.Session = ""
-		req.Prompt, err = d.render(prompt, in.Job.Subject.Number, p)
+		req.Prompt, err = d.render(prompt, n, p)
 	default:
 		req.Session = p.Session
-		req.Prompt, err = d.render(retry, in.Job.Subject.Number, p)
+		req.Prompt, err = d.render(retry, n, p)
 	}
 	if err != nil {
 		return transition.Result{}, err
 	}
 
-	reply, err := d.Model.Run(ctx, req)
-	var gone *opencode.SessionGoneError
-	if errors.As(err, &gone) {
-		// The session went with opencode's data - a rebuilt host, say. The
-		// revision carries on in a new session given the failure.
+	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, func() (string, error) {
+		// The session went with opencode's data: the revision carries on
+		// in a new session, given the failure.
 		p.Session = ""
 		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
+			return "", err
 		}
-		req.Session = ""
-		if req.Prompt, err = d.render(prompt, in.Job.Subject.Number, p); err != nil {
-			return transition.Result{}, err
-		}
-		reply, err = d.Model.Run(ctx, req)
-	}
-	var transient *opencode.TransientError
-	if errors.As(err, &transient) {
-		d.logf("%s: %v", in.Job.ID, transient)
-		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
-			return transition.Result{State: Deferred, RunAt: wait.Until, Exhausted: wait.Exhausted}, nil
-		}
-		// Stay, and the stay moves the next run to the next candidate.
-		return transition.Result{State: Revising, RunAt: in.Now}, nil
-	}
-	if err != nil {
-		return transition.Result{}, err
+		return d.render(prompt, n, p)
+	}, Revising, Deferred, d.logf)
+	if err != nil || !ok {
+		return res, err
 	}
 
 	p.Session = reply.Session
@@ -152,6 +161,18 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	}
 	if err != nil {
 		return transition.Result{}, err
+	}
+	// Before the gate runs, and before an attempt is counted: a session that
+	// rewrote the head the send-back was written against has broken the one
+	// history rule there is, and a retry to make the gate pass is not what
+	// would put that right. A workspace on another branch is Check's to say.
+	ws := d.work().Dir(in.Job.ID)
+	if branch, err := work.BranchOf(ctx, ws); err == nil && branch == p.Branch {
+		if kept, err := work.Ancestor(ctx, ws, p.Read, "HEAD"); err != nil {
+			return transition.Result{}, err
+		} else if !kept {
+			return d.handBack(ctx, in, p, p.rewrote(), "")
+		}
 	}
 	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress, d.Gate, d.Attempts)
 	if err != nil {
@@ -260,57 +281,93 @@ func revisionMarkers(ids []int64) string {
 
 // workspace is the revision's workspace and its progress, made afresh from the
 // head the send-back was written against unless both are there and agree.
+// gone is why the revision cannot start from that head, for a hand-back: the
+// branch deleted, or pushed over, since the send-back was claimed.
 //
 // The head is fetched through the relay - a repository the agent owns and has
 // isolated - and brought into the workspace locally with no token, because the
 // workspace's .git/config is the model's to write (from #41's comment on #84).
-func (d *Deps) workspace(ctx context.Context, jobID string, sb SendBack) (progress, error) {
+func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) (p progress, gone string, err error) {
 	w := d.work()
 	ws := w.Dir(jobID)
-	p, err := d.load(jobID)
-	if err == nil && w.Exists(jobID) {
+	p, err = d.load(jobID)
+	if err == nil && w.Exists(jobID) && p.Read == sb.Head {
 		if branch, err := work.BranchOf(ctx, ws); err == nil && branch == p.Branch {
-			return p, nil
+			return p, "", nil
 		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return progress{}, err
+		return progress{}, "", err
 	}
 	if err := w.Clear(jobID); err != nil {
-		return progress{}, err
+		return progress{}, "", err
 	}
-	if err := w.MakeDir(jobID); err != nil {
-		return progress{}, err
-	}
-	into, err := work.Clone(ctx, d.Remote, ws)
-	if err != nil {
-		return progress{}, err
-	}
-	ref := "refs/heads/" + sb.Ref
-	if _, err := work.FetchInto(ctx, w.RelayDir(jobID), d.Remote, ref); err != nil {
-		return progress{}, fmt.Errorf("the pull request's branch `%s` could not be fetched: %w", sb.Ref, err)
-	}
-	if err := work.Import(ctx, w.RelayDir(jobID), ws, sb.Ref, ref, sb.Head); err != nil {
-		return progress{}, fmt.Errorf("the head `%s` the send-back was written against is gone: %w", git.Short(sb.Head), err)
-	}
-	base, err := work.MergeBase(ctx, ws, "origin/"+into, sb.Head)
-	if err != nil {
-		return progress{}, err
+
+	branch := sb.Ref
+	if branch == "" {
+		// A send-back claimed before the claim recorded its branch (#145)
+		// has only its head. The pull request's branch now is the one it
+		// was written on: a pull request's head branch does not change.
+		pr, err := d.Tracker.PullRequest(ctx, n)
+		if err != nil {
+			return progress{}, "", err
+		}
+		branch = pr.HeadRef
 	}
 	nonce := make([]byte, 8)
 	if _, err := rand.Read(nonce); err != nil {
-		return progress{}, err
+		return progress{}, "", err
 	}
 	p = progress{
 		Progress: work.Progress{
-			Nonce: hex.EncodeToString(nonce), Branch: sb.Ref, Base: base, Into: into,
+			Nonce: hex.EncodeToString(nonce), Branch: branch,
 			// The revision pushes on top of the head the send-back was
 			// written against, and is leased on it.
 			Pushed: sb.Head,
 		},
+		Read:   sb.Head,
 		Points: pointIDs(sb.Points),
 	}
-	return p, w.Save(jobID, p)
+
+	// Read before the fetch, so that a branch that is gone is a hand-back
+	// and a fetch that fails is an error, made again.
+	at, err := work.RemoteHead(ctx, d.Remote, branch)
+	if err != nil {
+		return progress{}, "", err
+	}
+	if at == "" {
+		return p, fmt.Sprintf("The pull request's branch `%s` was deleted after the send-back was written, so there is nothing to revise.", branch), nil
+	}
+	if err := w.MakeDir(jobID); err != nil {
+		return progress{}, "", err
+	}
+	into, err := work.Clone(ctx, d.Remote, ws)
+	if err != nil {
+		return progress{}, "", err
+	}
+	ref := "refs/heads/" + branch
+	if _, err := work.FetchInto(ctx, w.RelayDir(jobID), d.Remote, ref); err != nil {
+		return progress{}, "", fmt.Errorf("the pull request's branch `%s` could not be fetched: %w", branch, err)
+	}
+	if has, err := work.HasCommit(ctx, w.RelayDir(jobID), sb.Head); err != nil {
+		return progress{}, "", err
+	} else if !has {
+		return p, fmt.Sprintf("Someone else changed `%s` after the send-back was written: `%s`, the head it was written against, is no longer on the branch. Nothing was done, and the agent does not push over anyone else's work.", branch, git.Short(sb.Head)), nil
+	}
+	if err := work.Import(ctx, w.RelayDir(jobID), ws, branch, ref, sb.Head); err != nil {
+		return progress{}, "", err
+	}
+	if p.Base, err = work.MergeBase(ctx, ws, "origin/"+into, sb.Head); err != nil {
+		return progress{}, "", err
+	}
+	p.Into = into
+	return p, "", w.Save(jobID, p)
+}
+
+// rewrote is the hand-back's words for a session that rewrote the head the
+// send-back was written against.
+func (p progress) rewrote() string {
+	return fmt.Sprintf("The revision rewrote `%s`, the head the send-back was written against, which a revision never does. Nothing was pushed.", git.Short(p.Read))
 }
 
 // pointIDs is the send-back's command ids, in order.
@@ -396,6 +453,11 @@ func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
 		Why    string
 	}{n, p.Branch, d.Gate, p.Failure != "", p.Why})
 	return b.String(), err
+}
+
+// tier is the candidates a revision runs on.
+func (d *Deps) tier() work.Tier {
+	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait}
 }
 
 // work is the shared machinery this kind works through.

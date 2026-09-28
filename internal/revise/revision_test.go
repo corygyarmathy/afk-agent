@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -181,6 +182,15 @@ func jobID() string {
 // from.
 func setupRevision(t *testing.T) *revFixture {
 	t.Helper()
+	f := revisionFixture(t)
+	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.claim()
+	return f
+}
+
+// revisionFixture is setupRevision before anything is sent back or claimed.
+func revisionFixture(t *testing.T) *revFixture {
+	t.Helper()
 	remote, head := revisionRemote(t)
 	tr := newTracker()
 	tr.pr.HeadSHA = head
@@ -206,16 +216,10 @@ func setupRevision(t *testing.T) *revFixture {
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
-	f := &revFixture{
+	return &revFixture{
 		t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg,
 		runner: &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return now }},
 	}
-
-	// The send-back, claimed the way #145 does, so the revision starts from
-	// what a claim hands it.
-	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
-	f.claim()
-	return f
 }
 
 // claim arms and claims the send-back, leaving the job due in revising.
@@ -324,23 +328,50 @@ func TestARevisionAddsCommitsOnTopOfTheSendBacksHead(t *testing.T) {
 }
 
 // A point the session declines is not done, and the other points still are:
-// the revision is pushed, and the reply the session wrote is kept.
+// the revision is pushed, and the reply the session wrote is kept. The session
+// is given every point, in the send-back's order, and the issue the pull
+// request is for.
 func TestADeclinedPointIsKeptAndTheRevisionGoesOn(t *testing.T) {
-	f := setupRevision(t)
-	f.model.then(
-		reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done in abc123.\n- \"And drop the flag\" not done: the flag is load-bearing for the parser.\n"),
-	)
+	f := revisionFixture(t)
+	f.tr.pr.Body = "Closes #7.\n\n<!-- afk:implement issue=7 -->"
+	f.tr.issues[7] = github.Issue{Number: 7, State: "open", Title: "Rename the widget", Body: "Foo is a bad name."}
+	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.tr.say(12, send(2, "/revise And drop the flag."))
+	f.claim()
+	var spec string
+	f.model.then(func(dir string) error {
+		b, err := os.ReadFile(filepath.Join(dir, ".git", "afk-send-back.md"))
+		if err != nil {
+			return err
+		}
+		spec = string(b)
+		return reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done in abc123.\n- \"And drop the flag\" not done: the flag is load-bearing for the parser.\n")(dir)
+	})
 
 	job := f.drive()
 	if job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s: a declined point does not stop the revision", job.State, revise.Watching)
 	}
-	_, reply := f.progress()
-	if !strings.Contains(reply, "not done: the flag is load-bearing") {
-		t.Errorf("the reply kept is %q, want the declined point's reason", reply)
+	first, second := strings.Index(spec, "Rename Foo to Bar."), strings.Index(spec, "And drop the flag.")
+	if first < 0 || second < first {
+		t.Errorf("the send-back given to the session does not hold both points in order:\n%s", spec)
 	}
-	if at := f.remoteHead(); !f.ancestor(f.head, at) {
+	if !strings.Contains(spec, "# Issue #7: Rename the widget") || !strings.Contains(spec, "Foo is a bad name.") {
+		t.Errorf("the send-back given to the session does not hold the linked issue:\n%s", spec)
+	}
+	points, reply := f.progress()
+	if len(points) != 2 || points[0] != 1 || points[1] != 2 {
+		t.Errorf("the revision answers commands %v, want [1 2]", points)
+	}
+	if !strings.Contains(reply, "not done: the flag is load-bearing") || !strings.Contains(reply, "\"Rename Foo\" done") {
+		t.Errorf("the reply kept is %q, want the done point and the declined point's reason", reply)
+	}
+	at := f.remoteHead()
+	if at == f.head || !f.ancestor(f.head, at) {
 		t.Errorf("the other point was not pushed: the remote is at %s", git.Short(at))
+	}
+	if _, err := run(f.remote, "git", "cat-file", "-e", at+":bar.txt"); err != nil {
+		t.Errorf("the pushed head has no bar.txt, the done point's commit: %v", err)
 	}
 }
 
@@ -351,7 +382,7 @@ func TestAPushBySomeoneElseIsNotOverwritten(t *testing.T) {
 	// The session commits its revision, and someone else pushes a different
 	// commit to the branch while it runs.
 	f.model.then(func(dir string) error {
-		if err := commitOn("bar.txt")(dir); err != nil {
+		if err := reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done in abc123.\n")(dir); err != nil {
 			return err
 		}
 		return f.someoneElsePushes("other.txt")
@@ -361,14 +392,25 @@ func TestAPushBySomeoneElseIsNotOverwritten(t *testing.T) {
 	if job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q (due %v), want at rest in start after a hand-back", job.State, !job.NextRunAt.IsZero())
 	}
-	if at := f.remoteHead(); at == f.head {
+	at := f.remoteHead()
+	if at == f.head {
 		t.Error("the remote's feature branch did not move: the other push was overwritten or never read")
 	}
 	if !f.handedBack() {
 		t.Error("no hand-back label on the pull request")
 	}
-	if !f.handBackComment() {
-		t.Error("no hand-back comment on the pull request")
+	body := f.handBack()
+	if body == "" {
+		t.Fatal("no hand-back comment on the pull request")
+	}
+	// It says where the branch is and where the send-back was written, once
+	// each, and lists the points done so far.
+	want := fmt.Sprintf("it is at `%s`, not at `%s` where the send-back was written.", git.Short(at), git.Short(f.head))
+	if !strings.Contains(body, want) || strings.Contains(body, "at `it is") {
+		t.Errorf("the hand-back does not say %q plainly:\n%s", want, body)
+	}
+	if !strings.Contains(body, "\"Rename Foo\" done in abc123.") {
+		t.Errorf("the hand-back does not list the points done so far:\n%s", body)
 	}
 }
 
@@ -404,14 +446,14 @@ func (f *revFixture) handedBack() bool {
 	return false
 }
 
-// handBackComment reports whether the agent posted a revision's hand-back.
-func (f *revFixture) handBackComment() bool {
+// handBack is the revision's hand-back the agent posted, or empty.
+func (f *revFixture) handBack() string {
 	for _, c := range f.tr.comments[12] {
 		if c.Login == agent && strings.Contains(c.Body, "afk:revision-hand-back") {
-			return true
+			return c.Body
 		}
 	}
-	return false
+	return ""
 }
 
 // The denylist runs before every push, and a denied path hands back on the
@@ -459,6 +501,22 @@ func TestTheGateRetriesThenHandsBack(t *testing.T) {
 	}
 	if !f.handedBack() {
 		t.Error("no hand-back on the pull request")
+	}
+	// One session, then one retry for each failure the bound allows, each
+	// continuing the session that wrote the commits, with the failure.
+	if len(f.model.asked) != f.deps.Attempts {
+		t.Fatalf("%d model runs, want %d: one for each attempt the gate is allowed", len(f.model.asked), f.deps.Attempts)
+	}
+	for i, req := range f.model.asked[1:] {
+		if req.Session != "ses_1" {
+			t.Errorf("retry %d ran in session %q, want the session that wrote the commits", i+1, req.Session)
+		}
+		if !strings.Contains(req.Prompt, "afk-gate.log") {
+			t.Errorf("retry %d was not pointed at the gate's failure:\n%s", i+1, req.Prompt)
+		}
+	}
+	if body := f.handBack(); !strings.Contains(body, fmt.Sprintf("after %d attempts", f.deps.Attempts)) || !strings.Contains(body, "FAIL: no ok") {
+		t.Errorf("the hand-back does not say the gate ran out, with its output:\n%s", body)
 	}
 }
 
@@ -529,6 +587,13 @@ func TestRewritingTheHeadTheSendBackWasWrittenAgainstHandsBack(t *testing.T) {
 	if !f.handedBack() {
 		t.Error("no hand-back on the pull request")
 	}
+	// Handed back at the gate, before an attempt is spent on a retry.
+	if n := len(f.model.asked); n != 1 {
+		t.Errorf("%d model runs, want 1: a rewritten head is not a gate failure to retry", n)
+	}
+	if body := f.handBack(); !strings.Contains(body, "The revision rewrote `"+git.Short(f.head)+"`") {
+		t.Errorf("the hand-back does not say the head was rewritten:\n%s", body)
+	}
 }
 
 // A revision's hand-back carries the send-back's markers for each command, so
@@ -557,4 +622,164 @@ func TestAHandBackCarriesTheRevisionsMarkers(t *testing.T) {
 		}
 	}
 	t.Fatal("no hand-back comment on the pull request")
+}
+
+// A session that fails transiently after committing leaves nothing for the
+// next candidate: it starts again from the send-back's head, and writes its
+// own reply.
+func TestATransientFailureLeavesNothingForTheNextCandidate(t *testing.T) {
+	f := setupRevision(t)
+	f.model.then(func(dir string) error {
+		if err := reviseOn("half.txt", "## Points\n\n- stale")(dir); err != nil {
+			return err
+		}
+		return &opencode.TransientError{Model: refFirst, Err: errors.New("stream reset")}
+	})
+	var started string
+	f.model.then(func(dir string) error {
+		var err error
+		if started, err = run(dir, "git", "rev-parse", "HEAD"); err != nil {
+			return err
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git", "afk-reply.md")); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("the failed session's reply is still there: %v", err)
+		}
+		return reviseOn("bar.txt", "## Points\n\n- fresh")(dir)
+	})
+
+	job := f.drive()
+	if job.State != revise.Watching {
+		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
+	}
+	if started != f.head {
+		t.Errorf("the next candidate started at %s, want the send-back's head %s", git.Short(started), git.Short(f.head))
+	}
+	at := f.remoteHead()
+	if _, err := run(f.remote, "git", "cat-file", "-e", at+":half.txt"); err == nil {
+		t.Error("the failed session's commit was pushed")
+	}
+	if _, reply := f.progress(); reply != "## Points\n\n- fresh" {
+		t.Errorf("the reply kept is %q, want the session that finished's", reply)
+	}
+}
+
+// The denylist is checked on what the revision adds. A path the pull request
+// already touched, in a commit that is on the remote, is not the agent's push.
+func TestTheDenylistReadsOnlyWhatTheRevisionAdds(t *testing.T) {
+	f := revisionFixture(t)
+	f.head = f.humanPushes("flake.lock")
+	f.tr.pr.HeadSHA = f.head
+	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.claim()
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
+
+	job := f.drive()
+	if job.State != revise.Watching {
+		t.Fatalf("the job is in %q, want %s: the pull request's own flake.lock is not the revision's\n%s", job.State, revise.Watching, f.handBack())
+	}
+	if at := f.remoteHead(); at == f.head || !f.ancestor(f.head, at) {
+		t.Errorf("the revision was not pushed on top of %s: the remote is at %s", git.Short(f.head), git.Short(at))
+	}
+}
+
+// A branch deleted between the claim and the revision is handed back rather
+// than failed at for ever.
+func TestABranchDeletedBeforeTheRevisionHandsBack(t *testing.T) {
+	f := setupRevision(t)
+	if _, err := run(f.remote, "git", "update-ref", "-d", "refs/heads/feature"); err != nil {
+		t.Fatal(err)
+	}
+
+	job := f.drive()
+	if job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest in start after a hand-back", job.State)
+	}
+	if len(f.model.asked) != 0 {
+		t.Errorf("%d model runs, want none", len(f.model.asked))
+	}
+	if body := f.handBack(); !strings.Contains(body, "was deleted") || !strings.Contains(body, owed.RevisionMarker(1)) {
+		t.Errorf("the hand-back does not say the branch was deleted, with the revision's marker:\n%s", body)
+	}
+}
+
+// A branch pushed over between the claim and the revision, so that the head
+// the send-back was written against is gone from it, is handed back too.
+func TestABranchPushedOverBeforeTheRevisionHandsBack(t *testing.T) {
+	f := setupRevision(t)
+	if _, err := run(f.remote, "git", "update-ref", "refs/heads/feature", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+
+	job := f.drive()
+	if job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest in start after a hand-back", job.State)
+	}
+	if len(f.model.asked) != 0 {
+		t.Errorf("%d model runs, want none", len(f.model.asked))
+	}
+	if body := f.handBack(); !strings.Contains(body, "is no longer on the branch") {
+		t.Errorf("the hand-back does not say the head is gone:\n%s", body)
+	}
+}
+
+// A send-back claimed before the claim recorded the branch (#145) is revised
+// on the pull request's branch.
+func TestASendBackWithNoBranchIsRevisedOnThePullRequests(t *testing.T) {
+	f := setupRevision(t)
+	path := filepath.Join(f.deps.StateDir, "send-backs", jobID()+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb map[string]any
+	if err := json.Unmarshal(b, &sb); err != nil {
+		t.Fatal(err)
+	}
+	delete(sb, "ref")
+	if b, err = json.Marshal(sb); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
+
+	job := f.drive()
+	if job.State != revise.Watching {
+		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
+	}
+	if at := f.remoteHead(); at == f.head || !f.ancestor(f.head, at) {
+		t.Errorf("the revision was not pushed to feature: it is at %s", git.Short(at))
+	}
+}
+
+// A send-back that is there and cannot be read is an error for the host, not a
+// hand-back saying the state directory was wiped.
+func TestAnUnreadableSendBackIsNotHandedBackAsLost(t *testing.T) {
+	f := setupRevision(t)
+	path := filepath.Join(f.deps.StateDir, "send-backs", jobID()+".json")
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := f.drive()
+	if job.State != revise.Revising {
+		t.Errorf("the job is in %q, want still %s", job.State, revise.Revising)
+	}
+	if body := f.handBack(); body != "" {
+		t.Errorf("the revision was handed back:\n%s", body)
+	}
+	if len(f.model.asked) != 0 {
+		t.Errorf("%d model runs, want none", len(f.model.asked))
+	}
+}
+
+// humanPushes commits name on the remote's feature branch, as the pull
+// request's author, and returns the new head.
+func (f *revFixture) humanPushes(name string) string {
+	f.t.Helper()
+	if err := f.someoneElsePushes(name); err != nil {
+		f.t.Fatal(err)
+	}
+	return f.remoteHead()
 }

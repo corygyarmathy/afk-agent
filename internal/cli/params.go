@@ -107,7 +107,7 @@ Implementing an issue, for afk run and afk work:
                                              (without it afk work parks implement jobs)
   --gate <command>      AFK_GATE             the local gate, run with sh in the workspace
   --gate-attempts <n>   AFK_GATE_ATTEMPTS    sessions the gate may fail before a hand-back
-  --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
+  --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing, and revising, draws from
   --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
   --hand-off-label <l>  AFK_HAND_OFF_LABEL   the label the hand-off applies
   --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;

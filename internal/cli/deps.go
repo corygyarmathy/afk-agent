@@ -132,8 +132,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if tr == nil {
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
-	// The revision's gate and its bound, and the paths it may not push, are
-	// the implement kind's: one local gate and one denylist serve both.
+	// The revision's gate and its bound, the paths it may not push, and the
+	// tier it runs on are the implement kind's: one local gate, one denylist
+	// and one tier serve both.
 	ip, err := p.implement()
 	if err != nil {
 		return nil, err

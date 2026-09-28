@@ -99,7 +99,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		if !in.Now.Before(p.PushedAt.Add(d.CICeiling)) {
 			reason := fmt.Sprintf("CI had not finished on `%s` %s after the push.", git.Short(p.Pushed), d.CICeiling)
 			if len(missing) > 0 {
-				reason += fmt.Sprintf(" %s, required on `%s`, had not started.", quoted(missing), p.Into)
+				reason += fmt.Sprintf(" %s, required on `%s`, had not started.", work.Quoted(missing), p.Into)
 			}
 			if len(failed) > 0 {
 				reason += fmt.Sprintf(" By then %s had failed.", names(failed))
@@ -226,7 +226,7 @@ func names(runs []github.CheckRun) string {
 	for i, r := range runs {
 		n[i] = r.Name
 	}
-	return quoted(n)
+	return work.Quoted(n)
 }
 
 // handBackPR returns the work to a human after the push: a comment saying

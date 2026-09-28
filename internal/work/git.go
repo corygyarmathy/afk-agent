@@ -2,8 +2,10 @@ package work
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,10 +14,10 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/glob"
 )
 
-// Clone clones the remote's default branch into dir, which must not exist or
-// be empty, and returns that branch. Only the default branch is fetched: a job
-// that needs another ref fetches it through the relay, so that no
-// token-carrying fetch but this first one ever runs in dir.
+// Clone clones the remote into dir, which must not exist or be empty, and
+// returns its default branch. A job that needs a ref the clone did not bring
+// fetches it through the relay (FetchInto), so that no token-carrying fetch but
+// this first one ever runs in dir.
 //
 // The clone carries the token as every read does, and nothing of it is left in
 // dir: what the clone writes there is the model's to read.
@@ -24,7 +26,7 @@ func Clone(ctx context.Context, remote git.Remote, dir string) (into string, err
 	if err != nil {
 		return "", err
 	}
-	if _, err := remote.Run(ctx, "", "clone", "--quiet", "--no-tags", "--single-branch", remote.URL, abs); err != nil {
+	if _, err := remote.Run(ctx, "", "clone", "--quiet", "--no-tags", remote.URL, abs); err != nil {
 		return "", err
 	}
 	into, err = git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
@@ -154,13 +156,34 @@ func RemoteHead(ctx context.Context, remote git.Remote, branch string) (string, 
 // at dir. A revision's push must keep the head the send-back was written
 // against: a session that rewrote it broke that, and the job hands back rather
 // than pushing a history the operator cannot compare.
+//
+// Only git's own "no" is false. Anything else - a cancelled context, a
+// repository git cannot read - is an error, because a false here hands the
+// work back and clears it.
 func Ancestor(ctx context.Context, dir, ancestor, commit string) (bool, error) {
-	out, err := git.RunEnv(ctx, dir, git.Isolated, "merge-base", ancestor, commit)
-	if err != nil {
-		// No merge base at all is not an ancestor either.
+	_, err := git.RunEnv(ctx, dir, git.Isolated, "merge-base", "--is-ancestor", ancestor, commit)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return false, nil
 	}
-	return out == ancestor, nil
+	return err == nil, err
+}
+
+// HasCommit reports whether commit is in the repository at dir. Only git's own
+// "no" is false, as for Ancestor.
+func HasCommit(ctx context.Context, dir, commit string) (bool, error) {
+	_, err := git.RunEnv(ctx, dir, git.Isolated, "rev-parse", "--quiet", "--verify", commit+"^{commit}")
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Commits is how many commits the workspace's branch has on top of base.
@@ -220,4 +243,25 @@ func ValidDenylist(denylist []string) error {
 // names them.
 func Denied(denylist, paths []string) []string {
 	return glob.Matching(denylist, paths)
+}
+
+// Where says where a branch the agent was about to push is, when it is not
+// where the agent left it: a clause for a hand-back to say.
+func Where(at, lease string) string {
+	switch {
+	case at == "":
+		return "it has been deleted"
+	case lease == "":
+		return fmt.Sprintf("it is at `%s`, which the agent did not push", git.Short(at))
+	}
+	return fmt.Sprintf("it is at `%s`, not at `%s` where the agent left it", git.Short(at), git.Short(lease))
+}
+
+// Quoted names paths in backticks for a hand-back.
+func Quoted(paths []string) string {
+	q := make([]string, len(paths))
+	for i, p := range paths {
+		q[i] = "`" + p + "`"
+	}
+	return strings.Join(q, ", ")
 }

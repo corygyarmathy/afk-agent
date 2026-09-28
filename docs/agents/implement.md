@@ -292,7 +292,8 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 `--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`,
 plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
-`--review-procedure` and `--sensitive` are optional.
+`--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
+gate, attempts, denylist and tier: there is no revise tier of its own.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the

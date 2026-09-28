@@ -8,12 +8,14 @@
 //	                               start      ... and there is nothing to revise: at rest
 //	                               claiming   made again, under the next key
 //	revising  --revise-run------>  gating     one candidate model, in the workspace, on the send-back's head
+//	                               revising   it failed transiently: the next candidate
+//	                               handing-back  the branch was deleted, or pushed over, since the send-back
 //	gating    --revise-gate----->  pushing    the local gate passed
 //	                               revising   it failed: back to the session that wrote it
 //	                               handing-back  out of attempts, or the session rewrote the read head
 //	pushing   --revise-push----->  pushed     the denylist, and the leased push
 //	                               pushing    the push did not land: again, under the next key
-//	                               handing-back  a denied path, or out of rounds
+//	                               handing-back  a denied path, the read head rewritten, or out of rounds
 //	pushed    --revise-pushed--->  watching   the push is on the remote: CI is #147's
 //	                               pushing    not landed yet: again
 //	                               handing-back  someone else pushed during the revision
@@ -126,8 +128,9 @@ type Deps struct {
 	// the App's installation token every git process that reaches it carries.
 	Remote git.Remote
 
-	// Resolve is the ordered candidate list for the revise tier, as of now
-	// (ADR 0001 §9). A *model.LimitedError defers the job to the reset.
+	// Resolve is the ordered candidate list a revision runs on, as of now
+	// (ADR 0001 §9): the implement tier's, since a revision is implementing
+	// work on a branch. A *model.LimitedError defers the job to the reset.
 	Resolve func(ctx context.Context) (model.Candidates, error)
 
 	// Bound is how many candidates a run tries before the tier counts as
