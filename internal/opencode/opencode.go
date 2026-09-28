@@ -81,6 +81,12 @@ type Request struct {
 
 	// Session is the session to continue, or empty for a new one.
 	Session string
+
+	// Cost asks for what the run cost with its sub-agents', which reads each
+	// of their sessions once the run is done (#99). Without it, a reply's Cost
+	// and Tokens are its own session's alone, and a caller that does not read
+	// them does not wait on the reads.
+	Cost bool
 }
 
 // Reply is what a run that succeeded wrote, and what it cost.
@@ -91,18 +97,23 @@ type Reply struct {
 	Text string
 
 	// Cost is the run's cost in dollars, as opencode reports it, with its
-	// sub-agents'. It informs; it decides nothing (ADR 0001 §11).
+	// sub-agents' when the request asked for them. It informs; it decides
+	// nothing (ADR 0001 §11).
 	Cost float64
 
 	// Session is the session the run was in, to continue it later.
 	Session string
 
-	// Tokens is the run's token usage, with its sub-agents'.
+	// Tokens is the run's token usage, with its sub-agents' when the request
+	// asked for them.
 	Tokens Tokens
 
-	// Unread is how many of the run's sub-agents' sessions could not be read,
-	// and are missing from Cost and Tokens. Cost is a floor when it is not
-	// zero.
+	// SubAgents is how many sub-agents' sessions the run started, theirs
+	// included, when the request asked for their cost.
+	SubAgents int
+
+	// Unread is how many of those sessions could not be read, and are missing
+	// from Cost and Tokens. Cost is a floor when it is not zero.
 	Unread int
 }
 
@@ -154,7 +165,9 @@ func (e *FatalError) Unwrap() error { return e.Err }
 // language servers of its own, and a run abandoned by its transition must not
 // leave them behind. The error is then ctx's, and is neither transient nor
 // fatal: nothing failed, the caller stopped. A run that outlives Timeout is
-// killed the same way, and that is a failure: the run did not finish.
+// killed the same way, and that is a failure: the run did not finish. Either
+// arriving once the run has finished, while its sub-agents' sessions are read
+// for Request.Cost, leaves those unread rather than discarding the reply.
 func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	if err := c.check(req); err != nil {
 		return Reply{}, &FatalError{err}
@@ -244,9 +257,8 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	case strings.TrimSpace(reply.Text) == "":
 		return Reply{}, c.transient(req, errors.New("the run finished without writing a reply"), &stderr)
 	}
-	c.subAgents(ctx, req.Dir, &reply, children)
-	if ctx.Err() != nil {
-		return Reply{}, ctx.Err()
+	if req.Cost {
+		c.subAgents(bounded, req.Dir, &reply, children)
 	}
 	return reply, nil
 }
@@ -261,16 +273,12 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 // session resumed from an earlier run brings that run's spending with it,
 // which only a retry that continues a session could do.
 //
-// The reads share one bound, the run's, rather than a parameter of their own:
-// each is a local read of a few seconds, and the bound is there for opencode
-// stuck on something rather than to time them.
+// The reads have what is left of the run's bound, ctx, rather than one of
+// their own: the bound is on everything a run does, and it is what the lease
+// is sized against, so reads past it could outlive the lease. Each is a local
+// read of a few seconds. One that the bound or the caller cuts short is
+// unread, like any other, and the run it counts for still succeeded.
 func (c Command) subAgents(ctx context.Context, dir string, reply *Reply, children []string) {
-	if len(children) == 0 {
-		return
-	}
-	bounded, cancel := context.WithTimeout(ctx, c.Timeout)
-	defer cancel()
-
 	seen := map[string]bool{}
 	for len(children) > 0 {
 		id := children[0]
@@ -279,7 +287,8 @@ func (c Command) subAgents(ctx context.Context, dir string, reply *Reply, childr
 			continue
 		}
 		seen[id] = true
-		s, err := c.export(bounded, dir, id)
+		reply.SubAgents++
+		s, err := c.export(ctx, dir, id)
 		if err != nil {
 			reply.Unread++
 			continue
@@ -296,7 +305,10 @@ func (c Command) subAgents(ctx context.Context, dir string, reply *Reply, childr
 	}
 }
 
-// export reads one session as `opencode export` writes it.
+// export reads one session as `opencode export` writes it: the session on
+// stdout, and nothing else there. Unlike a run it starts no process of its
+// own (traced on opencode 1.18.31), so it needs no process group for a kill
+// to reach all of it.
 func (c Command) export(ctx context.Context, dir, session string) (exported, error) {
 	cmd := exec.CommandContext(ctx, c.Path, "export", session)
 	cmd.Dir = dir
