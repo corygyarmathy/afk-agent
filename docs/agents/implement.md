@@ -87,7 +87,8 @@ Its sections, in this order, each left out when it has nothing to say:
 2. **The sensitive line**, only on a pull request that touches a sensitive
    path: `**Sensitive:** job store schema (…), CI (…)`, each label the
    operator named that matched, in the operator's order, with the files it
-   matched. The agent's.
+   matched, or with a count of them when listing them would take the body over
+   GitHub's 65,536 characters. The agent's.
 3. **The reminder**, a blockquote the agent writes: read the issue, then the
    description, then the diff from **Start here**; do your own reading before
    the advisory review; end by merging, sending back or closing. It links
@@ -111,34 +112,37 @@ Its sections, in this order, each left out when it has nothing to say:
   at the pushed head, as the advisory review's citations are.
 - **The pull request opens with the agent's parts only** when the file is
   missing, is not a regular file, cannot be read, has no `## Start here`, or
-  makes a body over GitHub's 65,536 characters. None of these is a gate
-  failure. Each but the missing file is a log line.
+  makes a body over GitHub's 65,536 characters even with the sensitive files
+  counted. None of these is a gate failure. Each but the missing file is a log
+  line, and so is counting the sensitive files.
 - **Written once**, when the pull request opens. A session after that - a CI
   fix, or a new session that takes one over - is not asked for the file.
 - **The sensitive line is recomputed on every push**, the first and each fix
   after it, so a later push that newly touches a sensitive path adds it. Only
-  that line is edited: the rest of the description stays as it opened. An
-  edit that never lands after `--effect-rounds` is a log line, and the work
-  goes on.
+  that line is edited: the rest of the description stays as it opened, and
+  the files are counted rather than listed when listing them would take it
+  over GitHub's limit. An edit that never lands after `--effect-rounds`, or
+  one over the limit even counted, is a log line, and the work goes on.
 
 ### Sensitive paths
 
 `--sensitive` names the paths that deserve closer reading
 ([#112](https://github.com/corygyarmathy/afk-agent/issues/112)): the
 operator's review reads the files the line lists line by line. It is one-sided:
-nothing is ever marked safe to skim.
+nothing is ever marked safe to skim. The code is
+[`internal/sensitive`](../../internal/sensitive).
 
 - **The operator names them**, as `<label>=<globs>` entries separated by `;`,
   with the globs separated by `,`:
   `job store schema=internal/store/**;CI=.github/workflows/**`. A label may
-  have spaces in it.
+  have spaces in it, and not a comma, a parenthesis or a control character.
 - **The agent matches them**, with the denylist's glob matching, against the
   paths the pull request's diff changes: net, base to head, as the pull request
   shows them. No model rates anything.
-- **Empty by default**, which is the feature off. It is never a file in the
-  repository: the agent could edit that in its own pull request.
-- **Nothing else reads it.** It adds no label, and the advisory review and the
-  review queue are unaware of it.
+- **Empty by default**, which is the feature off. It is a parameter, never a
+  file in the repository.
+- **Nothing else reads it.** It adds no label, the review queue is unaware of
+  it, and the advisory review reads the description without it.
 
 ## The size signal
 
