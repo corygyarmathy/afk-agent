@@ -40,9 +40,7 @@ The happy path publishes nothing at all.
   again next poll. See [`budget.md`](budget.md).
 - **A full review queue.** Intake takes no issue through the eligibility label
   until there is room, and logs once when it starts holding and once when it
-  stops. It is a state, and GitHub shows it: filter by the hand-off label. A
-  push to go and review would press the operator to skim, which is what the
-  limit is there to prevent. See
+  stops. GitHub shows the queue: filter by the hand-off label. See
   [`triage-labels.md`](triage-labels.md#the-review-queue-limit).
 - **`afk run`.** A hand-invocation notifies nothing; the operator is reading
   the output.
