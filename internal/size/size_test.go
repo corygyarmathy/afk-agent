@@ -174,6 +174,32 @@ func TestAnAttributeSetFalseCountsTheFileAgain(t *testing.T) {
 	}
 }
 
+// A path is read exactly as git wrote it, so a file deleted whole whose name
+// starts with a space is still one deleted whole.
+func TestAPathIsReadWithItsSpaces(t *testing.T) {
+	dir, base := repo(t, map[string]string{" lead.txt": lines(5)})
+	git(t, dir, "rm", "--quiet", " lead.txt")
+	// Nothing like the deleted file, so that it is not found as a rename.
+	write(t, dir, map[string]string{"new.go": "package x\n\nfunc F() {}\n"})
+	head := commitAll(t, dir)
+
+	if got, want := measure(t, dir, base, head), (size.Count{Lines: 3}); got != want {
+		t.Errorf("count = %+v, want %+v", got, want)
+	}
+}
+
+// A warning git prints about the head's .gitattributes is not read as part of
+// the attributes: the first path's are still its own.
+func TestAWarningIsNotReadAsAnAttribute(t *testing.T) {
+	dir, base := repo(t, map[string]string{".gitattributes": "*.md bad@name\nvendor/ours/** -linguist-vendored\n"})
+	write(t, dir, map[string]string{"vendor/ours/ours.go": lines(12)})
+	head := commitAll(t, dir)
+
+	if got, want := measure(t, dir, base, head), (size.Count{Lines: 12}); got != want {
+		t.Errorf("count = %+v, want %+v", got, want)
+	}
+}
+
 // The measure reads the commits, not the checkout: it works in a bare
 // repository, where the push is made from.
 func TestTheMeasureReadsABareRepository(t *testing.T) {

@@ -113,7 +113,7 @@ type file struct {
 // and no external diff or text conversion is run.
 func changed(ctx context.Context, dir, base, head string) ([]file, error) {
 	diff := []string{"diff", "--no-ext-diff", "--no-textconv", "--find-renames", "-z"}
-	deleted, err := git.RunEnv(ctx, dir, git.Isolated, append(diff, "--name-only", "--diff-filter=D", base, head)...)
+	deleted, err := git.Output(ctx, dir, git.Isolated, append(diff, "--name-only", "--diff-filter=D", base, head)...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func changed(ctx context.Context, dir, base, head string) ([]file, error) {
 	for _, p := range strings.Split(deleted, "\x00") {
 		gone[p] = true
 	}
-	out, err := git.RunEnv(ctx, dir, git.Isolated, append(diff, "--numstat", base, head)...)
+	out, err := git.Output(ctx, dir, git.Isolated, append(diff, "--numstat", base, head)...)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ type attrs struct{ vendored, generated string }
 // attributes reads the linguist attributes of paths from the .gitattributes
 // committed at head, never from a checkout.
 func attributes(ctx context.Context, dir, head string, paths []string) (map[string]attrs, error) {
-	out, err := git.RunEnv(ctx, dir, git.Isolated, append([]string{"check-attr", "-z", "--source=" + head, "linguist-vendored", "linguist-generated", "--"}, paths...)...)
+	out, err := git.Output(ctx, dir, git.Isolated, append([]string{"check-attr", "-z", "--source=" + head, "linguist-vendored", "linguist-generated", "--"}, paths...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func generatedByHeader(ctx context.Context, dir, head string, paths []string) (m
 	if len(paths) == 0 {
 		return marked, nil
 	}
-	out, err := git.RunEnv(ctx, dir, git.Isolated, append([]string{"--literal-pathspecs", "grep", "-z", "-l", "-I", "-E", generatedHeader, head, "--"}, paths...)...)
+	out, err := git.Output(ctx, dir, git.Isolated, append([]string{"--literal-pathspecs", "grep", "-z", "-l", "-I", "-E", generatedHeader, head, "--"}, paths...)...)
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 {
 		// Nothing matched.

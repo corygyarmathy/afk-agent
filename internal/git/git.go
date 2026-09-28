@@ -31,6 +31,23 @@ func RunEnv(ctx context.Context, dir string, env []string, args ...string) (stri
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Output is RunEnv for output that is parsed rather than read: stdout alone,
+// exactly as git wrote it. Nothing on stderr, a warning included, reaches it,
+// and nothing is trimmed from a NUL-separated field that starts or ends with
+// a space. Stderr is in the error.
+func Output(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", command(args), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
 // command is the git command args run: the first argument that is not an
 // option to git itself.
 func command(args []string) string {
