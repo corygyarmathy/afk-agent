@@ -109,7 +109,7 @@ The agent declaring it cannot proceed and returning the subject to the human, wi
 _Avoid_: Stuck path, failure
 
 **Owed**:
-What a transition has decided to say on the tracker (a claim, a reply to a command, a hand-back's comment and label) and has not yet seen there. The job does not move on from something owed until the tracker shows it: an owed thing lost is made again, never given up on quietly.
+What a transition has decided to say on the tracker (a claim, a reply to a command, a hand-back's comment and label, and a label taken off) and has not yet seen there. The job does not move on from something owed until the tracker shows it: an owed thing lost is made again, never given up on quietly.
 _Avoid_: Pending, outbox, queued
 
 **Effect**:

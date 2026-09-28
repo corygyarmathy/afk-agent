@@ -132,6 +132,8 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if tr == nil {
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
+	// The whole effect bundle, as every kind reads it. The claim uses only
+	// the rounds; #146's revision consumes the hand-back label in it.
 	ep, err := p.effects()
 	if err != nil {
 		return nil, err

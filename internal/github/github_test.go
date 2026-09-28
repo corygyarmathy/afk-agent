@@ -567,6 +567,23 @@ func TestUnlabelingALabelThatIsNotThereIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestHasLabelIsCaseInsensitive(t *testing.T) {
+	for _, tc := range []struct {
+		labels []string
+		label  string
+		want   bool
+	}{
+		{[]string{"bug", "ready-for-review"}, "READY-FOR-REVIEW", true},
+		{[]string{"bug"}, "ready-for-review", false},
+		{nil, "ready-for-review", false},
+		{[]string{""}, "", false},
+	} {
+		if got := github.HasLabel(tc.labels, tc.label); got != tc.want {
+			t.Errorf("HasLabel(%q, %q) = %v, want %v", tc.labels, tc.label, got, tc.want)
+		}
+	}
+}
+
 // A failure names the endpoint and the status, and never the token: errors end
 // up in the journal, and a 401 must say the token is wrong without saying what
 // it is.
