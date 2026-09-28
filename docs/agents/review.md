@@ -44,7 +44,9 @@ is not what the skill expects - a shallow checkout, and no credentials for the
 tracker - so `review-run` fetches what the skill would have: the diff into
 `.git/afk-pr.diff`, and the pull request's description and every issue it
 closes (by GitHub's closing keywords, `Closes #7`) into `.git/afk-pr-spec.md`.
-An issue it cannot find is noted there as a gap, not a failure. The prompt,
+The description goes without its sensitive line
+([`implement.md`](implement.md#sensitive-paths)), so a pull request that
+touches a sensitive path is reviewed as any other. An issue it cannot find is noted there as a gap, not a failure. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue is reviewed against its
 description, and the report says so.
