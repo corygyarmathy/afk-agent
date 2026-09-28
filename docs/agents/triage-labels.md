@@ -62,17 +62,18 @@ open issue is taken when all of these hold:
 - it has no open blocker, read from its native dependencies
   (`issue_dependencies_summary.blocked_by`,
   [`issue-tracker.md`](issue-tracker.md#dependencies-between-issues)). An issue
-  the API serves with no dependency summary is not taken, because its blockers
-  cannot be read;
-- it has no `implement` job in the store, whatever made it. A command's work
-  that came to rest, handed off or handed back, is not the queue's to start
-  over;
-- it does not carry the agent's claim, a 👀 on the issue itself. That is what
-  stops a wiped store taking it again.
+  the API serves with no dependency summary is not taken, and intake logs it
+  once;
+- it has no `implement` job in the store, whatever made it, including a
+  command's work that came to rest, handed off or handed back;
+- it does not carry the agent's claim: a 👀 on the issue itself, or on an
+  `/implement` comment on it.
 
-Taking it makes the job `/implement` would make, due now. The job claims the
-issue with a 👀 on it, because nothing asked and there is no command to claim.
-Admission still decides when the job starts, as it does for every job.
+Taking it makes the job `/implement` would make, due now. Every `implement` job
+claims the issue with a 👀 on it, whether or not a command asked for the work.
+To queue an issue again once its job is gone, take the agent's 👀 off it, and
+off any `/implement` on it. Admission still decides when the job starts, as it
+does for every job.
 
 **The order** is lowest issue number first, which on GitHub is oldest first,
 whatever order the listing serves. Anything that takes only some of the
@@ -83,8 +84,8 @@ eligible issues takes the first ones in this order.
 The prototype in `corygyarmathy/dotfiles` also wrote `agent-working` and
 `agent-revising`. Neither survives. A job being taken is shown by the **claim**:
 a 👀 reaction on whatever asked for the work, which is the command comment, or
-for a review another job asked for, what that job posted. Work nobody asked
-for, taken through the eligibility label, is claimed on the issue itself. A label that meant "a
+for a review another job asked for, what that job posted. `implement` work
+also claims the issue itself, whoever asked for it. A label that meant "a
 process is on this" conflated the claim with the lease, and ADR 0001 §7 keeps
 them apart. `agent-ready-for-review` and `agent-stuck` become `needs-review` and
 `needs-decision`.
