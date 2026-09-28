@@ -32,6 +32,7 @@ type tracker struct {
 	pr        github.PullRequest
 	comments  map[int][]github.Comment
 	reactions map[int64][]github.Reaction
+	issues    map[int]github.Issue
 	nextID    int64
 
 	// writes counts every write, by what it was.
@@ -46,6 +47,7 @@ func newTracker() *tracker {
 		},
 		comments:  map[int][]github.Comment{},
 		reactions: map[int64][]github.Reaction{},
+		issues:    map[int]github.Issue{},
 		nextID:    1000,
 		writes:    map[string]int{},
 	}
@@ -76,6 +78,9 @@ func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, er
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	if n == 12 {
 		return github.Issue{Number: 12, State: tr.pr.State, PullRequest: true, Labels: tr.pr.Labels}, nil
+	}
+	if is, ok := tr.issues[n]; ok {
+		return is, nil
 	}
 	return github.Issue{Number: n, State: "open"}, nil
 }
@@ -112,8 +117,15 @@ func (tr *tracker) ReactToIssue(context.Context, int, string) error {
 	return errors.New("the revise kind never claims a pull request's description")
 }
 
-func (tr *tracker) Label(context.Context, int, string) error {
-	return errors.New("the revise kind's claim never applies a label")
+func (tr *tracker) Label(_ context.Context, _ int, label string) error {
+	tr.writes["label"]++
+	for _, l := range tr.pr.Labels {
+		if l == label {
+			return nil
+		}
+	}
+	tr.pr.Labels = append(tr.pr.Labels, label)
+	return nil
 }
 
 func (tr *tracker) Unlabel(_ context.Context, n int, label string) error {
@@ -202,7 +214,7 @@ func (f *fixture) pass() []store.Job {
 }
 
 // drive runs the pull request's revise job until it comes to rest or reaches
-// revising, which #146 takes on from, and returns where it stopped.
+// revising, which #146 takes on, and returns where it stopped.
 func (f *fixture) drive() store.Job {
 	f.t.Helper()
 	ctx := context.Background()
@@ -211,6 +223,9 @@ func (f *fixture) drive() store.Job {
 		job, err := f.store.Job(ctx, id)
 		if err != nil {
 			f.t.Fatal(err)
+		}
+		if job.State == revise.Revising {
+			return job
 		}
 		next, ok := f.reg.Next(job.Kind, job.State)
 		if job.NextRunAt.IsZero() || !ok {
@@ -252,7 +267,7 @@ func TestASendBackIsClaimedAndMovesOnToTheWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := revise.SendBack{Head: head, Points: []revise.Point{{Comment: 1, Text: "Rename Foo to Bar.\n\nadvisory 3, but keep the test"}}}
+	want := revise.SendBack{Head: head, Ref: "feature", Points: []revise.Point{{Comment: 1, Text: "Rename Foo to Bar.\n\nadvisory 3, but keep the test"}}}
 	if fmt.Sprint(sb) != fmt.Sprint(want) {
 		t.Errorf("send-back = %+v, want %+v", sb, want)
 	}

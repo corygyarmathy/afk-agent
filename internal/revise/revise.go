@@ -1,14 +1,32 @@
 // Package revise is the revise job kind's transitions: a send-back on a pull
 // request becomes a revision of it (#131).
 //
-// A send-back's way in (#145):
+// A send-back's whole way to a revision (#145, #146):
 //
-//	start     --revise---------->  claiming  claim every unanswered command, and refuse what cannot be revised
-//	claiming  --revise-claimed-->  revising  the claims, the replies and the hand-off label taken off are on the tracker
-//	                               start     ... and there is nothing to revise: at rest
-//	                               claiming  made again, under the next key
+//	start     --revise---------->  claiming   claim every unanswered command, and refuse what cannot be revised
+//	claiming  --revise-claimed-->  revising   the claims, the replies and the hand-off label taken off are on the tracker
+//	                               start      ... and there is nothing to revise: at rest
+//	                               claiming   made again, under the next key
+//	revising  --revise-run------>  gating     one candidate model, in the workspace, on the send-back's head
+//	                               revising   it failed transiently: the next candidate
+//	                               handing-back  the branch was deleted, or pushed over, since the send-back
+//	gating    --revise-gate----->  pushing    the local gate passed
+//	                               revising   it failed: back to the session that wrote it
+//	                               handing-back  out of attempts, or the session rewrote the read head
+//	pushing   --revise-push----->  pushed     the denylist, and the leased push
+//	                               pushing    the push did not land: again, under the next key
+//	                               handing-back  a denied path, the read head rewritten, or out of rounds
+//	pushed    --revise-pushed--->  watching   the push is on the remote: CI is #147's
+//	                               pushing    not landed yet: again
+//	                               handing-back  someone else pushed during the revision
+//	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
+//	deferred  --revise-resume----> revising   the tier again, from its first model
 //
-// Making the revision, from revising, is #146's.
+// The revision's own commits go on top of the head the send-back was written
+// against, and are pushed under a lease pinned to that head: a push made while
+// the revision ran is never overwritten (#146). The workspace, the relay, the
+// gate and its retries, the denylist and the leased push are package work,
+// shared with implement.
 //
 // The claim is its own transition for the reason implement's and review's are:
 // it is committed before anything can fail. A job that failed ahead of its
@@ -47,9 +65,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
+	"github.com/corygyarmathy/afk-agent/internal/model"
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
@@ -58,9 +80,15 @@ import (
 
 // The revise kind's states.
 const (
-	Start    = "start"
-	Claiming = "claiming"
-	Revising = "revising"
+	Start       = "start"
+	Claiming    = "claiming"
+	Revising    = "revising"
+	Gating      = "gating"
+	Pushing     = "pushing"
+	Pushed      = "pushed"
+	Watching    = "watching"
+	Deferred    = "deferred"
+	HandingBack = "handing-back"
 )
 
 // Word is the command that sends a pull request back to be revised.
@@ -72,10 +100,16 @@ type Tracker interface {
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
 }
 
+// Model runs one model. opencode.Command is one.
+type Model interface {
+	Run(ctx context.Context, req opencode.Request) (opencode.Reply, error)
+}
+
 // Deps is everything the revise kind's transitions reach. Built once, by the
 // command surface; the transitions themselves hold nothing.
 type Deps struct {
 	Tracker Tracker
+	Model   Model
 
 	// Store is read, never written: which round of an effect is next. This
 	// job's own state is the runner's to write.
@@ -90,17 +124,55 @@ type Deps struct {
 	// to.
 	Repo string
 
+	// Remote is the repository a revision is cloned from and pushed to, and
+	// the App's installation token every git process that reaches it carries.
+	Remote git.Remote
+
+	// Resolve is the ordered candidate list a revision runs on, as of now
+	// (ADR 0001 §9): the implement tier's, since a revision is implementing
+	// work on a branch. A *model.LimitedError defers the job to the reset.
+	Resolve func(ctx context.Context) (model.Candidates, error)
+
+	// Bound is how many candidates a run tries before the tier counts as
+	// exhausted, and TierWait how long an exhausted tier defers. Parameters.
+	Bound    int
+	TierWait time.Duration
+
 	// Rounds is how many times something owed is made before one that never
 	// appears is an error. A parameter.
 	Rounds int
+
+	// Gate is the local gate: a shell command run in the workspace, which
+	// passes by exiting zero, and Attempts how many times it may fail before
+	// the revision is handed back. Parameters.
+	Gate     string
+	Attempts int
+
+	// Denylist is the paths the agent may never push, as globs (see work).
+	// A parameter.
+	Denylist []string
 
 	// HandOffLabel is the label the hand-off applies, which a claim that
 	// moves on to the work takes off. A parameter.
 	HandOffLabel string
 
-	// StateDir is where what is owed and the send-back wait - beside the
-	// store, never in it (ADR 0001 §5).
+	// HandBackLabel is the label a hand-back applies. A parameter.
+	HandBackLabel string
+
+	// StateDir is where what is owed, the send-back and the revision's
+	// workspace wait - beside the store, never in it (ADR 0001 §5).
 	StateDir string
+
+	// Log receives one line each time a candidate's run fails transiently,
+	// which nothing else keeps once the next candidate runs. Nil is silent.
+	Log func(msg string)
+}
+
+// logf is one line to Log, if there is one.
+func (d *Deps) logf(format string, a ...any) {
+	if d.Log != nil {
+		d.Log(fmt.Sprintf(format, a...))
+	}
 }
 
 // Transitions is the revise kind, as registry entries.
@@ -108,13 +180,20 @@ func Transitions(d *Deps) []transition.Transition {
 	return []transition.Transition{
 		{Name: "revise", Kind: store.KindRevise, From: Start, Run: d.claim},
 		{Name: "revise-claimed", Kind: store.KindRevise, From: Claiming, Run: d.claimed},
+		{Name: "revise-run", Kind: store.KindRevise, From: Revising, Tokens: []string{transition.HeavyBuild}, Run: d.run},
+		{Name: "revise-gate", Kind: store.KindRevise, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
+		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
+		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
+		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
+		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
 	}
 }
 
-// SendBack is what a claim that moves on to the work hands it: the head the
-// send-back was written against, and its points.
+// SendBack is what a claim that moves on to the work hands it: the branch and
+// head the send-back was written against, and its points.
 type SendBack struct {
 	Head   string  `json:"head"`
+	Ref    string  `json:"ref"`
 	Points []Point `json:"points"`
 }
 
@@ -188,7 +267,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	// one applied after the pull request above was read but before the job
 	// moves on, and taking off a label that is not there is not an error.
 	items = append(items, owed.Unlabel(fmt.Sprintf("revise-unlabel-comment-%d", points[0].Comment), n, d.HandOffLabel))
-	if err := statefile.Save(d.path(in.Job.ID), SendBack{Head: pr.HeadSHA, Points: points}); err != nil {
+	if err := statefile.Save(d.path(in.Job.ID), SendBack{Head: pr.HeadSHA, Ref: pr.HeadRef, Points: points}); err != nil {
 		return transition.Result{}, err
 	}
 	return book.Owe(ctx, in, Claiming, owed.Record{Next: Revising, Due: true, Items: items})

@@ -9,11 +9,11 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/glob"
 	"github.com/corygyarmathy/afk-agent/internal/permalink"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // pushTransition is `implement-push`: the denylist, then the push, with nothing
@@ -25,8 +25,8 @@ import (
 // could move what is pushed.
 func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition.Result, error) {
 	p, err := d.load(in.Job.ID)
-	ws := d.workspacePath(in.Job.ID)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && !isDir(ws)) {
+	ws := d.work().Dir(in.Job.ID)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !d.work().Exists(in.Job.ID)) {
 		// The work is gone before it reached the remote, or with nothing
 		// to show that it did. Either way it starts over, on a branch
 		// nobody has pushed.
@@ -41,17 +41,17 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return transition.Result{State: Implementing, RunAt: in.Now}, nil
 	}
 
-	relayDir := d.relayPath(in.Job.ID)
-	head, err := relay(ctx, ws, relayDir, p.Branch)
+	relayDir := d.work().RelayDir(in.Job.ID)
+	head, err := work.Relay(ctx, ws, relayDir, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	paths, err := touched(ctx, relayDir, p.Base, head)
+	paths, err := work.Touched(ctx, relayDir, p.Base, head)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if bad := glob.Matching(d.Denylist, paths); len(bad) > 0 {
-		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", quoted(bad)), "")
+	if bad := work.Denied(d.Denylist, paths); len(bad) > 0 {
+		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", work.Quoted(bad)), "")
 	}
 
 	// Measured here, on the commit the push sends and in the relay, where
@@ -91,24 +91,19 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		p.Sensitive = sensitive.Touches(d.Sensitive, paths)
 	}
 
-	// The stem is new with each head, and a head is pushed only by the work
-	// that made it: out of rounds, the work is handed back, and a later
-	// command starts it over on a new branch.
-	stem := fmt.Sprintf("push-%s-%s", p.Branch, head)
-	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
-	if spent, ok := transition.Spent(err); ok {
-		return d.handBack(ctx, in, p, fmt.Sprintf("The push of `%s` to `%s` was made %d times and never landed.", git.Short(head), p.Branch, spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
-	}
+	// Out of rounds, the work is handed back, and a later command starts it
+	// over on a new branch.
+	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	if unlanded != nil {
+		return d.handBack(ctx, in, p, unlanded.Said(head, p.Branch), unlanded.Note)
 	}
 	p.Head = head
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
-	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
-		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
-	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
@@ -127,7 +122,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 // for it.
 func (d *Deps) keepWhole(ctx context.Context, in transition.In, p progress, relayDir, head string) (transition.Result, bool, error) {
 	whole := wholeBranch(p.Branch)
-	at, err := remoteHead(ctx, d.Remote, whole)
+	at, err := work.RemoteHead(ctx, d.Remote, whole)
 	if err != nil {
 		return transition.Result{}, false, err
 	}
@@ -156,7 +151,7 @@ func (d *Deps) keepWhole(ctx context.Context, in transition.In, p progress, rela
 	// Read back by the next pass here: pushing is where the job stays until
 	// the whole is seen on the remote.
 	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
-		return push(ctx, relayDir, d.Remote, head, whole, "")
+		return work.Push(ctx, relayDir, d.Remote, head, whole, "")
 	}}
 	return transition.Result{State: Pushing, RunAt: in.Now, Effects: []transition.Effect{effect}}, true, nil
 }
@@ -188,27 +183,17 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	at, err := remoteHead(ctx, d.Remote, p.Branch)
-	if err != nil {
+	switch landing, at, err := d.work().Land(ctx, &p.Progress, in.Now); {
+	case err != nil:
 		return transition.Result{}, err
-	}
-	if at != p.Head {
-		if at != p.Pushed {
-			// Neither the agent's push nor the lease it was pinned to:
-			// someone else pushed to the branch, or deleted it. Every push
-			// from here is refused by the lease, so none is made.
-			return d.handBack(ctx, in, p, fmt.Sprintf("Someone else changed `%s` before the agent's push of `%s` landed: %s, and the agent does not push over anyone else's work.", p.Branch, git.Short(p.Head), where(at, p.Pushed)),
-				transition.Noted(d.notePath(in.Job.ID), fmt.Sprintf("push-%s-%s", p.Branch, p.Head)))
-		}
+	case landing == work.Moved:
+		return d.handBack(ctx, in, p, fmt.Sprintf("Someone else changed `%s` before the agent's push of `%s` landed: %s, and the agent does not push over anyone else's work.", p.Branch, git.Short(p.Head), work.Where(at, p.Pushed)),
+			d.work().PushNote(in.Job.ID, p.Progress))
+	case landing == work.NotLanded:
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	}
-	if p.Pushed != at {
-		// Seen on the remote: the lease the next push is pinned to, and
-		// the head CI is watched on from now.
-		p.Pushed, p.PushedAt = at, in.Now
-		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
-		}
+	if err := d.save(in.Job.ID, p); err != nil {
+		return transition.Result{}, err
 	}
 
 	if pr, ok, err := d.open(ctx, from(p.Branch)); err != nil {
@@ -276,7 +261,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	}
 	// Linked in the workspace, the checkout of the pushed head, which says
 	// which citations name a file. Without it, nothing is linked.
-	if ws := d.workspacePath(in.Job.ID); session != "" && isDir(ws) {
+	if ws := d.work().Dir(in.Job.ID); session != "" && d.work().Exists(in.Job.ID) {
 		if session, err = permalink.Link(ws, d.Repo, p.Head, session); err != nil {
 			return transition.Result{}, err
 		}
@@ -358,24 +343,4 @@ func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress, pr
 // an issue carries.
 func PRMarker(issue int) string {
 	return fmt.Sprintf("<!-- afk:implement issue=%d -->", issue)
-}
-
-// where says where a branch the agent was about to push is, when it is not
-// where the agent left it.
-func where(at, lease string) string {
-	switch {
-	case at == "":
-		return "it has been deleted"
-	case lease == "":
-		return fmt.Sprintf("it is at `%s`, which the agent did not push", git.Short(at))
-	}
-	return fmt.Sprintf("it is at `%s`, not at `%s` where the agent left it", git.Short(at), git.Short(lease))
-}
-
-func quoted(paths []string) string {
-	q := make([]string, len(paths))
-	for i, p := range paths {
-		q[i] = "`" + p + "`"
-	}
-	return strings.Join(q, ", ")
 }

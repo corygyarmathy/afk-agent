@@ -132,8 +132,17 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if tr == nil {
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
-	// The whole effect bundle, as every kind reads it. The claim uses only
-	// the rounds; #146's revision consumes the hand-back label in it.
+	// The revision's gate and its bound, the paths it may not push, and the
+	// tier it runs on are the implement kind's: one local gate, one denylist
+	// and one tier serve both.
+	ip, err := p.implement()
+	if err != nil {
+		return nil, err
+	}
+	m, err := p.implementModel()
+	if err != nil {
+		return nil, err
+	}
 	ep, err := p.effects()
 	if err != nil {
 		return nil, err
@@ -142,7 +151,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
-	path, err := p.storePath()
+	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
 	}
@@ -151,14 +160,23 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, err
 	}
 	return &revise.Deps{
-		Tracker:      tr.client,
-		Store:        st,
-		Login:        login,
-		Repo:         tr.client.Repo,
-		Rounds:       ep.rounds,
-		HandOffLabel: handOff,
+		Tracker:       tr.client,
+		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
+		Store:         st,
+		Login:         login,
+		Repo:          tr.client.Repo,
+		Remote:        remote(tr),
+		Resolve:       resolve,
+		Bound:         m.attempts,
+		TierWait:      m.tierWait,
+		Rounds:        ep.rounds,
+		Gate:          ip.gate,
+		Attempts:      ip.attempts,
+		Denylist:      ip.denylist,
+		HandOffLabel:  handOff,
+		HandBackLabel: ep.handBackLabel,
 		// Beside the store, as every other kind's state directory is.
-		StateDir: filepath.Dir(path),
+		StateDir: stateDir,
 	}, nil
 }
 

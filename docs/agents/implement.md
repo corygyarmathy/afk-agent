@@ -5,7 +5,11 @@ The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repositor
 §2-§5, §8, §10 and §14 (with its amendments for #40 and #51), and `dotfiles`
 ADR 0004 §6 and ADR 0007, as ADR 0001 carries them. The spec is
 [#40](https://github.com/corygyarmathy/afk-agent/issues/40) and its sub-issues
-#49-#53. The code is [`internal/implement`](../../internal/implement).
+#49-#53. The transitions are
+[`internal/implement`](../../internal/implement); the workspace, the relay, the
+local gate and its retries, the denylist, the leased push and the hand-back on
+a pull request are [`internal/work`](../../internal/work), which `/revise` uses
+too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 ## What it does
 
@@ -288,7 +292,8 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 `--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`,
 plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
-`--review-procedure` and `--sensitive` are optional.
+`--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
+gate, attempts, denylist and tier: there is no revise tier of its own.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the

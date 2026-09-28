@@ -12,6 +12,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // awaitReview is `implement-review`: ask for the review of the green head, wait
@@ -45,7 +46,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	// Someone else's push is theirs, as it is while CI runs: the review job
 	// reviews the pull request's head, so a review of the agent's would never
 	// come.
-	at, err := remoteHead(ctx, d.Remote, p.Branch)
+	at, err := work.RemoteHead(ctx, d.Remote, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}

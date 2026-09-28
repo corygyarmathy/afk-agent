@@ -14,13 +14,13 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // This file is where configuration enters the binary, and it holds no defaults
@@ -107,7 +107,7 @@ Implementing an issue, for afk run and afk work:
                                              (without it afk work parks implement jobs)
   --gate <command>      AFK_GATE             the local gate, run with sh in the workspace
   --gate-attempts <n>   AFK_GATE_ATTEMPTS    sessions the gate may fail before a hand-back
-  --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing draws from
+  --implement-tier <t>  AFK_IMPLEMENT_TIER   the tier implementing, and revising, draws from
   --implement-needs <c> AFK_IMPLEMENT_NEEDS  capabilities implementing requires, comma-separated
   --hand-off-label <l>  AFK_HAND_OFF_LABEL   the label the hand-off applies
   --denylist <globs>    AFK_DENYLIST         paths never pushed, comma-separated;
@@ -959,7 +959,7 @@ func (p *params) implement() (implementParams, error) {
 			ip.denylist = append(ip.denylist, pattern)
 		}
 	}
-	if err := implement.ValidDenylist(ip.denylist); err != nil {
+	if err := work.ValidDenylist(ip.denylist); err != nil {
 		return implementParams{}, usagef("--denylist: %v", err)
 	}
 	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
