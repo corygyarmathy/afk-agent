@@ -10,6 +10,17 @@ The issue is the spec. It has been fetched for you, verbatim, into
 `.git/afk-issue.md`: its title, its body, and any instructions from the person
 who asked for it to be implemented. Where the instructions and the issue
 disagree, the instructions are the more recent word.
+{{if .Whole}}
+The person who asked wants the work as one pull request, whatever its size. Do
+not stop early to keep it small.
+{{- else}}
+A pull request is one concern, reviewable in one sitting, tests included. The
+agent counts your commits: over {{.Signal}} changed lines, not counting tests,
+generated, vendored or lock files, or files deleted whole, it opens no pull
+request, and hands the work back to a human. If the issue will not fit, stop at
+a coherent first piece that does - a refactor the rest needs is a natural one -
+commit that, and say in your reply what is left.
+{{- end}}
 {{- if .Failed}}
 
 This is not the first attempt. An earlier session worked on this branch, and

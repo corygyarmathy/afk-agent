@@ -77,6 +77,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "afk run <transition>",
 		},
 		{
+			name:     "help lists the size signal",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--size-signal <n>     AFK_SIZE_SIGNAL",
+		},
+		{
 			name:     "version",
 			args:     []string{"version"},
 			want:     ExitOK,
@@ -756,7 +762,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_EFFECT_ROUNDS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_EFFECT_ROUNDS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT"} {
 		t.Setenv(env, "")
 	}
@@ -779,6 +785,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		ciWait:        "5m",
 		ciCeiling:     "2h",
 		ciFixes:       "2",
+		sizeSignal:    "400",
 		effectRounds:  "4",
 	}
 
@@ -792,7 +799,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Remote.Token == nil ||
 		d.HandOffLabel != "needs-review" || d.AskReview == nil ||
-		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIFixes != 2 ||
+		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIFixes != 2 || d.SizeSignal != 400 ||
 		d.Bound != 3 || d.Rounds != 4 || d.TierWait != 30*time.Minute || d.Remote.URL != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
 	}
@@ -818,6 +825,8 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.ciWait = "" }, "--ci-wait is required"},
 		{func(p *params) { p.ciCeiling = "soon" }, "--ci-ceiling"},
 		{func(p *params) { p.ciFixes = "0" }, "--ci-fixes"},
+		{func(p *params) { p.sizeSignal = "" }, "--size-signal is required"},
+		{func(p *params) { p.sizeSignal = "big" }, "--size-signal"},
 		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
 		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 	} {

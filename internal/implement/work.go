@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"text/template"
@@ -83,6 +84,11 @@ type progress struct {
 	// PushedAt is when that push was seen, which the CI ceiling runs from.
 	PushedAt time.Time `json:"pushed_at,omitzero"`
 
+	// Lines and Tests are the size of the work at Head, measured as the push
+	// was decided (package size).
+	Lines int `json:"lines,omitempty"`
+	Tests int `json:"tests,omitempty"`
+
 	// Fixes is how many times CI has sent the work back to the session,
 	// and FixedHead the head the last of them was counted for.
 	Fixes     int    `json:"fixes,omitempty"`
@@ -138,9 +144,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 			return transition.Result{}, err
 		}
 	}
-	if err := d.spec(ctx, ws, n); err != nil {
+	instructions, err := d.spec(ctx, ws, n)
+	if err != nil {
 		return transition.Result{}, err
 	}
+	whole := Whole(instructions)
 	if p.Failure != "" {
 		if err := os.WriteFile(filepath.Join(ws, ".git", "afk-gate.log"), []byte(p.Failure), 0o644); err != nil {
 			return transition.Result{}, err
@@ -153,9 +161,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		// is a new session, and so is a retry whose session was never
 		// recorded.
 		req.Session = ""
-		req.Prompt, err = d.render(prompt, n, p)
+		req.Prompt, err = d.render(prompt, n, p, whole)
 	} else {
-		req.Prompt, err = d.render(retry, n, p)
+		req.Prompt, err = d.render(retry, n, p, whole)
 	}
 	if err != nil {
 		return transition.Result{}, err
@@ -171,7 +179,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		if err := d.save(in.Job.ID, p); err != nil {
 			return transition.Result{}, err
 		}
-		if req.Prompt, err = d.render(prompt, n, p); err != nil {
+		if req.Prompt, err = d.render(prompt, n, p, whole); err != nil {
 			return transition.Result{}, err
 		}
 		req.Session = ""
@@ -399,15 +407,15 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bo
 }
 
 // spec writes the issue, and the instructions of the command that asked for
-// it, where the prompt says they are.
-func (d *Deps) spec(ctx context.Context, ws string, n int) error {
+// it, where the prompt says they are. It returns the instructions.
+func (d *Deps) spec(ctx context.Context, ws string, n int) (string, error) {
 	is, err := d.Tracker.Issue(ctx, n)
 	if err != nil {
-		return err
+		return "", err
 	}
 	instructions, err := d.instructions(ctx, n)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Issue #%d: %s\n\n", is.Number, is.Title)
@@ -419,7 +427,7 @@ func (d *Deps) spec(ctx context.Context, ws string, n int) error {
 	if instructions != "" {
 		fmt.Fprintf(&b, "\n# Instructions from the person who asked\n\n%s\n", instructions)
 	}
-	return os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
+	return instructions, os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
 }
 
 // instructions is the text after the word in the most recent `/implement` the
@@ -453,7 +461,17 @@ func Instructions(c github.Comment) string {
 	return strings.TrimSpace(rest)
 }
 
-func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
+// Whole reports whether a command's instructions ask for the work in one pull
+// request whatever its size: "don't split", or "do not split", anywhere in
+// them. It is the only override of the size signal, and only a command has
+// instructions, so unattended work never has it (#107).
+func Whole(instructions string) bool {
+	return wholeWords.MatchString(instructions)
+}
+
+var wholeWords = regexp.MustCompile(`(?i)\b(don['’]?t|do\s+not)\s+split\b`)
+
+func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (string, error) {
 	var b strings.Builder
 	err := t.Execute(&b, struct {
 		Number int
@@ -461,7 +479,9 @@ func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
 		Gate   string
 		Failed bool
 		Why    string
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why})
+		Whole  bool
+		Signal int
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal})
 	return b.String(), err
 }
 

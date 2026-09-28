@@ -266,6 +266,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		HandBackLabel: "needs-decision",
 		HandOffLabel:  "needs-review",
 		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
+		SizeSignal:    400,
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
 		CIFixes:       2,

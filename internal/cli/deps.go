@@ -105,6 +105,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
 		CIFixes:       ip.ciFixes,
+		SizeSignal:    ip.sizeSignal,
 		Store:         st,
 		// A holder of its own: it leases the review job, never this one.
 		AskReview: implement.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),

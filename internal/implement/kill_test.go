@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -30,6 +31,7 @@ const (
 	envKillAt     = "AFK_IMPLEMENT_KILL_AT"
 	envKillRemote = "AFK_IMPLEMENT_KILL_REMOTE"
 	envKillGate   = "AFK_IMPLEMENT_KILL_GATE"
+	envKillSignal = "AFK_IMPLEMENT_KILL_SIGNAL"
 )
 
 // An /implement produces one push per commit, one pull request, and one of each
@@ -175,9 +177,77 @@ func TestKillingAHandBackStillHandsBackOnce(t *testing.T) {
 	}
 }
 
-func implementHelper(dir, remote, killAt, gate string) *exec.Cmd {
+// Work over the size signal is pushed once and handed back once, on the issue,
+// and killing the process between the commit that decides either and the
+// effect, then running again, still does. No pull request is opened.
+func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
+	for _, at := range []string{"before-push", "after-push", "before-hand-back", "before-hand-back-label"} {
+		t.Run(at, func(t *testing.T) {
+			dir := t.TempDir()
+			remote := bareRemote(t)
+			if _, err := run(remote, "git", "config", "core.logAllRefUpdates", "always"); err != nil {
+				t.Fatal(err)
+			}
+			ft := &killTracker{path: filepath.Join(dir, "tracker.json")}
+			if err := ft.save(killFile{Comments: []github.Comment{command(1)}, Reactions: map[int64][]github.Reaction{}, NextID: 1000}); err != nil {
+				t.Fatal(err)
+			}
+
+			// The kill model's work is three lines: over a signal of two.
+			doomed := implementHelper(dir, remote, at, "", "2")
+			doomed.Stdout, doomed.Stderr = os.Stderr, os.Stderr
+			if err := doomed.Start(); err != nil {
+				t.Fatalf("start the helper: %v", err)
+			}
+			t.Cleanup(func() { doomed.Process.Kill() })
+			waitForFile(t, filepath.Join(dir, "ready"))
+			if err := doomed.Process.Signal(syscall.SIGKILL); err != nil {
+				t.Fatalf("kill the helper: %v", err)
+			}
+			if err := doomed.Wait(); err == nil {
+				t.Fatal("the helper exited cleanly; it was supposed to be killed")
+			}
+
+			if out, err := implementHelper(dir, remote, "", "", "2").CombinedOutput(); err != nil {
+				t.Fatalf("finishing the work after the kill: %v\n%s", err, out)
+			}
+
+			got, err := ft.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1"); len(strings.Fields(pushes)) != 1 {
+				t.Errorf("%d pushes to afk/7-1 after a kill at %s, want 1:\n%s", len(strings.Fields(pushes)), at, pushes)
+			}
+			var handBacks, others int
+			for _, c := range got.Comments {
+				switch {
+				case c.Login != agent:
+				case strings.Contains(c.Body, "afk:hand-back") && strings.Contains(c.Body, "size signal of 2"):
+					handBacks++
+				default:
+					others++
+				}
+			}
+			if handBacks != 1 || others != 0 {
+				t.Errorf("%d size hand-backs and %d other comments from the agent after a kill at %s, want 1 and 0", handBacks, others, at)
+			}
+			if l := strings.Join(got.LabelsOn[issue], ","); l != "needs-decision" || len(got.Labels) != 1 {
+				t.Errorf("labels %v, and %q on the issue, after a kill at %s, want the hand-back label on the issue once", got.Labels, l, at)
+			}
+			if got.Opened != 0 {
+				t.Errorf("%d pull requests opened for work over the size signal", got.Opened)
+			}
+		})
+	}
+}
+
+func implementHelper(dir, remote, killAt, gate string, signal ...string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperRunsAnImplement$")
 	cmd.Env = append(os.Environ(), envKillDir+"="+dir, envKillAt+"="+killAt, envKillRemote+"="+remote, envKillGate+"="+gate)
+	if len(signal) > 0 {
+		cmd.Env = append(cmd.Env, envKillSignal+"="+signal[0])
+	}
 	return cmd
 }
 
@@ -209,6 +279,14 @@ func TestHelperRunsAnImplement(t *testing.T) {
 	if gate == "" {
 		gate = "test -f ok"
 	}
+	signal := 400
+	if v := os.Getenv(envKillSignal); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signal = n
+	}
 
 	s, err := store.Open(filepath.Join(dir, "state.db"))
 	if err != nil {
@@ -236,6 +314,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		HandBackLabel: "needs-decision",
 		HandOffLabel:  "needs-review",
 		Denylist:      []string{".github/**"},
+		SizeSignal:    signal,
 		CIWait:        time.Minute,
 		CICeiling:     48 * time.Hour,
 		CIFixes:       1,
@@ -522,7 +601,7 @@ func (m killModel) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 	// A run after a kill finds its own work already done, as a real
 	// session reading the workspace would.
 	if _, err := os.Stat(filepath.Join(req.Dir, "ok")); err != nil {
-		if err := commit("ok")(req.Dir); err != nil {
+		if err := commitLines("ok", 3)(req.Dir); err != nil {
 			return opencode.Reply{}, err
 		}
 	}
