@@ -17,7 +17,6 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 )
@@ -183,7 +182,6 @@ func (f *fixture) remoteBranches() string {
 func TestWorkThatPassesTheGateIsReadyToPush(t *testing.T) {
 	tr := newTracker(github.Comment{ID: 1, Login: "alice", Association: "OWNER", Body: "/implement keep it small\nand test it"})
 	tr.body = "Jobs are reserved before they run."
-	tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 	f := setup(t, tr)
 	f.model.then(commit("ok"))
 
