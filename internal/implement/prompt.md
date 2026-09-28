@@ -59,6 +59,13 @@ say rather than write "none":
 - `## Recipe` - only for work that is one large, mechanical change: the command
   or the transformation rule that makes it, and where the diff departs from it.
 
+{{- if not .Whole}}
+
+If you stopped at a first piece, make the file's first line a plain line, not
+a heading, that gives a title for the piece: the issue's title describes the
+whole job. Otherwise, start the file with its first heading.
+{{- end}}
+
 Aim for one or two lines an item, and the whole description on one screen.
 Do not write: what changed file by file, anything that would restate the issue,
 that tests pass or the gate passed, any self-rating such as "safe" or "low
