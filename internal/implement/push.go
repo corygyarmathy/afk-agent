@@ -141,7 +141,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 		if !Whole(instructions) {
-			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review. Split the issue, or `%s` again saying \"don't split\" to have it done over as one pull request.", p.Lines, p.Tests, d.SizeSignal, Word), "")
+			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review. The branch is the work, kept: to have it as one pull request, open one from it by hand. To have it in pieces, split the issue.", p.Lines, p.Tests, d.SizeSignal), "")
 		}
 	}
 
