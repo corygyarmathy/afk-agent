@@ -13,6 +13,10 @@ import (
 // part of the pull request's description.
 const descriptionFile = "afk-description.md"
 
+// bodyLimit is the most characters GitHub takes in a pull request's body.
+// It is GitHub's, not the operator's to set.
+const bodyLimit = 65536
+
 // sections are the headings of the session's part, in the order the
 // description gives them (#111). The prompt names the same ones.
 var sections = []string{

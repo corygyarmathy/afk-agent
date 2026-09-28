@@ -41,6 +41,7 @@ This workspace is not the one the skill expects, in three ways:
   everything the work needs: the gate is run on your commits. Uncommitted
   changes to tracked files are a failure, and untracked files are deleted
   before the gate runs.
+{{- if not .Opened}}
 
 When you finish, write your part of the pull request's description to
 `.git/afk-description.md`, in GitHub-flavoured markdown. It is orientation for
@@ -63,3 +64,4 @@ Do not write: what changed file by file, anything that would restate the issue,
 that tests pass or the gate passed, any self-rating such as "safe" or "low
 risk", or a list of hand-checks you ran. The agent writes the rest of the
 description itself, and a description with no `## Start here` is left out.
+{{- end}}

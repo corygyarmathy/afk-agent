@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
@@ -161,15 +162,26 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
+	session := sessionPart(p.Description)
+	if session == "" && strings.TrimSpace(p.Description) != "" {
+		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])
+	}
 	// Linked in the workspace, the checkout of the pushed head, which says
 	// which citations name a file. Without it, nothing is linked.
-	session := sessionPart(p.Description)
 	if ws := d.workspacePath(in.Job.ID); session != "" && isDir(ws) {
 		if session, err = permalink.Link(ws, d.Repo, p.Head, session); err != nil {
 			return transition.Result{}, err
 		}
 	}
-	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: description(n, d.ReviewProcedure, session)}
+	body := description(n, d.ReviewProcedure, session)
+	if utf8.RuneCountInString(body) > bodyLimit {
+		// Over it, GitHub refuses the pull request every round. Cutting
+		// the session's part would drop what the operator needed, so it
+		// goes whole, as a missing one does.
+		d.logf("%s: the description is over GitHub's %d characters, so the pull request opens with the agent's parts only", in.Job.ID, bodyLimit)
+		body = description(n, d.ReviewProcedure, "")
+	}
+	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: body}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
 		// The key stops this run opening two. The tracker is what stops a
 		// round that follows a slow success from opening another.

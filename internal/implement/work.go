@@ -210,9 +210,12 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 
 	p.Session = reply.Session
 	// Read now, as the session left it. The file stays for a retry that
-	// continues the session to amend.
+	// continues the session to amend. One that cannot be read is no
+	// description: an error here would lose the session, and the work with
+	// it, over what the pull request can open without.
 	if p.Description, err = readDescription(ws); err != nil {
-		return transition.Result{}, err
+		p.Description = ""
+		d.logf("%s: the description file could not be read, so the pull request opens with the agent's parts only: %v", in.Job.ID, err)
 	}
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
@@ -508,7 +511,10 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 		Why    string
 		Whole  bool
 		Signal int
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal})
+		// Opened is work past its push, whose pull request's description
+		// is written and never rewritten: the session is not asked for one.
+		Opened bool
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != ""})
 	return b.String(), err
 }
 

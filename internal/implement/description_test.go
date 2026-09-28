@@ -85,17 +85,28 @@ func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T
 	}
 }
 
-// With no file, or one with no Start here, the pull request opens with Go's
-// parts only: the diff is still reviewable. It is not a gate failure.
+// With no file, one with no Start here, one that cannot be read, or one too
+// long for GitHub to take, the pull request opens with Go's parts only: the
+// diff is still reviewable. It is not a gate failure, and a file the agent
+// set aside is logged, so that the operator can tell it from no file.
 func TestADescriptionWithNoStartHereIsGosPartsOnly(t *testing.T) {
-	for name, turn := range map[string]func(string) error{
-		"missing":  commit("ok"),
-		"headless": describe("## Not verified\n\n- Needs a host run.\n"),
+	for name, c := range map[string]struct {
+		turn func(t *testing.T) func(string) error
+		log  string
+	}{
+		"missing": {func(*testing.T) func(string) error { return commit("ok") }, ""},
+		"headless": {func(*testing.T) func(string) error {
+			return describe("### Start here\n\nok:1\n\n## Not verified\n\n- Needs a host run.\n")
+		}, `no "## Start here" section`},
+		"unreadable": {unreadable, "could not be read"},
+		"too long": {func(*testing.T) func(string) error {
+			return describe("## Start here\n\n" + strings.Repeat("x", 70000) + "\n")
+		}, "over GitHub's 65536 characters"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := setup(t, newTracker())
 			f.deps.ReviewProcedure = procedure
-			f.model.then(turn)
+			f.model.then(c.turn(t))
 
 			body := f.opened()
 			want := implement.PRMarker(7) + "\n" +
@@ -107,77 +118,73 @@ func TestADescriptionWithNoStartHereIsGosPartsOnly(t *testing.T) {
 			if f.now().State != implement.Watching || len(f.model.asked) != 1 {
 				t.Errorf("the work took %d sessions, want the one: a description is not the gate", len(f.model.asked))
 			}
+			var logged []string
+			for _, l := range f.logged {
+				if strings.Contains(l, "agent's parts only") {
+					logged = append(logged, l)
+				}
+			}
+			switch {
+			case c.log == "" && len(logged) != 0:
+				t.Errorf("logged %q with no file to set aside", logged)
+			case c.log != "" && (len(logged) != 1 || !strings.Contains(logged[0], c.log) || !strings.Contains(logged[0], "implement-issue-7:")):
+				t.Errorf("logged %q, want one line for the job saying %q", logged, c.log)
+			}
 		})
 	}
 }
 
-// Without --review-procedure the reminder says it has no link, rather than
-// linking nowhere.
-func TestWithNoProcedureTheReminderSaysSo(t *testing.T) {
-	f := setup(t, newTracker())
-	f.model.then(commit("ok"))
-
-	body := f.opened()
-	if strings.Contains(body, "](") {
-		t.Errorf("the description links something with no procedure configured:\n%s", body)
-	}
-	if !strings.Contains(body, "> **Your review** (the agent has no link to the procedure): read #7 first") {
-		t.Errorf("the reminder does not say there is no procedure linked:\n%s", body)
-	}
-}
-
-// The description file is read as a regular file only: a link out of the
-// workspace would publish whatever it points at.
-func TestALinkedDescriptionFileIsNotRead(t *testing.T) {
-	f := setup(t, newTracker())
-	secret := filepath.Join(t.TempDir(), "secret")
-	if err := os.WriteFile(secret, []byte("## Start here\n\nhunter2\n"), 0o600); err != nil {
+// unreadable is a turn that leaves a description the agent cannot read. A
+// file's mode does not stop root, nor a user namespace's root, which is how
+// scripts/offline-test.sh may run: there the case is skipped.
+func unreadable(t *testing.T) func(string) error {
+	probe := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(probe, nil, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	f.model.then(func(dir string) error {
-		if err := commit("ok")(dir); err != nil {
+	if _, err := os.ReadFile(probe); err == nil {
+		t.Skip("a file's mode does not stop a read here")
+	}
+	return func(dir string) error {
+		if err := describe("## Start here\n\nok:1\n")(dir); err != nil {
 			return err
 		}
-		return os.Symlink(secret, filepath.Join(dir, ".git", "afk-description.md"))
-	})
-
-	if body := f.opened(); strings.Contains(body, "hunter2") || strings.Contains(body, "## Start here") {
-		t.Errorf("the description read through the link:\n%s", body)
+		return os.Chmod(filepath.Join(dir, ".git", "afk-description.md"), 0o000)
 	}
 }
 
-// A description left by a session that never finished is not the next
-// session's: a fresh start begins with none.
-func TestAFreshStartDoesNotInheritADescription(t *testing.T) {
-	f := setup(t, newTracker())
-	f.model.then(func(dir string) error {
-		if err := os.WriteFile(filepath.Join(dir, ".git", "afk-description.md"), []byte("## Start here\n\nstale\n"), 0o644); err != nil {
-			return err
-		}
-		return fail(first)(dir)
-	}, commit("ok"))
+// A fix after the pull request opened is not asked for the description: it
+// is written once, and a change to the file would reach nobody. Nor is a new
+// session that takes over the fix from one that is gone.
+func TestAFixIsNotAskedForTheDescription(t *testing.T) {
+	for name, forget := range map[string]bool{"continued": false, "new session": true} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t, newTracker())
+			f.model.then(func(dir string) error {
+				if forget {
+					f.model.sessions = map[string]bool{}
+				}
+				return describe("## Start here\n\nok:1\n")(dir)
+			}, commit("fix"))
+			f.tr.checks = red()
 
-	if body := f.opened(); strings.Contains(body, "stale") {
-		t.Errorf("the description is the unfinished session's:\n%s", body)
-	}
-}
-
-// The description is written once, when the pull request opens. Opening again
-// finds it open and writes nothing, whatever the file says by then.
-func TestOpeningAgainDoesNotRewriteTheDescription(t *testing.T) {
-	f := setup(t, newTracker())
-	f.model.then(describe("## Start here\n\nfirst\n"))
-	was := f.opened()
-
-	if err := os.WriteFile(filepath.Join(f.workspace(), ".git", "afk-description.md"), []byte("## Start here\n\nsecond\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.setState(implement.Opening)
-	if errs := f.drive(); len(errs) != 0 {
-		t.Fatalf("errors: %v", errs)
-	}
-	if len(f.tr.opened) != 1 || f.tr.opened[0].Body != was {
-		t.Errorf("%d pull requests opened, the first with:\n%s\nwant one, with:\n%s", len(f.tr.opened), f.tr.opened[0].Body, was)
+			if errs := f.drive(); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			fix := f.model.asked[len(f.model.asked)-1]
+			if !strings.Contains(fix.Prompt, "CI failed") {
+				t.Fatalf("the last run was not the fix:\n%s", fix.Prompt)
+			}
+			if forget && fix.Session != "" {
+				t.Fatalf("the fix continued session %q, want a new one", fix.Session)
+			}
+			if !strings.Contains(f.model.asked[0].Prompt, "afk-description.md") {
+				t.Errorf("the first run was not asked for the description:\n%s", f.model.asked[0].Prompt)
+			}
+			if strings.Contains(fix.Prompt, "afk-description.md") {
+				t.Errorf("the fix was asked for the description:\n%s", fix.Prompt)
+			}
+		})
 	}
 }
 

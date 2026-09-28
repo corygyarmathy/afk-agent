@@ -75,10 +75,11 @@ description, and says the implement job asked for it
 
 ## The description
 
-The pull request's description is orientation for the operator's review, and
-nothing else: what the operator needs and cannot cheaply get from the issue or
-the diff ([#111](https://github.com/corygyarmathy/afk-agent/issues/111)). It
-is not the record: a squash merge takes the commit messages. The code is
+The pull request's description is orientation for the operator's review:
+what the operator needs and cannot cheaply get from the issue or the diff. It
+does not summarise the change, and the commit messages, not the description,
+are the record. [#111](https://github.com/corygyarmathy/afk-agent/issues/111)
+has the reasoning. The code is
 [`internal/implement/description.go`](../../internal/implement/description.go).
 Its sections, in this order, each left out when it has nothing to say:
 
@@ -87,7 +88,7 @@ Its sections, in this order, each left out when it has nothing to say:
    description, then the diff from **Start here**; do your own reading before
    the advisory review; end by merging, sending back or closing. It links
    `--review-procedure`. Without that parameter it says it has no link to the
-   procedure rather than linking nowhere.
+   procedure.
 3. **Start here**, the entry point and where the behaviour lives.
 4. **Where the ticket didn't decide**, the choices the session made where the
    issue was silent, including the paths it took because nobody was there to
@@ -97,19 +98,19 @@ Its sections, in this order, each left out when it has nothing to say:
 6. **Recipe**, only on a deliberately large, single-concern change.
 
 - **Sections 3-6 are the session's**, written to `.git/afk-description.md`
-  under those headings rather than as a reply. The prompt gives the soft target
-  (an item one or two lines, the whole on one screen) and what not to write: a
-  file-by-file account, a restatement of the issue, "tests pass", a
-  self-rating, or a list of hand-checks. Nothing is capped or cut.
+  under those headings. The prompt gives the soft target (an item one or two
+  lines, the whole on one screen) and what not to write: a file-by-file
+  account, a restatement of the issue, "tests pass", a self-rating, or a list
+  of hand-checks. Nothing is capped or cut.
 - **The agent orders them**, drops a heading it did not name and a section that
   says only "none", and links each `path:line` that names a file to that line
   at the pushed head, as the advisory review's citations are.
-- **Without a Start here**, or without the file, the pull request opens with the
-  agent's parts only. It is not a gate failure: the diff is still reviewable.
-- **Only a regular file is read.** The workspace's `.git` is the model's to
-  write, and a link there would publish whatever it points at.
-- **Written once**, when the pull request opens. A later fix's session may
-  change the file, and the description stays as the operator first read it.
+- **The pull request opens with the agent's parts only** when the file is
+  missing, is not a regular file, cannot be read, has no `## Start here`, or
+  makes a body over GitHub's 65,536 characters. None of these is a gate
+  failure. Each but the missing file is a log line.
+- **Written once**, when the pull request opens. A session after that - a CI
+  fix, or a new session that takes one over - is not asked for the file.
 
 ## The size signal
 
@@ -196,9 +197,9 @@ plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` and
 `--review-procedure` are optional.
 
-- `--review-procedure` is the URL of the operator's review procedure, on the
-  default branch rather than a permalink, so a pull request links the latest
-  one.
+- `--review-procedure` is the URL of the operator's review procedure. Give
+  one on the default branch, not a permalink: each pull request links the
+  version current when it opens.
 - `--effect-rounds` bounds the rounds of a push, a pull request, a review
   request or a hand-off label that never appears. Out of rounds, the work is
   handed back - on the issue while there is no pull request, and on the pull
