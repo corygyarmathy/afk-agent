@@ -10,7 +10,7 @@ func TestResolverBudgetIsTheSameObservation(t *testing.T) {
 	now := at(t, "2026-09-11T12:00:00Z")
 	s := decode(t, live, now)
 
-	b := s.Resolver()
+	b := s.Resolver(nil, now)
 	if !b.Limited {
 		t.Fatalf("the resolver's budget is not limited and the state is: %s", s)
 	}
@@ -20,7 +20,7 @@ func TestResolverBudgetIsTheSameObservation(t *testing.T) {
 
 	// And an unlimited one carries no timestamp for the resolver to defer to.
 	ok := decode(t, `{"usage":{"rolling":{"status":"ok","percent":3,"resetsAt":"2026-09-11T18:00:00Z"}}}`, now)
-	if b := ok.Resolver(); b.Limited || !b.ResetsAt.IsZero() {
+	if b := ok.Resolver(nil, now); b.Limited || !b.ResetsAt.IsZero() {
 		t.Fatalf("an unlimited budget resolved as %+v", b)
 	}
 }

@@ -59,6 +59,9 @@ Budget observation, for afk work and afk budget:
   --budget-age <dur>    AFK_BUDGET_AGE    how long an observation is reused
                                           (required by afk work)
   --budget-at <pct>     AFK_BUDGET_AT     percentage that stops new jobs
+  --budget-waive <w>=<t>
+                        AFK_BUDGET_WAIVE  waive a window until a resetsAt, as
+                                          <window>=<RFC3339>, repeatable
 
 Notification, for afk work:
 
@@ -168,10 +171,16 @@ scheduled for nothing, and waits for an operator.
 Without --budget-key there is no admission control: work runs into the
 provider's limits and they arrive as transient failures.
 
-Without --notify-url nothing is notified. Three conditions reach the operator
+--budget-waive carries on through a spent window on the pay-as-you-go balance
+until the resetsAt given, which is the window's own reset as "afk budget"
+reports it. Turn the provider's fallback to the balance on first, or every run
+fails as a transient failure. A waiver is refused without --budget-key.
+
+Without --notify-url nothing is notified. Four conditions reach the operator
 when it is set - a job that parked after a failure, a budget window the provider
-says is spent, and a job whose model tier has been exhausted --tier-notify-after
-times without a model answering in between - and nothing else does.`
+says is spent, a job whose model tier has been exhausted --tier-notify-after
+times without a model answering in between, and the first job admitted under a
+waiver, once per waiver - and nothing else does.`
 
 // params collects the configuration flags, before they are resolved against the
 // environment.
@@ -186,9 +195,10 @@ type params struct {
 	tokenWait string
 	tokens    tokenCapacity
 
-	budgetKey string
-	budgetAge string
-	budgetAt  string
+	budgetKey   string
+	budgetAge   string
+	budgetAt    string
+	budgetWaive waiverList
 
 	notifyURL       string
 	notifyKey       string
@@ -256,6 +266,8 @@ func (p *params) bindBudget(fs *flag.FlagSet) {
 	fs.StringVar(&p.budgetKey, "budget-key", "", "file holding the usage API key (AFK_BUDGET_KEY)")
 	fs.StringVar(&p.budgetAge, "budget-age", "", "how long an observation is reused (AFK_BUDGET_AGE)")
 	fs.StringVar(&p.budgetAt, "budget-at", "", "percentage of a window that stops new jobs (AFK_BUDGET_AT)")
+	p.budgetWaive = nil
+	fs.Var(&p.budgetWaive, "budget-waive", "waive a window until a resetsAt, as <window>=<RFC3339>, repeatable (AFK_BUDGET_WAIVE)")
 }
 
 // bindNotify binds the operator's interrupt channel.
@@ -464,17 +476,23 @@ func (p *params) budget() (*budget.Observer, error) {
 	age := optional(p.budgetAge, "AFK_BUDGET_AGE")
 	at := optional(p.budgetAt, "AFK_BUDGET_AT")
 
+	// Parsed before the key is checked so that a malformed waiver is refused
+	// wherever it is given, key or no key: a value this build cannot read is a
+	// mistake at the command line, not something to discover is wrong when the
+	// account is later spent.
+	waivers, err := p.waivers()
+	if err != nil {
+		return nil, err
+	}
+
 	if key == "" {
-		if age != "" || at != "" {
-			return nil, usagef("--budget-age and --budget-at need --budget-key: there is nothing to observe")
+		if age != "" || at != "" || len(waivers) > 0 {
+			return nil, usagef("--budget-age, --budget-at and --budget-waive need --budget-key: there is nothing to observe")
 		}
 		return nil, nil
 	}
 
-	var (
-		maxAge time.Duration
-		err    error
-	)
+	var maxAge time.Duration
 	if age != "" {
 		if maxAge, err = duration(age, "budget-age"); err != nil {
 			return nil, err
@@ -492,7 +510,87 @@ func (p *params) budget() (*budget.Observer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &budget.Observer{Token: token, MaxAge: maxAge, Threshold: threshold}, nil
+	return &budget.Observer{Token: token, MaxAge: maxAge, Threshold: threshold, Waivers: waivers}, nil
+}
+
+// waivers resolves the budget waivers: the repeated --budget-waive flags, or
+// the comma-separated AFK_BUDGET_WAIVE when none was given.
+//
+// A window waived twice is refused rather than let one win: two timestamps for
+// one window is a configuration nobody meant, and the state machine has no way
+// to pick between them.
+func (p *params) waivers() (budget.Waivers, error) {
+	if len(p.budgetWaive) > 0 {
+		return budget.Waivers(p.budgetWaive), nil
+	}
+	var out budget.Waivers
+	for _, entry := range strings.Split(os.Getenv("AFK_BUDGET_WAIVE"), ",") {
+		if entry = strings.TrimSpace(entry); entry == "" {
+			continue
+		}
+		wa, err := parseWaiver(entry)
+		if err != nil {
+			return nil, usagef("AFK_BUDGET_WAIVE: %v", err)
+		}
+		if err := noDuplicateWaiver(out, wa); err != nil {
+			return nil, usagef("AFK_BUDGET_WAIVE: %v", err)
+		}
+		out = append(out, wa)
+	}
+	return out, nil
+}
+
+// waiverList is the repeatable --budget-waive flag: `--budget-waive
+// monthly=2026-09-27T00:00:00Z`.
+type waiverList budget.Waivers
+
+func (w *waiverList) String() string {
+	parts := make([]string, 0, len(*w))
+	for _, wa := range *w {
+		parts = append(parts, wa.Window+"="+wa.Until.Format(time.RFC3339))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (w *waiverList) Set(v string) error {
+	wa, err := parseWaiver(v)
+	if err != nil {
+		return err
+	}
+	if err := noDuplicateWaiver(budget.Waivers(*w), wa); err != nil {
+		return err
+	}
+	*w = append(*w, wa)
+	return nil
+}
+
+// parseWaiver reads one `<window>=<RFC3339>` waiver. The window name is not
+// checked against a list: which windows may be waived at all is the module's to
+// restrict (ADR 0001 §11), and a name this build has not heard of is a window
+// the endpoint may yet report.
+func parseWaiver(v string) (budget.Waiver, error) {
+	name, ts, ok := strings.Cut(v, "=")
+	if !ok {
+		return budget.Waiver{}, fmt.Errorf("%q is not <window>=<RFC3339>", v)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return budget.Waiver{}, fmt.Errorf("%q names no window", v)
+	}
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(ts))
+	if err != nil {
+		return budget.Waiver{}, fmt.Errorf("window %q: %q is not an RFC 3339 timestamp", name, strings.TrimSpace(ts))
+	}
+	return budget.Waiver{Window: name, Until: until}, nil
+}
+
+func noDuplicateWaiver(ws budget.Waivers, wa budget.Waiver) error {
+	for _, existing := range ws {
+		if existing.Window == wa.Window {
+			return fmt.Errorf("window %q is waived twice", wa.Window)
+		}
+	}
+	return nil
 }
 
 // notifier builds the notification channel, or returns nil for "nothing is

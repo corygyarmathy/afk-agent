@@ -61,6 +61,13 @@ type Admission struct {
 	// Window is the window that decided it, for a log line or a notification.
 	// The zero Window when nothing did.
 	Window Window
+
+	// Waived is the waivers that let this admission start through spent
+	// windows: one per limited window left out of the answer. Empty when work
+	// started on its own, and never set for a Defer or a Wait - a waiver that
+	// did not actually get the work moving is not news for the operator (ADR
+	// 0001 §13).
+	Waived []Waiver
 }
 
 // Starts reports whether new work may begin.
@@ -74,6 +81,8 @@ func (a Admission) String() string {
 	switch {
 	case a.Decision == Defer:
 		return fmt.Sprintf("%s until %s: %s", a.Decision, a.Until.Format(time.RFC3339), a.Window)
+	case len(a.Waived) > 0:
+		return fmt.Sprintf("%s (waived: %s)", a.Decision, Waivers(a.Waived))
 	case a.Window.Name == "":
 		return a.Decision.String()
 	default:
@@ -82,22 +91,33 @@ func (a Admission) String() string {
 }
 
 // Admit decides whether new work may start, given a threshold percentage that
-// counts as approaching a limit.
+// counts as approaching a limit, and the waivers in force.
 //
 // Pure, and the whole policy: an Observer adds the fetch and the last good
 // answer, and adds nothing to the reasoning below. threshold is a parameter and
 // comes from configuration; zero or negative is no threshold, which means the
 // only thing that stops work is an actual limit.
 //
+// A limited window the operator has waived neither defers nor waits, and a
+// waived window is left out of the threshold check as well: carrying on through
+// a spent window is the operator spending the balance, and either answer would
+// stop the work the waiver was set to allow (ADR 0001 §11).
+//
 // An unobserved budget admits. That is the fail-open direction, and it is the
 // one ADR 0001 §12 already accepts: a budget that cannot be read is not a
 // budget that is spent, and the cost of being wrong is a transient failure at
 // the provider, which is handled as one. Failing closed would let an outage of
 // an undocumented endpoint stop the agent entirely.
-func (s State) Admit(threshold float64, now time.Time) Admission {
+func (s State) Admit(threshold float64, waivers Waivers, now time.Time) Admission {
 	if !s.Known() {
 		return Admission{Decision: Start}
 	}
+
+	// Everything below reads the observation with the waived windows already
+	// left out. Only an admission that starts carries the waivers back to the
+	// caller: a waiver beside a window that still defers did not get the work
+	// moving.
+	s, waived := s.Waive(waivers, now)
 
 	if s.Limited() {
 		// The window named is the one that reopens last, because that is the
@@ -134,5 +154,5 @@ func (s State) Admit(threshold float64, now time.Time) Admission {
 			return Admission{Decision: Wait, Window: peak}
 		}
 	}
-	return Admission{Decision: Start}
+	return Admission{Decision: Start, Waived: waived}
 }

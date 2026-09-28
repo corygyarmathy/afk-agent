@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/budget"
 	"github.com/corygyarmathy/afk-agent/internal/caught"
 	"github.com/corygyarmathy/afk-agent/internal/dispatch"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -469,11 +470,45 @@ func budgetCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return writeBudget(stdout, state, observer.Threshold, observer.Waivers, time.Now())
+}
+
+// writeBudget prints an observation, what admission makes of it, and each
+// waiver in force against the period it was observed in.
+//
+// The waivers are printed whatever the windows read: the point of showing them
+// by hand is to check one before relying on it, and a waiver that is not being
+// applied yet is exactly what the operator wants to see. Each one says whether
+// it names the reset the window was observed with, because a waiver for the
+// wrong period looks as healthy as a right one until the window is spent.
+func writeBudget(stdout io.Writer, state budget.State, threshold float64, waivers budget.Waivers, now time.Time) error {
 	if _, err := fmt.Fprintln(stdout, state); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, state.Admit(observer.Threshold, time.Now()))
-	return err
+	if _, err := fmt.Fprintln(stdout, state.Admit(threshold, waivers, now)); err != nil {
+		return err
+	}
+	for _, wa := range waivers.Live(now) {
+		if _, err := fmt.Fprintf(stdout, "%s is waived until %s: %s\n", wa.Window, wa.Until.Format(time.RFC3339), waiverPeriod(state, wa)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// waiverPeriod says whether wa names the period its window was observed in.
+func waiverPeriod(state budget.State, wa budget.Waiver) string {
+	w, ok := state.Window(wa.Window)
+	switch {
+	case !ok:
+		return "no " + wa.Window + " window observed"
+	case wa.Matches(w):
+		return "covers this period"
+	case w.ResetsAt.IsZero():
+		return "does not match: the window reports no reset"
+	default:
+		return "does not match this period's reset " + w.ResetsAt.Format(time.RFC3339)
+	}
 }
 
 // caughtCmd implements `afk caught`: what CI caught that the local gate did

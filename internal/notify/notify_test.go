@@ -202,10 +202,13 @@ func TestEachConditionCarriesItsOwnTag(t *testing.T) {
 	if _, err := n.TierExhausted(ctx, parked("deferred", 0), store.Episode{Since: time.Now(), Times: 1}, errors.New("tier exhausted")); err != nil {
 		t.Fatal(err)
 	}
+	if err := n.Waived(ctx, budget.Waiver{Window: "monthly", Until: time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
 
 	got := r.all()
-	if len(got) != 3 {
-		t.Fatalf("%d notifications, want 3: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("%d notifications, want 4: %+v", len(got), got)
 	}
 	tags := map[string]bool{}
 	for _, m := range got {
@@ -342,6 +345,45 @@ func TestAnExhaustedTierSaysWhichJobAndWhatTheTierSaid(t *testing.T) {
 		if !strings.Contains(got[0].title+"\n"+got[0].body, want) {
 			t.Errorf("the notification does not mention %q:\n%s\n%s", want, got[0].title, got[0].body)
 		}
+	}
+}
+
+// The acceptance criterion of #39: the first job admitted under a waiver is
+// told once per waiver, not once per job or per pass - the pool re-observes the
+// spent window on every pass of every worker - and the message names the window
+// and when the waiver lapses.
+func TestAWaiverIsReportedOncePerWaiver(t *testing.T) {
+	ctx := context.Background()
+	r := &recorder{}
+	n := notifier(r)
+
+	wa := budget.Waiver{Window: "monthly", Until: time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)}
+	for range 5 {
+		if err := n.Waived(ctx, wa); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := r.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one waiver observed five times, want 1: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].title, "monthly") {
+		t.Errorf("title = %q, want the window named in it", got[0].title)
+	}
+	for _, want := range []string{"monthly", "2026-09-27T00:00:00Z"} {
+		if !strings.Contains(got[0].body, want) {
+			t.Errorf("body does not mention %q:\n%s", want, got[0].body)
+		}
+	}
+
+	// A waiver renewed for the next period is a new occurrence: the operator is
+	// spending money again, on a fresh decision.
+	next := budget.Waiver{Window: "monthly", Until: time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)}
+	if err := n.Waived(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.all(); len(got) != 2 {
+		t.Fatalf("%d notifications after a renewed waiver, want 2: %+v", len(got), got)
 	}
 }
 

@@ -881,6 +881,55 @@ func TestAnExhaustedBudgetReachesTheOperatorOnce(t *testing.T) {
 	}
 }
 
+// The acceptance criteria of #39: a waived window admits work, and the first
+// job admitted under it reaches the operator once per waiver rather than once
+// per job or per pass. The spent window is not reported as an exhausted budget:
+// it did not stop anything, and the waiver is the news.
+func TestAWaivedBudgetAdmitsAndIsReportedOnce(t *testing.T) {
+	s := openStore(t)
+	ids := queue(t, s, 3)
+	p := &published{}
+
+	var ran int32
+	reg := transition.MustRegistry(transition.Transition{
+		Name: "review", Kind: store.KindReview, From: "start",
+		Run: func(context.Context, transition.In) (transition.Result, error) {
+			atomicAdd(&ran)
+			return transition.Result{State: "done"}, nil
+		},
+	})
+	o := observer(&usage{doc: usageLimited}, 0)
+	o.Waivers = budget.Waivers{{Window: "monthly", Until: reopens(t)}}
+	d := dispatcher(t, s, reg, pool(t, nil), 2)
+	d.Notify = notifier(p)
+	d.Budget = o
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, id := range ids {
+			until(t, s, id, "finish", func(j store.Job) bool { return j.State == "done" })
+		}
+	}()
+	runUntil(t, d, done)
+
+	if n := atomicLoad(&ran); n != int32(len(ids)) {
+		t.Fatalf("%d transitions ran under a waiver, want %d", n, len(ids))
+	}
+	got := p.all()
+	if len(got) != 1 {
+		t.Fatalf("%d notifications for one waiver across three jobs, want 1:\n%s", len(got), strings.Join(got, "\n---\n"))
+	}
+	for _, want := range []string{"monthly", "waived", reopens(t).Format(time.RFC3339)} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("the notification does not mention %q:\n%s", want, got[0])
+		}
+	}
+	if strings.Contains(got[0], "is spent") {
+		t.Errorf("a waived window was reported as an exhausted budget:\n%s", got[0])
+	}
+}
+
 // Approaching a limit stops new jobs starting and says nothing. The queue
 // standing down while a rolling window drains is admission control working, and
 // a notification for it would train the operator to ignore the channel that

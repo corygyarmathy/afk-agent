@@ -5,19 +5,26 @@ decisions it implements are [ADR 0001 §10 and
 §13](../adr/0001-a-go-state-machine-in-its-own-repository.md); the code is
 [`internal/notify`](../../internal/notify).
 
-## The three conditions
+## The four conditions
 
 | condition | when it fires | what it says |
 | --- | --- | --- |
 | a job **parked** after a failure | a transition failed and there was no retry left to schedule, or the job is in a state no transition runs from | the job, its state, its attempts, the tracker subject, and the error |
 | a budget window is **spent** | the provider reports a window `rate-limited` while the pool is deciding whether to start a job | the window, its percent, and when it reopens |
 | a job's model tier **stays exhausted** | the job's tier has run out `--tier-notify-after` times in one episode | the job, the tracker subject, how many times since when, what the tier said, what the last candidate's run failed with, and when it tries again |
+| work is admitted under a **waiver** | the first job the pool starts through a spent window the operator waived | the window, and when the waiver lapses |
 
 Nothing else notifies. Not a pull request ready for review, not a job handed
 back, not a red CI run, not a retry still in flight, not a window approaching
 its threshold. Those are states, and the operator queries them when they choose
 to look: `afk budget` for the budget, the job store for the queue, GitHub for
 everything about the work itself.
+
+A **waiver** is the one condition that needs no action: the notification
+confirms that work is now spending the pay-as-you-go balance. Why it notifies
+anyway is [ADR 0001
+§13](../adr/0001-a-go-state-machine-in-its-own-repository.md); what to set
+before waiving is [`budget.md`](budget.md#waiving-a-window).
 
 The happy path publishes nothing at all.
 
@@ -89,7 +96,10 @@ parked, so what is suppressed is the repeat rather than the condition:
   is spent is published again;
 - a parked job is one occurrence per state and attempt count, so a job an
   operator freed and which parked again is published again;
-- an exhausted tier is one occurrence per job and episode.
+- an exhausted tier is one occurrence per job and episode;
+- a waiver is one occurrence per window and timestamp, so a waiver renewed for
+  the next period is published again, and the first job admitted under it is the
+  only one that says so.
 
 A limit the provider reports with no `resetsAt` is the one occurrence this does
 not divide: its key is the same every time, so a later exhaustion of that window
@@ -128,7 +138,7 @@ already runs the ntfy server and holds a token as
 
 ## Reading it by hand
 
-One of the three has been read off the real server, and the others have not:
+One of the four has been read off the real server, and the others have not:
 
 - **A park** was published to the live topic and read back off it, through the
   "no transition runs from this state" path below.
@@ -136,6 +146,8 @@ One of the three has been read off the real server, and the others have not:
   constant and the status comes from the provider, so a `rate-limited` window
   cannot be arranged - it has to be caught the next time the account is
   actually limited.
+- **A job admitted under a waiver** has not been, for the same reason: it needs
+  a `rate-limited` window to waive.
 - **An exhausted tier** has not been. It needs every candidate in a tier to
   fail transiently at the provider, `--tier-notify-after` times over, so it
   reaches both the network and a model.
