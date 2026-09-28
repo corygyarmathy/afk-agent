@@ -330,10 +330,14 @@ func (d *Deps) handBackIssue(ctx context.Context, in transition.In, p progress, 
 	}
 	body := handBackBody(marker, "I stopped without opening a pull request. "+reason, output, next)
 
-	// Before the commit rather than after it. A commit that then fails
-	// leaves the job where it was with its workspace gone, and the gate
-	// starts the work over: a model run spent, and nothing said twice.
-	if err := d.clear(in.Job.ID); err != nil {
+	// The workspace and the relay go before the commit rather than after
+	// it. Before the push, a commit that then fails leaves the job where it
+	// was with its workspace gone, and the work starts over: a model run
+	// spent, and nothing said twice. The progress stays until the hand-back
+	// is on the tracker: after the push, a job that never committed this
+	// reads it again and hands the same branch back under the same keys,
+	// rather than doing the work over on a new one.
+	if err := d.discard(in.Job.ID); err != nil {
 		return transition.Result{}, err
 	}
 	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
@@ -573,13 +577,7 @@ func (d *Deps) notePath(jobID string) string {
 // refuses with no state directory, where the paths would be relative to
 // wherever the process is.
 func (d *Deps) clear(jobID string) error {
-	if d.StateDir == "" {
-		return errors.New("implement has no state directory")
-	}
-	if err := os.RemoveAll(d.workspacePath(jobID)); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(d.relayPath(jobID)); err != nil {
+	if err := d.discard(jobID); err != nil {
 		return err
 	}
 	for _, path := range []string{d.progressPath(jobID), d.notePath(jobID)} {
@@ -588,6 +586,18 @@ func (d *Deps) clear(jobID string) error {
 		}
 	}
 	return nil
+}
+
+// discard removes a job's workspace and its relay, and leaves what describes
+// the work.
+func (d *Deps) discard(jobID string) error {
+	if d.StateDir == "" {
+		return errors.New("implement has no state directory")
+	}
+	if err := os.RemoveAll(d.workspacePath(jobID)); err != nil {
+		return err
+	}
+	return os.RemoveAll(d.relayPath(jobID))
 }
 
 // save writes the progress.

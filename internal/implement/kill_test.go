@@ -181,7 +181,7 @@ func TestKillingAHandBackStillHandsBackOnce(t *testing.T) {
 // and killing the process between the commit that decides either and the
 // effect, then running again, still does. No pull request is opened.
 func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
-	for _, at := range []string{"before-push", "after-push", "before-hand-back", "before-hand-back-label"} {
+	for _, at := range []string{"before-push", "after-push", "before-hand-back-commit", "before-hand-back", "before-hand-back-label"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
 			remote := bareRemote(t)
@@ -218,6 +218,9 @@ func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
 			}
 			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1"); len(strings.Fields(pushes)) != 1 {
 				t.Errorf("%d pushes to afk/7-1 after a kill at %s, want 1:\n%s", len(strings.Fields(pushes)), at, pushes)
+			}
+			if branches, _ := run(remote, "git", "for-each-ref", "--format=%(refname)", "refs/heads/afk/"); branches != "refs/heads/afk/7-1" {
+				t.Errorf("branches %q after a kill at %s, want afk/7-1 alone: the work done once", branches, at)
 			}
 			var handBacks, others int
 			for _, c := range got.Comments {
@@ -330,7 +333,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 	if killAt == "" {
 		clock = clock.Add(time.Hour)
 	}
-	r := &transition.Runner{Store: s, Registry: reg, Holder: "helper-" + killAt, LeaseTTL: time.Minute, Clock: func() time.Time { return clock }}
+	r := &transition.Runner{Store: askStore{s, ft}, Registry: reg, Holder: "helper-" + killAt, LeaseTTL: time.Minute, Clock: func() time.Time { return clock }}
 
 	ctx := context.Background()
 	job, err := s.Ensure(ctx, store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: issue}, implement.Start, clock)
@@ -415,6 +418,15 @@ func (a askStore) Ensure(ctx context.Context, kind store.Kind, subject store.Sub
 		a.ft.die("ask-review")
 	}
 	return job, err
+}
+
+// Commit dies before the commit that decides a hand-back: the transition has
+// done everything it does ahead of the runner, and none of it is recorded.
+func (a askStore) Commit(ctx context.Context, c store.Commit) error {
+	if c.State == implement.HandingBack {
+		a.ft.die("before-hand-back-commit")
+	}
+	return a.Store.Commit(ctx, c)
 }
 
 func (a askStore) Acquire(ctx context.Context, id, holder string, now time.Time, ttl time.Duration) (store.Job, bool, error) {

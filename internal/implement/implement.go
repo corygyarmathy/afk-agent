@@ -273,8 +273,12 @@ func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result
 // handedBack is `implement-handed-back`: at rest, once the hand-back's comment
 // and its label are both on the tracker. A record lost with the state
 // directory rests all the same. Claiming again from there would start the
-// work over with nobody asking for it.
+// work over with nobody asking for it. What a hand-back on the issue left of
+// the work goes here: the hand-back is decided, and nothing reads it again.
 func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Result, error) {
+	if err := d.clear(in.Job.ID); err != nil {
+		return transition.Result{}, err
+	}
 	return d.book().Settle(ctx, in, transition.Result{State: Start})
 }
 
