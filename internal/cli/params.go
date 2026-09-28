@@ -139,9 +139,13 @@ The tracker, for afk intake, afk run and afk work:
                                           implemented with nobody asking
   --review-queue-limit <n>
                         AFK_REVIEW_QUEUE_LIMIT
-                                          pull requests waiting on review, counting
-                                          implements not yet handed off, before
+                                          pull requests waiting on the operator's
+                                          review, counting implements and
+                                          revisions not yet handed off, before
                                           no issue is taken with nobody asking
+  --hand-off-label <l>  AFK_HAND_OFF_LABEL
+                                          the label the hand-off applies, which
+                                          the review queue counts by
 
 The agent authenticates as the App's installation on --repo, and its own login
 is the App's [bot] account. Without --repo afk work reads no commands, and runs
@@ -154,8 +158,9 @@ would take it, lowest issue number first.
 
 Without --review-queue-limit there is no limit on what is taken that way. With
 it, afk intake and afk work take no more issues than the review queue has room
-for, and --hand-off-label is required: the agent's open pull requests carrying
-it are what is waiting. Commands, reviews and revisions run whatever the queue.
+for, and --hand-off-label is required, for afk intake as for afk work: the
+agent's open pull requests carrying it are what is waiting. Commands, reviews
+and revisions run whatever the queue.
 
 Without --retry and --max-attempts a failed job parks: it keeps its state, is
 scheduled for nothing, and waits for an operator.
@@ -576,7 +581,7 @@ func (p *params) bindTracker(fs *flag.FlagSet) {
 	fs.StringVar(&p.appID, "app-id", "", "the GitHub App's client ID or app ID (AFK_APP_ID)")
 	fs.StringVar(&p.appKey, "app-key", "", "file holding the GitHub App's private key (AFK_APP_KEY)")
 	fs.StringVar(&p.eligibilityLabel, "eligibility-label", "", "the label that opts an issue in to unattended work (AFK_ELIGIBILITY_LABEL)")
-	fs.StringVar(&p.reviewQueueLimit, "review-queue-limit", "", "pull requests waiting on review before no issue is taken unattended (AFK_REVIEW_QUEUE_LIMIT)")
+	fs.StringVar(&p.reviewQueueLimit, "review-queue-limit", "", "pull requests waiting on the operator's review before no issue is taken unattended (AFK_REVIEW_QUEUE_LIMIT)")
 }
 
 // bindHandOff binds the hand-off label, which the hand-off applies and the
@@ -598,9 +603,9 @@ func (p *params) taking() (intake.Unattended, error) {
 		}
 		label := optional(p.handOffLabel, "AFK_HAND_OFF_LABEL")
 		if label == "" {
-			return intake.Unattended{}, usagef("--review-queue-limit needs --hand-off-label (or set AFK_HAND_OFF_LABEL): the pull requests waiting on review are the ones carrying it")
+			return intake.Unattended{}, usagef("--review-queue-limit needs --hand-off-label (or set AFK_HAND_OFF_LABEL): the pull requests waiting on the operator's review are the ones carrying it")
 		}
-		queue = intake.ReviewQueue{Limit: limit, Label: label}
+		queue = intake.ReviewQueue{Limit: limit, Label: label, Revise: store.KindRevise}
 	}
 	label := optional(p.eligibilityLabel, "AFK_ELIGIBILITY_LABEL")
 	if label == "" {
