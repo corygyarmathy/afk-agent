@@ -84,26 +84,24 @@ non-test lines the work may have before its size needs a decision. The code is
 - **The session is told first.** The prompt gives the rule and the signal, so
   the session can stop at a coherent first piece by itself and say what is left.
 - **The count is the agent's.** It is made by git on the commit the push sends,
-  in the relay, never from what the session says. Each line added and each line
-  removed counts once. Left out: files deleted whole, binary files, vendored
-  files (under `vendor/`, `third_party/` or `node_modules/`, or marked
-  `linguist-vendored`) and generated ones (lock files by name, Go's
-  `// Code generated ... DO NOT EDIT.` line, or marked `linguist-generated`).
-  An attribute set false in the head's `.gitattributes` takes a convention's
-  exclusion back. Tests - `_test` files, `test/`, `tests/`, `testdata/`,
-  `spec/` and the like - are counted beside it, and do not count towards it.
+  in the relay, never from what the session says. Generated, vendored, lock and
+  binary files and files deleted whole are left out, and tests are counted
+  beside it. [`internal/size`](../../internal/size/size.go) says what falls in
+  each.
 - **Over it**, the work is pushed and no pull request is opened. The issue gets
   a hand-back with both counts, the signal and the branch, so the work is kept
   and a human decides what becomes of it. At the signal or under it, nothing
   changes.
-- **The override** is the command's own instructions, and only those: "don't
-  split" or "do not split", anywhere in them, opens the pull request whatever
-  its size, and the session is told not to stop early. Unattended work has no
-  instructions, so it has no override.
+- **The override** is the instructions of the command the job claimed, and
+  only those: "don't split" or "do not split", anywhere in them, opens the pull
+  request whatever its size, and the session is told not to stop early. A
+  command an earlier job claimed is not read, and unattended work claims none,
+  so it has no override.
 
 ## What it needs on the host
 
-- **git** and **sh**, on `PATH`.
+- **git 2.40 or later**, and **sh**, on `PATH`. The size signal reads the
+  head's `.gitattributes` with `git check-attr --source`, which 2.40 added.
 - **A git commit identity.** The agent sets none: sessions commit as the agent
   user's `user.name` and `user.email`, which the NixOS module sets.
 - **opencode**, at `--opencode`, with credentials for every provider enrolled in
@@ -143,7 +141,8 @@ The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session, gate attempts and fixes, the last failure, the pushed
-head) and `notes/<job>.json` (the last error of a push, a pull request, a
+head), `requests/<job>.json` (which command the job's claim took, for its
+instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
 branch.
@@ -154,8 +153,8 @@ branch.
 ([`domain.md`](domain.md)). Without `--branch-prefix`, `afk work` neither runs
 implement jobs nor answers `/implement`. With it, all of these are required:
 `--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
-`--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`
-(whose default, 400, is the NixOS module's), plus model choice,
+`--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`,
+plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs` is
 optional.
 

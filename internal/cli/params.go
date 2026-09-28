@@ -103,7 +103,6 @@ Implementing an issue, for afk run and afk work:
   --ci-fixes <n>        AFK_CI_FIXES         red runs sent back to the session, then a hand-back
   --size-signal <n>     AFK_SIZE_SIGNAL      changed non-test lines a pull request may have; over it,
                                              the branch is pushed and handed back unopened
-                                             (the module's default is 400)
 
 All but --implement-needs are required to implement, with the model choice
 parameters and the two above; implementing also needs the heavy-build token's capacity.
