@@ -998,7 +998,7 @@ func TestTakingIsReadFromTheParameters(t *testing.T) {
 			p:    params{eligibilityLabel: "ready-for-agent", reviewQueueLimit: "3", handOffLabel: "ready-for-review"},
 			want: func() intake.Unattended {
 				u := unattended("ready-for-agent")
-				u.Queue = intake.ReviewQueue{Limit: 3, Label: "ready-for-review"}
+				u.Queue = intake.ReviewQueue{Limit: 3, Label: "ready-for-review", Revise: store.KindRevise}
 				return u
 			}(),
 		},

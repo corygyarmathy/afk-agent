@@ -42,6 +42,12 @@ type tracker struct {
 	// the agent's.
 	authors map[int]string
 
+	// listings is how many times the open issues were listed, and listing,
+	// if set, runs before each listing with the count so far, so a fixture
+	// can change between two listings in one pass.
+	listings int
+	listing  func(listings int)
+
 	// eyes is the reactions on each issue itself, and looked the issues
 	// whose reactions were read.
 	eyes   map[int][]github.Reaction
@@ -57,6 +63,10 @@ type tracker struct {
 var since = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
 func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
+	if tr.listing != nil {
+		tr.listing(tr.listings)
+	}
+	tr.listings++
 	var out []github.Issue
 	for _, n := range tr.issues {
 		out = append(out, github.Issue{
@@ -863,6 +873,7 @@ func TestAnUnattendedIntakeThatCannotWorkIsRefused(t *testing.T) {
 		{"no start", func(u *intake.Unattended) { u.Start = "" }, "no start state"},
 		{"a limit and no hand-off label", func(u *intake.Unattended) { u.Queue = intake.ReviewQueue{Limit: 1} }, "no hand-off label"},
 		{"a negative limit", func(u *intake.Unattended) { u.Queue = intake.ReviewQueue{Limit: -1, Label: handOff} }, "limit"},
+		{"an unknown revision kind", func(u *intake.Unattended) { u.Queue = intake.ReviewQueue{Limit: 1, Label: handOff, Revise: "rewrite"} }, "revision kind"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := unattended(t, storetest.Open(t), &tracker{})
@@ -882,7 +893,7 @@ const handOff = "ready-for-review"
 func limited(t *testing.T, s store.Store, tr *tracker, limit int) (*intake.Intake, *[]string) {
 	t.Helper()
 	in := unattended(t, s, tr)
-	in.Unattended.Queue = intake.ReviewQueue{Limit: limit, Label: handOff}
+	in.Unattended.Queue = intake.ReviewQueue{Limit: limit, Label: handOff, Revise: store.KindRevise}
 	var logged []string
 	in.Log = func(msg string) { logged = append(logged, msg) }
 	return in, &logged
@@ -986,21 +997,23 @@ func TestOnlyTheAgentsHandedOffPullRequestsCount(t *testing.T) {
 }
 
 // The limit holds only what the eligibility label would take. A command still
-// arms its job with the queue full, whether it is /implement on an issue or
-// /review on a pull request.
+// arms its job with the queue full, whether it is /implement on an issue,
+// /review on a pull request, or /revise on a sent-back one.
 func TestCommandsRunWithTheQueueFull(t *testing.T) {
 	s := storetest.Open(t)
 	tr := &tracker{
 		issues: []int{7},
-		prs:    []int{50},
+		prs:    []int{50, 51},
 		labels: map[int][]string{50: {handOff}},
 		comments: map[int][]github.Comment{
 			7:  {comment(1, "alice", "OWNER", "/implement")},
 			50: {comment(2, "alice", "OWNER", "/review")},
+			51: {comment(3, "alice", "OWNER", "/revise")},
 		},
 	}
 	in, _ := limited(t, s, tr, 1)
-	if got, want := strings.Join(ids(pass(t, in)), " "), "implement-issue-7 review-pr-50"; got != want {
+	in.Commands = append(in.Commands, intake.Command{Word: "/revise", On: store.SubjectPR, Kind: store.KindRevise, Start: "start"})
+	if got, want := strings.Join(ids(pass(t, in)), " "), "implement-issue-7 review-pr-50 revise-pr-51"; got != want {
 		t.Errorf("made due [%s], want [%s]", got, want)
 	}
 }
@@ -1045,5 +1058,136 @@ func TestWithoutALimitIntakeIsUnlimited(t *testing.T) {
 	labelledIssues(tr, 7, 8)
 	if made := pass(t, unattended(t, s, tr)); len(made) != 2 {
 		t.Errorf("made %v due, want both", ids(made))
+	}
+}
+
+// A job /implement armed is in flight however it was armed, so a pass that
+// arms one has no room left for a labelled issue.
+func TestAnImplementCommandCountsTowardsTheQueue(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{
+		issues:   []int{7},
+		comments: map[int][]github.Comment{7: {comment(1, "alice", "OWNER", "/implement")}},
+	}
+	labelledIssues(tr, 8)
+	in, _ := limited(t, s, tr, 1)
+	if got, want := strings.Join(ids(pass(t, in)), " "), "implement-issue-7"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+	if _, err := s.Job(context.Background(), "implement-issue-8"); !errors.Is(err, store.ErrNoJob) {
+		t.Errorf("issue 8 was held, and has a job: err = %v", err)
+	}
+}
+
+// A sent-back pull request's revision took the hand-off label off it, and
+// hands off again when it is done, so while it is in flight it counts in the
+// label's place. One at rest does not.
+func TestARevisionInFlightCountsTowardsTheQueue(t *testing.T) {
+	s := storetest.Open(t)
+	storetest.Seed(t, s, store.KindRevise, 51, "start")
+	storetest.Seed(t, s, store.KindRevise, 52, "start")
+	storetest.Rest(t, s, "revise-pr-52", "start", 0, now)
+	tr := &tracker{prs: []int{51, 52}}
+	labelledIssues(tr, 7, 8)
+	in, _ := limited(t, s, tr, 2)
+	if got, want := strings.Join(ids(pass(t, in)), " "), "implement-issue-7"; got != want {
+		t.Errorf("made due [%s], want [%s]", got, want)
+	}
+}
+
+// The pull requests are listed afresh after the jobs are read, rather than
+// taken from the pass's own listing. A job that hands off in between - its
+// label applied and read back, and the job come to rest - is then counted as
+// its pull request, rather than as neither.
+func TestAHandOffDuringAPassIsNotMissed(t *testing.T) {
+	s := storetest.Open(t)
+	// The implement for pull request 50, at rest now it has handed off.
+	storetest.Seed(t, s, store.KindImplement, 3, "start")
+	storetest.Rest(t, s, "implement-issue-3", "start", 0, now)
+	tr := &tracker{prs: []int{50}, labels: map[int][]string{}}
+	labelledIssues(tr, 7)
+	// The pass's own listing is from before the hand-off applied the label.
+	tr.listing = func(listings int) {
+		if listings > 0 {
+			tr.labels[50] = []string{handOff}
+		}
+	}
+	in, _ := limited(t, s, tr, 1)
+	if made := pass(t, in); len(made) != 0 {
+		t.Errorf("made %v due with the review queue full", ids(made))
+	}
+}
+
+// failingJobs is a store that cannot list its jobs.
+type failingJobs struct{ store.Store }
+
+func (failingJobs) Jobs(context.Context) ([]store.Job, error) {
+	return nil, errors.New("the store is locked")
+}
+
+// Not knowing how full the review queue is, intake takes nothing and says why:
+// no job, no asking whether the issue is claimed, and no change to whether it is holding.
+func TestAQueueThatCannotBeCountedTakesNothing(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{}
+	labelledIssues(tr, 7)
+	in, logged := limited(t, failingJobs{s}, tr, 1)
+	made, err := in.Pass(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "counting the review queue") {
+		t.Errorf("err = %v, want one saying the review queue could not be counted", err)
+	}
+	if len(made) != 0 {
+		t.Errorf("made %v due with the queue uncounted", ids(made))
+	}
+	if _, err := s.Job(context.Background(), "implement-issue-7"); !errors.Is(err, store.ErrNoJob) {
+		t.Errorf("issue 7 has a job: err = %v", err)
+	}
+	// Whether it is claimed is the first thing taking asks.
+	if len(tr.looked) != 0 {
+		t.Errorf("asked whether issues %v are claimed", tr.looked)
+	}
+	if len(*logged) != 0 {
+		t.Errorf("logged %q", *logged)
+	}
+}
+
+// Intake stops holding when the queue has room, and not before. The held
+// issue taken by hand, its label taken off, or a failure reading whether it
+// could be taken leaves nothing held back, and the queue still full.
+func TestHoldingStopsOnlyWhenTheQueueHasRoom(t *testing.T) {
+	s := storetest.Open(t)
+	tr := &tracker{prs: []int{50}, labels: map[int][]string{50: {handOff}}}
+	labelledIssues(tr, 7)
+	in, logged := limited(t, s, tr, 1)
+	pass(t, in)
+	if len(*logged) != 1 {
+		t.Fatalf("logged %q, want one line saying intake is holding", *logged)
+	}
+
+	// Reading the held issue fails.
+	tr.broken = map[int]error{7: errors.New("rate limited")}
+	if _, err := in.Pass(context.Background()); err == nil {
+		t.Error("Pass: no error, and issue 7 could not be read")
+	}
+	tr.broken = nil
+	// Its label comes off, and goes back on.
+	tr.labels[7] = nil
+	pass(t, in)
+	tr.labels[7] = []string{eligible}
+	pass(t, in)
+	// The operator takes it by hand, and its job is in the queue too.
+	tr.say(7, comment(1, "alice", "OWNER", "/implement"))
+	pass(t, in)
+	if len(*logged) != 1 {
+		t.Errorf("logged %q with the queue full throughout, want only the first line", *logged)
+	}
+
+	// The pull request merges and the implement hands off: room, with
+	// nothing left to take.
+	tr.prs = nil
+	storetest.Rest(t, s, "implement-issue-7", "start", 0, now)
+	pass(t, in)
+	if len(*logged) != 2 || !strings.Contains((*logged)[1], "stopped holding") {
+		t.Errorf("logged %q, want a second line saying intake stopped holding", *logged)
 	}
 }

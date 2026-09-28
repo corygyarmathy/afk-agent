@@ -117,7 +117,7 @@ type Unattended struct {
 // ReviewQueue is the limit on the review queue (CONTEXT.md: review queue): the
 // agent's open pull requests carrying the hand-off label, plus the jobs of the
 // unattended kind taken and not yet handed off, whether a command or the
-// eligibility label made them.
+// eligibility label made them, plus the revisions in flight.
 type ReviewQueue struct {
 	// Limit is how long the queue may be before taking is held. A parameter;
 	// zero, there is no limit.
@@ -127,6 +127,11 @@ type ReviewQueue struct {
 	// operator's review is known. Its revision's claim takes it off, and a
 	// hand-back never had it.
 	Label string
+
+	// Revise is the job kind that revises a sent-back pull request. Its claim
+	// takes the hand-off label off, so while one is in flight it counts in
+	// the label's place. Empty, no revision counts.
+	Revise store.Kind
 }
 
 // Intake is one repository's command intake.
@@ -274,14 +279,17 @@ func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, e
 	in.blind = blind
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].Number < eligible[j].Number })
 
-	room, queue := len(eligible), 0
+	// counted is whether this pass counted the review queue, and full whether
+	// it found no room in it.
+	room, queue, counted, full := len(eligible), 0, false, false
 	if limit := in.Unattended.Queue.Limit; limit > 0 && len(eligible) > 0 {
 		var err error
-		if queue, err = in.queue(ctx, open); err != nil {
+		if queue, err = in.queue(ctx); err != nil {
 			// Not knowing how full the queue is, take nothing.
 			return nil, errors.Join(append(errs, fmt.Errorf("counting the review queue: %w", err))...)
 		}
-		room = max(limit-queue, 0)
+		room, counted = max(limit-queue, 0), true
+		full = room == 0
 	}
 
 	var (
@@ -310,11 +318,22 @@ func (in *Intake) take(ctx context.Context, open []github.Issue) ([]store.Job, e
 		made = append(made, job)
 		room--
 	}
-	in.hold(held, queue)
+	switch {
+	case !counted:
+	case held:
+		// What this pass took is in the queue now too.
+		in.hold(true, queue+len(made))
+	case !full:
+		in.hold(false, queue+len(made))
+	}
 	return made, errors.Join(errs...)
 }
 
-// hold says when taking starts being held, and when it stops.
+// hold says when taking starts being held, and when it stops. Only a pass that
+// counted the review queue says either: it stops being held when the queue has
+// room, not when there is nothing left to hold back - the operator took the
+// held issue by hand, or its label came off - or when deciding whether an
+// issue could be taken failed.
 func (in *Intake) hold(held bool, queue int) {
 	if held == in.holding {
 		return
@@ -330,31 +349,39 @@ func (in *Intake) hold(held bool, queue int) {
 	}
 }
 
-// queue counts the review queue: the agent's open pull requests carrying the
-// hand-off label, and the jobs of the unattended kind taken and not yet handed
-// off. A job is taken and not handed off while it is scheduled or leased; one
-// that handed off, handed back or parked is at rest. A job made due that no
-// pool runs is in the queue until something runs it.
+// queue counts the review queue: the jobs of the unattended kind and of the
+// revision kind taken and not yet handed off, and the agent's open pull
+// requests carrying the hand-off label. A job is taken and not handed off
+// while it is scheduled or leased; one that handed off, handed back or parked
+// is at rest. A job made due that no pool runs is in the queue until something
+// runs it.
 //
-// A job applying the hand-off label is counted twice, once as its pull
-// request, until it reads the label back. That errs towards holding.
-func (in *Intake) queue(ctx context.Context, open []github.Issue) (int, error) {
-	n := 0
-	for _, is := range open {
-		if is.PullRequest && strings.EqualFold(is.Author, in.Login) && hasLabel(is, in.Unattended.Queue.Label) {
-			n++
-		}
-	}
+// The jobs are read first and the pull requests listed afresh after, rather
+// than from the pass's own listing: a job that hands off in between is then
+// counted twice, once as its pull request, rather than not at all. A job
+// applying the hand-off label is counted twice the same way until it reads the
+// label back. Both err towards holding.
+func (in *Intake) queue(ctx context.Context) (int, error) {
 	jobs, err := in.Store.Jobs(ctx)
 	if err != nil {
 		return 0, err
 	}
+	q, n := in.Unattended.Queue, 0
 	now := in.now()
 	for _, j := range jobs {
-		if j.Kind != in.Unattended.Kind {
+		if j.Kind != in.Unattended.Kind && (q.Revise == "" || j.Kind != q.Revise) {
 			continue
 		}
 		if !j.NextRunAt.IsZero() || (j.Lease != nil && !j.Lease.Expired(now)) {
+			n++
+		}
+	}
+	open, err := in.Tracker.OpenIssues(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, is := range open {
+		if is.PullRequest && strings.EqualFold(is.Author, in.Login) && hasLabel(is, q.Label) {
 			n++
 		}
 	}
@@ -536,6 +563,8 @@ func (in *Intake) validate() error {
 			return errors.New("unattended work: no start state")
 		case u.Queue.Limit < 0:
 			return fmt.Errorf("unattended work: review-queue limit %d is negative", u.Queue.Limit)
+		case u.Queue.Revise != "" && !u.Queue.Revise.Valid():
+			return fmt.Errorf("unattended work: unknown revision kind %q", u.Queue.Revise)
 		case u.Queue.Limit > 0 && u.Queue.Label == "":
 			// Without it no pull request would count, and the limit would
 			// hold only in-flight work.
