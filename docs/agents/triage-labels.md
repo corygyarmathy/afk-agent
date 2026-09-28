@@ -50,15 +50,41 @@ The one label the agent reads. It opts an issue in to being taken **unattended**
 with no command. It is a queue filter, not an instruction: it says the issue
 *may* be taken, never that a particular thing should happen to it.
 
-Its name, and the unattended intake that reads it, are decided with that work
-(#24), not here. Until then, `ready-for-agent` is the string on the tracker.
+Its string is `--eligibility-label` (`AFK_ELIGIBILITY_LABEL`), set by the
+NixOS module, and matched without regard to case, as GitHub matches label names.
+There is no default: without it, nothing is taken unattended. The string on
+this tracker is `ready-for-agent`.
+
+Intake reads it on every pass ([`internal/intake`](../../internal/intake)). An
+open issue is taken when all of these hold:
+
+- it carries the label, and it is an issue, not a pull request;
+- it has no open blocker, read from its native dependencies
+  (`issue_dependencies_summary.blocked_by`,
+  [`issue-tracker.md`](issue-tracker.md#dependencies-between-issues)). An issue
+  the API serves with no dependency summary is not taken, because its blockers
+  cannot be read;
+- it has no `implement` job in the store, whatever made it. A command's work
+  that came to rest, handed off or handed back, is not the queue's to start
+  over;
+- it does not carry the agent's claim, a 👀 on the issue itself. That is what
+  stops a wiped store taking it again.
+
+Taking it makes the job `/implement` would make, due now. The job claims the
+issue with a 👀 on it, because nothing asked and there is no command to claim.
+Admission still decides when the job starts, as it does for every job.
+
+**The order** is lowest issue number first, which on GitHub is oldest first,
+whatever order the listing serves. Anything that takes only some of the
+eligible issues takes the first ones in this order.
 
 ## What does not carry over
 
 The prototype in `corygyarmathy/dotfiles` also wrote `agent-working` and
 `agent-revising`. Neither survives. A job being taken is shown by the **claim**:
 a 👀 reaction on whatever asked for the work, which is the command comment, or
-for a review another job asked for, what that job posted. A label that meant "a
+for a review another job asked for, what that job posted. Work nobody asked
+for, taken through the eligibility label, is claimed on the issue itself. A label that meant "a
 process is on this" conflated the claim with the lease, and ADR 0001 §7 keeps
 them apart. `agent-ready-for-review` and `agent-stuck` become `needs-review` and
 `needs-decision`.
