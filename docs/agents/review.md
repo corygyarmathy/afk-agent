@@ -6,8 +6,9 @@ decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md
 [ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) for how the
 agent authenticates; the spec is
 [#3](https://github.com/corygyarmathy/afk-agent/issues/3),
-[#29](https://github.com/corygyarmathy/afk-agent/issues/29) and
-[#44](https://github.com/corygyarmathy/afk-agent/issues/44); the code is
+[#29](https://github.com/corygyarmathy/afk-agent/issues/29),
+[#44](https://github.com/corygyarmathy/afk-agent/issues/44) and
+[#124](https://github.com/corygyarmathy/afk-agent/issues/124); the code is
 [`internal/intake`](../../internal/intake) and
 [`internal/review`](../../internal/review).
 
@@ -47,6 +48,33 @@ An issue it cannot find is noted there as a gap, not a failure. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue is reviewed against its
 description, and the report says so.
+
+### What the operator sees
+
+The review is one comment on the pull request, and the whole of it sits inside
+one `<details>`, collapsed. Its summary names the reviewed head and nothing
+else: "Advisory review of `abc1234`. Open it after your own reading". There are
+no counts by severity and no verdict, because a line like "0 blockers" is what
+invites a rubber stamp. The wrapper is the agent's, added when it posts; the
+model is told not to add one of its own.
+
+Nothing is posted on a line of the diff: no review threads in "Files changed",
+which cannot be collapsed and open threads that decide nothing. Each finding
+cites its `file:line` as a permalink at the reviewed head instead, which the
+prompt gives the model the repository and the head to build.
+
+What is in it is the skill's to decide, at two of the skill's inputs that the
+prompt passes through: the severity floor, below which nothing is reported,
+and the fold cut, the changed lines below which Approach is reviewed with
+Correctness. They are `--review-floor` and `--review-fold-cut`
+([Parameters](#parameters)). Findings are numbered across the review, so a
+send-back can cite one ("advisory 3").
+
+An advisory review is append-only. Once posted it is never edited or deleted,
+and each review is a new comment, so a citation resolves to the latest review
+before the send-back that cites it. The tracker the review writes through can
+only add a comment, and a replayed transition finds the review of its head
+already there and posts nothing.
 
 A review is recognised on the tracker by a hidden `<!-- afk:review head=<sha> -->`
 line in the agent's comment, and a command as answered by the agent's 👀
@@ -131,9 +159,15 @@ Two things GitHub's documentation does not say:
 ## Parameters
 
 `afk help` lists them, and the NixOS module sets them
-([`domain.md`](domain.md)). Two interact with a review in ways worth knowing
+([`domain.md`](domain.md)). These interact with a review in ways worth knowing
 before choosing values:
 
+- `--review-floor` is the least severity a review reports: `blocker`,
+  `should-fix` or `consider`. `--review-fold-cut` is the changed lines below
+  which a review folds Approach into Correctness, counted by the skill:
+  non-test lines, leaving out generated, vendored and lock files. Both are optional, and unset the skill's own
+  defaults hold: `should-fix`, and 50. Neither is a gate: a review with nothing
+  at or above the floor still posts, and says so.
 - `--model-timeout` bounds the model run. One still going when it runs out is
   killed with everything it started, and is a transient failure: the job
   stays, and its next run tries the next candidate. Each transient failure is

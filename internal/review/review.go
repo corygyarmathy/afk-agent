@@ -136,6 +136,17 @@ type Deps struct {
 	// something else gave, and it is honest about that.
 	TierWait time.Duration
 
+	// Floor and FoldCut are the reviewing-changes skill's severity floor and
+	// fold cut, passed to it in the prompt; the skill does the cutting and
+	// the counting. Parameters. Unset, the prompt names neither and the
+	// skill's own defaults hold.
+	Floor   string
+	FoldCut int
+
+	// Repo is the pull request's repository, as owner/name: what a finding's
+	// permalink at the reviewed head is built on.
+	Repo string
+
 	// Login is the agent's own account: whose reaction is a claim, and whose
 	// comment carries a review.
 	Login string
@@ -284,9 +295,12 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 
 	var text strings.Builder
 	if err := prompt.Execute(&text, struct {
-		Number int
-		Head   string
-	}{n, head}); err != nil {
+		Number  int
+		Head    string
+		Repo    string
+		Floor   string
+		FoldCut int
+	}{n, head, d.Repo, d.Floor, d.FoldCut}); err != nil {
 		return transition.Result{}, err
 	}
 
@@ -518,15 +532,22 @@ func already(n int, c github.Comment, head string) owed.Item {
 		fmt.Sprintf("Already reviewed at `%s`; nothing has changed since. Push a new commit and `%s` again for another review.", git.Short(head), Word))
 }
 
-// body is the comment a review is posted as. On the implement job's pull
-// request it says the job asked for it.
+// body is the comment a review is posted as: all of it inside one <details>,
+// under a summary that names the head and nothing else, so that the operator
+// reads it after their own reading rather than instead of it (#110). A count
+// or a verdict in the summary is what invites a rubber stamp. On the implement
+// job's pull request it says the job asked for it.
+//
+// It is posted once and never edited or deleted: a send-back cites a finding
+// by its number in the latest review before it (#123), so a review of a new
+// head is a new comment.
 func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
 	asked := ""
 	if issue != 0 {
 		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
 	}
-	return fmt.Sprintf("%s\n**Advisory review** of `%s`. This does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n",
-		Marker(head), git.Short(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
+	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s · $%.4f</sub>\n\n</details>\n",
+		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), ref, reply.Cost)
 }
 
 // pending is a reply written and not yet seen on the tracker. From is the

@@ -32,6 +32,10 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
+	rp, err := p.review()
+	if err != nil {
+		return nil, err
+	}
 	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
@@ -50,6 +54,9 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		TierWait:      m.tierWait,
 		Rounds:        ep.rounds,
 		HandBackLabel: ep.handBackLabel,
+		Floor:         rp.floor,
+		FoldCut:       rp.foldCut,
+		Repo:          tr.client.Repo,
 		Login:         login,
 		StateDir:      stateDir,
 	}, nil

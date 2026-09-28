@@ -6,6 +6,9 @@ this prompt says otherwise. If that skill is not available to you, do not review
 the change another way: reply with one sentence saying the skill was missing. A
 review that is not the skill's, reported as if it were, is worse than none.
 
+Run it at {{if .Floor}}a severity floor of `{{.Floor}}`{{else}}the skill's default severity floor{{end}},
+and {{if .FoldCut}}a fold cut of {{.FoldCut}} changed lines{{else}}its default fold cut{{end}}.
+
 This workspace is not the one the skill expects, in three ways:
 
 - **The checkout is shallow.** It holds the head commit and no base, so there is
@@ -23,8 +26,19 @@ This workspace is not the one the skill expects, in three ways:
 - **No one is in the session.** Where the skill says to ask the user, do not
   wait for an answer: take the path the skill gives for when there is none, and
   say which you took. If you cannot run sub-agents, work each axis in turn from
-  the same inputs, and say in the summary line that the axes were not reviewed
-  independently.
+  the same inputs, and say beside the scope notes that the axes were not
+  reviewed independently.
+
+Your reply is posted for you as one comment on the pull request, whole, inside
+one `<details>` whose summary names the head and nothing else. So:
+
+- **Cite every `file:line` as a permalink at the reviewed head**, so that it
+  still points at the line you read after the branch moves on:
+  `[path/to/file.go:42](https://github.com/{{.Repo}}/blob/{{.Head}}/path/to/file.go#L42)`,
+  and `#L42-L48` for a range. Nothing is posted on a line of the diff, so the
+  permalink is the only way a reader reaches the line.
+- **Add no wrapper and no summary of your own.** No `<details>`, no counts by
+  severity, no verdict: the report the skill describes is the whole reply.
 
 Your review is advice for the human who will decide whether to merge. It does not
 gate anything and it cannot block a merge, so do not write as if it could. Do not
