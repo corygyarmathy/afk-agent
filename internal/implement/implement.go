@@ -12,8 +12,10 @@
 //	                                         implementing  it failed: back to the session that wrote it
 //	                                         handing-back  hand-back on the issue
 //	pushing      --implement-push--------->  opening       the denylist, then the push
+//	                                         implementing  over the size signal: back to the session, once, to be cut
 //	                                         handing-back  a denied path, or out of rounds: hand-back
 //	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
+//	                                         opening       a first piece's rest: filed, blocked and linked, each under the next key
 //	                                         opening       the pull request's sensitive line, edited under the next key
 //	                                         opening       the pull request, under the next key
 //	                                         pushing       the push is not on the remote: again
@@ -98,6 +100,10 @@ type Tracker interface {
 	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
 	EditPullRequest(ctx context.Context, number int, body string) error
+	OpenIssues(ctx context.Context) ([]github.Issue, error)
+	CreateIssue(ctx context.Context, is github.NewIssue) (github.Issue, error)
+	BlockedBy(ctx context.Context, n int) ([]github.Issue, error)
+	AddBlockedBy(ctx context.Context, n int, blocker int64) error
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 }
@@ -172,9 +178,10 @@ type Deps struct {
 	Sensitive []sensitive.Path
 
 	// SizeSignal is the changed non-test lines a pull request may have
-	// before the work needs a decision (package size): over it, the work is
-	// pushed, and handed back on the issue rather than opened. The session is
-	// told it up front. A parameter.
+	// before the work needs a decision (package size): over it, the work goes
+	// back to its session once to be cut to a first piece, and a piece still
+	// over it is pushed, and handed back on the issue rather than opened. The
+	// session is told it up front. A parameter.
 	SizeSignal int
 
 	// Store is read, never written: which round of an effect is next, and
