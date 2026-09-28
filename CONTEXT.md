@@ -84,6 +84,10 @@ _Avoid_: Review (bare), approval
 An operator's review that ends with points to address, written in the operator's own words. The only instruction `/revise` acts on. It may cite advisory findings one at a time, but it is never an answer to them: the operator owes no reply to any finding, and a reaction, an approval or a resolved thread decides nothing.
 _Avoid_: Change request, triage, feedback
 
+**Revision**:
+What one `/revise` produces for one send-back: commits added on top of the head the send-back was written against, never rewriting it, and one reply saying which points were done. Does only the send-back's points; anything else it noticed is a suggested follow-up in the reply, owed no answer.
+_Avoid_: Round, iteration, fix
+
 **Hand-off**:
 The agent declaring a pull request ready for human review. A signal, not a control: nothing merges on it.
 _Avoid_: Completion, ready state
