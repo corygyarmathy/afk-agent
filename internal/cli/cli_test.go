@@ -23,6 +23,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -841,7 +842,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); d.Model != want {
 		t.Errorf("model = %+v, want %+v", d.Model, want)
 	}
-	if want := []implement.Sensitive{
+	if want := []sensitive.Path{
 		{Label: "job store schema", Globs: []string{"internal/store/**", "cmd/migrate/*.go"}},
 		{Label: "CI", Globs: []string{".github/workflows/**"}},
 	}; fmt.Sprint(d.Sensitive) != fmt.Sprint(want) {

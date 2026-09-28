@@ -432,6 +432,28 @@ func TestTheModelRunsTheSkillWithTheLinkedIssueAsTheSpec(t *testing.T) {
 	}
 }
 
+// The advisory review is unaware of the sensitive line: the spec it reads is
+// the description without it, and otherwise as it was.
+func TestTheSpecLeavesOutTheSensitiveLine(t *testing.T) {
+	tr := newTracker(command(1))
+	top := "<!-- afk:implement issue=7 -->\nCloses #7\n\n"
+	rest := "> **Your review** (x): read #7 first.\n\n## Start here\n\nok:1\n"
+	tr.desc = top + "**Sensitive:** job store schema (`store/schema.sql`)\n\n" + rest
+	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	spec := f.model.specs[0]
+	if strings.Contains(spec, "Sensitive") || strings.Contains(spec, "store/schema.sql") {
+		t.Errorf("the spec carries the sensitive line:\n%s", spec)
+	}
+	if !strings.Contains(spec, top+rest) {
+		t.Errorf("the spec does not carry the rest of the description as it was:\n%s", spec)
+	}
+}
+
 // An issue the description closes that the tracker cannot find - a typo, or
 // one since deleted - is a gap in the spec, not a reason to write no review.
 func TestAClosedIssueThatIsNotThereIsNotedAndTheReviewGoesOn(t *testing.T) {

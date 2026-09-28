@@ -69,6 +69,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -166,9 +167,9 @@ type Deps struct {
 	Denylist []string
 
 	// Sensitive is the paths the operator named as deserving closer
-	// reading, by label (see Sensitive). A pull request that touches one
-	// says so in its description. A parameter; empty, nothing is said.
-	Sensitive []Sensitive
+	// reading, by label (package sensitive). A pull request that touches
+	// one says so in its description. A parameter; empty, nothing is said.
+	Sensitive []sensitive.Path
 
 	// SizeSignal is the changed non-test lines a pull request may have
 	// before the work needs a decision (package size): over it, the work is

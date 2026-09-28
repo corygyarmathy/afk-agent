@@ -22,6 +22,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -89,9 +90,9 @@ type progress struct {
 	Lines int `json:"lines,omitempty"`
 	Tests int `json:"tests,omitempty"`
 
-	// Sensitive is the description's sensitive line for the work at Head,
-	// or empty when it touches no sensitive path.
-	Sensitive string `json:"sensitive,omitempty"`
+	// Sensitive is the sensitive paths the work at Head touches, for the
+	// description's line, or none.
+	Sensitive []sensitive.Touched `json:"sensitive,omitempty"`
 
 	// Fixes is how many times CI has sent the work back to the session,
 	// and FixedHead the head the last of them was counted for.

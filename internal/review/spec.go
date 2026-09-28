@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 )
 
 // closing is GitHub's closing keywords: the words that link a pull request to
@@ -35,7 +36,9 @@ func closes(desc string) []int {
 
 // spec is what the reviewing-changes skill would have fetched for itself, had
 // the workspace any credentials for the tracker: the pull request's
-// description, and the issues it closes, verbatim.
+// description, and the issues it closes, verbatim. The description's sensitive
+// line is left out: the advisory review is unaware of it (#112), so that it
+// reviews a pull request that touches a sensitive path as it does any other.
 //
 // An issue that is not there - a typo, or one since deleted - is written down
 // as a gap rather than failing the review: a review without that issue is
@@ -43,10 +46,10 @@ func closes(desc string) []int {
 func (d *Deps) spec(ctx context.Context, pr github.PullRequest) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Pull request #%d: %s\n\n", pr.Number, pr.Title)
-	if strings.TrimSpace(pr.Body) == "" {
+	if desc := sensitive.Strip(pr.Body); strings.TrimSpace(desc) == "" {
 		b.WriteString("(no description)\n")
 	} else {
-		fmt.Fprintf(&b, "%s\n", pr.Body)
+		fmt.Fprintf(&b, "%s\n", desc)
 	}
 
 	for _, n := range closes(pr.Body) {

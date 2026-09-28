@@ -2,12 +2,14 @@ package implement_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 )
 
 // commitAt is a turn that commits a file at path, making its directories.
@@ -32,7 +34,7 @@ func both(turns ...func(string) error) func(string) error {
 	}
 }
 
-var sensitivePaths = []implement.Sensitive{
+var sensitivePaths = []sensitive.Path{
 	{Label: "job store schema", Globs: []string{"store/**"}},
 	{Label: "CI", Globs: []string{"ci/*.yml"}},
 	{Label: "docs", Globs: []string{"docs/**"}},
@@ -60,7 +62,7 @@ func TestAPullRequestTouchingASensitivePathSaysSo(t *testing.T) {
 // A pull request that touches none carries no line, and neither does one
 // when the operator named no sensitive paths.
 func TestAPullRequestTouchingNoSensitivePathSaysNothing(t *testing.T) {
-	for name, list := range map[string][]implement.Sensitive{"none touched": sensitivePaths, "none named": nil} {
+	for name, list := range map[string][]sensitive.Path{"none touched": sensitivePaths, "none named": nil} {
 		t.Run(name, func(t *testing.T) {
 			f := setup(t, newTracker())
 			f.deps.Sensitive = list
@@ -140,23 +142,69 @@ func TestAnEditThatNeverLandsIsLoggedAndTheWorkGoesOn(t *testing.T) {
 	}
 }
 
-// The sensitive paths are globs as the denylist's are, and refused as they are.
-func TestMalformedSensitivePathsAreRefused(t *testing.T) {
-	for _, list := range [][]implement.Sensitive{
-		{{Label: "", Globs: []string{"a/**"}}},
-		{{Label: "a", Globs: nil}},
-		{{Label: "a", Globs: []string{"src/[a"}}},
-		{{Label: "a", Globs: []string{"/abs"}}},
-		{{Label: "a", Globs: []string{"x"}}, {Label: "a", Globs: []string{"y"}}},
-	} {
-		if err := implement.ValidSensitive(list); err == nil {
-			t.Errorf("ValidSensitive(%v) = nil, want a refusal", list)
+// manyUnder is a turn that commits n files under dir in one commit, each
+// with a long name, so that listing them takes more than GitHub's limit.
+func manyUnder(dir string, n int) func(string) error {
+	return func(ws string) error {
+		if err := os.MkdirAll(filepath.Join(ws, dir), 0o755); err != nil {
+			return err
+		}
+		for i := range n {
+			name := fmt.Sprintf("%s-%03d", strings.Repeat("x", 240), i)
+			if err := os.WriteFile(filepath.Join(ws, dir, name), []byte("x\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		if _, err := run(ws, "git", "add", dir); err != nil {
+			return err
+		}
+		_, err := run(ws, "git", "commit", "--quiet", "-m", "add "+dir)
+		return err
+	}
+}
+
+// Files that would take the description over GitHub's limit are counted for
+// each label rather than listed, and the session's part, which the operator
+// needs more than a list the diff repeats, is kept.
+func TestSensitiveFilesOverGitHubsLimitAreCounted(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.Sensitive = sensitivePaths
+	f.deps.SizeSignal = 100000
+	f.model.then(both(manyUnder("store", 300), commitAt("ci/build.yml"), describe("## Start here\n\nok:1\n")))
+
+	body := f.opened()
+	if !strings.Contains(body, "Closes #7\n\n**Sensitive:** job store schema (300 files), CI (1 file)\n\n> **Your review**") {
+		t.Errorf("description:\n%.600s\nwant the sensitive paths counted", body)
+	}
+	if !strings.HasSuffix(body, "## Start here\n\nok:1\n") {
+		t.Errorf("the session's part was set aside:\n%.600s", body)
+	}
+	var logged []string
+	for _, l := range f.logged {
+		if strings.Contains(l, "counted rather than listed") {
+			logged = append(logged, l)
 		}
 	}
-	if err := implement.ValidSensitive(sensitivePaths); err != nil {
-		t.Errorf("ValidSensitive refused a good list: %v", err)
+	if len(logged) != 1 {
+		t.Errorf("logged %q, want one line saying the paths were counted", f.logged)
 	}
-	if err := implement.ValidSensitive(nil); err != nil {
-		t.Errorf("ValidSensitive refused an empty list, which is the feature off: %v", err)
+}
+
+// The same holds for a later push: the edit counts the files rather than
+// asking GitHub every round for a description it refuses.
+func TestALaterPushOverGitHubsLimitIsCounted(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.Sensitive = sensitivePaths
+	f.deps.SizeSignal = 100000
+	f.model.then(describe("## Start here\n\nok:1\n"), manyUnder("store", 300))
+	f.tr.checks = red()
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	opened := f.tr.opened[0].Body
+	want := strings.Replace(opened, "Closes #7\n\n", "Closes #7\n\n**Sensitive:** job store schema (300 files)\n\n", 1)
+	if got := f.tr.prs[0].Body; got != want {
+		t.Errorf("description after the fix:\n%.600s\nwant:\n%.600s", got, want)
 	}
 }
