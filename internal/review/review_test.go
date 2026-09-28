@@ -432,6 +432,30 @@ func TestTheModelRunsTheSkillWithTheLinkedIssueAsTheSpec(t *testing.T) {
 	}
 }
 
+// The first piece of an issue too big for one pull request does not close it,
+// and the issue is still what the piece is reviewed against (#127). The issue
+// filed for the rest is not: it is work the pull request does not do.
+func TestAPartOfPullRequestIsReviewedAgainstItsIssue(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.desc = "<!-- afk:implement issue=7 -->\nPart of #7. The rest is #9.\n"
+	tr.issues = map[int]github.Issue{
+		7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."},
+		9: {Number: 9, Title: "The rest of #7", Body: "Expiry is left."},
+	}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	spec := strings.ReplaceAll(f.model.specs[0], tr.desc, "")
+	if !strings.Contains(spec, "A job is reserved before it runs.") {
+		t.Errorf("the spec does not carry #7:\n%s", spec)
+	}
+	if strings.Contains(spec, "Expiry is left.") {
+		t.Errorf("the spec carries the rest, which the pull request does not do:\n%s", spec)
+	}
+}
+
 // The advisory review is unaware of the sensitive line: the spec it reads is
 // the description without it, and otherwise as it was.
 func TestTheSpecLeavesOutTheSensitiveLine(t *testing.T) {
