@@ -1,4 +1,6 @@
-package review
+// Package permalink links the file:line citations in a model's text to those
+// lines at a commit on GitHub.
+package permalink
 
 import (
 	"fmt"
@@ -9,7 +11,7 @@ import (
 	"strings"
 )
 
-// citation is what permalinks reads a reply with. Leftmost first, so at any
+// citation is what Link reads a text with. Leftmost first, so at any
 // point in the reply the first alternative that matches decides: a fenced
 // block, a markdown link or a URL is left alone (group 1), an inline code span
 // is linked only when all of it is a citation (group 2), and anything else of
@@ -19,19 +21,18 @@ var citation = regexp.MustCompile("(```[\\s\\S]*?```|\\[[^\\]\\n]*\\]\\([^)\\n]*
 // whole is a code span's text when all of it is one citation.
 var whole = regexp.MustCompile(`^([A-Za-z0-9_./-]+):([0-9]+)(?:-([0-9]+))?$`)
 
-// permalinks makes each file:line the reply cites a link to that line at head,
-// so a finding still reaches the line the review read after the branch moves
-// on, and nothing has to be posted on a line of the diff (#110). The links are
-// made here rather than asked of the model: a model asked to write them may
-// not, or may write them wrongly, and the skill's sub-agents cite a plain
-// file:line.
+// Link makes each file:line the text cites a link to that line at head, in
+// repo (owner/name), so a citation still reaches the line it meant after the
+// branch moves on (#110). The links are made here rather than asked of the
+// model: a model asked to write them may not, or may write them wrongly, and
+// the skills cite a plain file:line.
 //
 // A citation is linked only when it names a file in dir, the checkout of head,
-// so a time of day or a path the review made up stays as it was written. Nothing
-// under .git is linked: that is where the workspace keeps the diff and the spec,
+// so a time of day or a path the model made up stays as it was written. Nothing
+// under .git is linked: that is where a workspace keeps the diff and the spec,
 // which are not at head. With no repository there is nothing to link to, and the
-// reply is left as it is.
-func permalinks(dir, repo, head, text string) (string, error) {
+// text is left as it is.
+func Link(dir, repo, head, text string) (string, error) {
 	if repo == "" {
 		return text, nil
 	}

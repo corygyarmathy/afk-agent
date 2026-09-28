@@ -63,6 +63,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/permalink"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -326,7 +327,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 	// Linked while the checkout of head is still here to say which
 	// citations name a file.
-	if reply.Text, err = permalinks(ws, d.Repo, head, reply.Text); err != nil {
+	if reply.Text, err = permalink.Link(ws, d.Repo, head, reply.Text); err != nil {
 		return transition.Result{}, err
 	}
 
