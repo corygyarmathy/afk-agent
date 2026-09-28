@@ -526,6 +526,28 @@ func TestCreateIssueSendsOnlyItsTitleAndBody(t *testing.T) {
 	}
 }
 
+// What the agent filed is read back closed as well as open: an issue a human
+// closed at once is still one the agent filed.
+func TestIssuesByReadsOneCreatorsIssuesInEveryState(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "GET", "/repos/o/n/issues", "application/vnd.github+json") {
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("state") != "all" || q.Get("creator") != "afk-agent[bot]" {
+			t.Errorf("query %v, want every state and the agent as creator", q)
+		}
+		fmt.Fprint(w, `[{"id":9001,"number":41,"state":"closed","title":"The rest of #7","user":{"login":"afk-agent[bot]"}}]`)
+	})
+	got, err := c.IssuesBy(context.Background(), "afk-agent[bot]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Number != 41 || got[0].State != "closed" {
+		t.Errorf("got %+v, want #41, closed", got)
+	}
+}
+
 // A dependency names its blocker by the issue's id, which is not its number.
 func TestAddBlockedBySendsTheBlockersID(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
