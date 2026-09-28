@@ -274,6 +274,7 @@ func setup(t *testing.T, tr *tracker, m *reviewer) *fixture {
 		Rounds:        2,
 		HandBackLabel: "needs-decision",
 		TierWait:      time.Hour,
+		Repo:          "owner/name",
 		Login:         agent,
 		StateDir:      t.TempDir(),
 	}
@@ -1059,13 +1060,12 @@ func TestAReviewIsPostedCollapsedUnderASummaryNamingOnlyTheHead(t *testing.T) {
 	}
 }
 
-// The prompt carries the parameters the skill takes, and what a finding needs
-// to cite a line at the reviewed head rather than on a review thread.
-func TestThePromptCarriesTheFloorTheFoldCutAndThePermalinkBase(t *testing.T) {
+// The prompt carries the parameters the skill takes, and asks for citations in
+// the form the agent links.
+func TestThePromptCarriesTheFloorAndTheFoldCut(t *testing.T) {
 	f := setup(t, newTracker(command(1)), &reviewer{})
 	f.deps.Floor = "blocker"
 	f.deps.FoldCut = 120
-	f.deps.Repo = "owner/name"
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
@@ -1073,7 +1073,7 @@ func TestThePromptCarriesTheFloorTheFoldCutAndThePermalinkBase(t *testing.T) {
 	for _, want := range []string{
 		"severity floor of `blocker`",
 		"fold cut of 120",
-		"https://github.com/owner/name/blob/" + head + "/",
+		"`path:line`",
 		"<details>",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -1128,5 +1128,74 @@ func TestAReplayedTransitionDoesNotRewriteAPostedReview(t *testing.T) {
 	}
 	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
 		t.Errorf("job = %+v, want it at rest", j)
+	}
+}
+
+// cites is a checkout of head holding the files a reply's citations name.
+func cites(files ...string) review.Checkout {
+	return func(_ context.Context, dir string, _ int) (string, error) {
+		for _, f := range append(files, ".git/afk-pr.diff") {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o644); err != nil {
+				return "", err
+			}
+		}
+		return head, nil
+	}
+}
+
+// Each file:line the reply cites is posted as a permalink at the reviewed
+// head, by the agent rather than the model (#110): a citation of a file in the
+// checkout is linked, and nothing else is.
+func TestACitationOfAFileAtTheHeadIsPostedAsAPermalink(t *testing.T) {
+	reply := strings.Join([]string{
+		"1. **should-fix**: `internal/x.go:42` is wrong.",
+		"2. **blocker**: internal/x.go:7-9 and ./docs/y.md:3.",
+		"3. Already a link: [internal/x.go:5](https://example.com/internal/x.go:5).",
+		"4. Not in the checkout: internal/gone.go:3, and at 10:30, and `internal/x.go:0`.",
+		"5. A span that is more than a citation: `f(internal/x.go:2)`.",
+		"6. Not at head: .git/afk-pr.diff:4, internal:1.",
+		"```",
+		"internal/x.go:11",
+		"```",
+	}, "\n")
+	f := setup(t, newTracker(command(1)), &reviewer{replies: []string{reply}})
+	f.deps.Checkout = cites("internal/x.go", "docs/y.md")
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	b := f.tr.byAgent()[0].Body
+	at := "https://github.com/owner/name/blob/" + head + "/"
+	for _, want := range []string{
+		"[`internal/x.go:42`](" + at + "internal/x.go#L42) is wrong",
+		"[internal/x.go:7-9](" + at + "internal/x.go#L7-L9) and [./docs/y.md:3](" + at + "docs/y.md#L3).",
+		"[internal/x.go:5](https://example.com/internal/x.go:5).",
+		"Not in the checkout: internal/gone.go:3, and at 10:30, and `internal/x.go:0`.",
+		"`f(internal/x.go:2)`",
+		"Not at head: .git/afk-pr.diff:4, internal:1.",
+		"```\ninternal/x.go:11\n```",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the review does not contain %q:\n%s", want, b)
+		}
+	}
+	if n := strings.Count(b, at); n != 3 {
+		t.Errorf("%d permalinks, want 3:\n%s", n, b)
+	}
+}
+
+// With no repository there is nothing to build a permalink on, and the
+// citations are posted as the model wrote them rather than as broken links.
+func TestWithoutARepositoryCitationsArePostedAsWritten(t *testing.T) {
+	f := setup(t, newTracker(command(1)), &reviewer{replies: []string{"See `internal/x.go:42`."}})
+	f.deps.Checkout = cites("internal/x.go")
+	f.deps.Repo = ""
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if b := f.tr.byAgent()[0].Body; !strings.Contains(b, "See `internal/x.go:42`.") || strings.Contains(b, "github.com") {
+		t.Errorf("the citation was not posted as written:\n%s", b)
 	}
 }

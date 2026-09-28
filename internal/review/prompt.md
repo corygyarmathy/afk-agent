@@ -32,11 +32,12 @@ This workspace is not the one the skill expects, in three ways:
 Your reply is posted for you as one comment on the pull request, whole, inside
 one `<details>` whose summary names the head and nothing else. So:
 
-- **Cite every `file:line` as a permalink at the reviewed head**, so that it
-  still points at the line you read after the branch moves on:
-  `[path/to/file.go:42](https://github.com/{{.Repo}}/blob/{{.Head}}/path/to/file.go#L42)`,
-  and `#L42-L48` for a range. Nothing is posted on a line of the diff, so the
-  permalink is the only way a reader reaches the line.
+- **Cite every line as `path:line`**, or `path:first-last` for a range, with
+  the path from the root of this checkout, and keep that form when you gather
+  the sub-agents' reports. Write no links yourself: when your reply is posted,
+  each citation of a file in this checkout becomes a permalink at the reviewed
+  head, which is the only way a reader reaches the line, because nothing is
+  posted on a line of the diff.
 - **Add no wrapper and no summary of your own.** No `<details>`, no counts by
   severity, no verdict: the report the skill describes is the whole reply.
 

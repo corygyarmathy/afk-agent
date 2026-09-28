@@ -143,8 +143,9 @@ type Deps struct {
 	Floor   string
 	FoldCut int
 
-	// Repo is the pull request's repository, as owner/name: what a finding's
-	// permalink at the reviewed head is built on.
+	// Repo is the pull request's repository, as owner/name: what the
+	// permalinks at the reviewed head that the reply's citations become are
+	// built on. Unset, the citations are posted as the model wrote them.
 	Repo string
 
 	// Login is the agent's own account: whose reaction is a claim, and whose
@@ -297,10 +298,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err := prompt.Execute(&text, struct {
 		Number  int
 		Head    string
-		Repo    string
 		Floor   string
 		FoldCut int
-	}{n, head, d.Repo, d.Floor, d.FoldCut}); err != nil {
+	}{n, head, d.Floor, d.FoldCut}); err != nil {
 		return transition.Result{}, err
 	}
 
@@ -322,6 +322,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	}
 	if err != nil {
+		return transition.Result{}, err
+	}
+	// Linked while the checkout of head is still here to say which
+	// citations name a file.
+	if reply.Text, err = permalinks(ws, d.Repo, head, reply.Text); err != nil {
 		return transition.Result{}, err
 	}
 
