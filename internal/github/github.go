@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -470,6 +471,25 @@ func (c *Client) CreateIssue(ctx context.Context, is NewIssue) (Issue, error) {
 		return Issue{}, err
 	}
 	return w.issue(), nil
+}
+
+// IssuesBy lists every issue and pull request login opened, open and closed,
+// to the last page: what the agent filed, read back whatever a human has since
+// done to it.
+func (c *Client) IssuesBy(ctx context.Context, login string) ([]Issue, error) {
+	u, err := c.repoURL("/issues?state=all&creator=%s&per_page=%d", url.QueryEscape(login), perPage)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := all[wireIssue](ctx, c, u)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Issue, len(ws))
+	for i, w := range ws {
+		out[i] = w.issue()
+	}
+	return out, nil
 }
 
 // BlockedBy lists the issues that block issue n through its native
