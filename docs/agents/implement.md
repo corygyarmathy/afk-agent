@@ -28,7 +28,7 @@ label, when `afk` is given `--eligibility-label`
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
 | `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
-| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. [`afk caught`](#what-ci-caught) counts what is logged. |
+| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failed and timed-out checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. A cancelled check goes back for the fix but is not logged. [`afk caught`](#what-ci-caught) counts the same catches from GitHub, with the differences listed there. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
@@ -341,9 +341,9 @@ A hand-back moves the job to `handing-back`, and `afk run implement-handed-back
 
 ## What CI caught
 
-`afk caught` counts the catches: every check that failed on a head the agent
-pushed, once for each head. It reads them from GitHub's workflow runs and keeps
-nothing ([ADR 0006](../adr/0006-what-ci-caught-is-read-from-github-not-recorded.md)).
+`afk caught` counts the catches: every check that failed or timed out on a head
+the agent pushed, once for each head. It reads them from GitHub's workflow runs
+and keeps nothing ([ADR 0006](../adr/0006-what-ci-caught-is-read-from-github-not-recorded.md)).
 It takes `--repo`, `--app-id` and `--app-key`, and nothing else.
 
 ```bash
@@ -351,6 +351,21 @@ afk caught          # each check and how many heads it failed on, then what that
 afk caught --list   # every catch first: when, the head, its branch, the check, the job's page
 ```
 
-Only GitHub Actions is read. A run cancelled by a newer push is not a catch.
-When GitHub serves only part of the failed runs, the output says how many it
-served and how many there are.
+The count and the watch's log line name the same catches, except where:
+
+- The check is not a GitHub Actions job. The watch logs it; `afk caught` reads
+  Actions only.
+- A human re-ran the check and it passed. The watch logged it when it failed;
+  GitHub then serves the run as green, and it is not a catch.
+- The run is older than GitHub keeps: 90 days at most on a public repository,
+  from 2026-10-01.
+- The log line was written twice, when a watch's commit failed. The count is
+  once.
+
+A check that had already failed when a human's push cancelled its run is a
+catch in both. A check that was itself cancelled is a catch in neither.
+
+The output ends by saying how many runs the agent started, and warns when that
+is none, which is more likely a wrong login than a quiet agent. When GitHub
+serves only part of the runs that did not pass, it says how many it served and
+how many there are.

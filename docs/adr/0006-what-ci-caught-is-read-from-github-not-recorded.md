@@ -24,22 +24,33 @@ place is the backup ADR 0001 §6 says should be a loud signal.
 
 GitHub already holds the record. The gate runs before every push the agent
 makes, so every head the agent pushed passed it, and a catch is a workflow job
-that failed on one of those heads. The Actions API names the account whose push
+that failed on one of those heads. The Actions API names the account that
 started each run, and keeps how each of its jobs finished.
 
 ## Decision
 
 **1. A catch is read from GitHub when someone asks, and the agent writes
-nothing to record it.** `afk caught` lists the workflow runs whose pushes were
-the agent's own `[bot]` account's and that failed, reads their jobs, and counts
-each failed or timed-out job as a catch. A check is counted once for each head,
-however many runs saw it fail there, so the count is exact where the log is at
-least once. The operator reads it. Nothing else does, and nothing aggregates it
-on a schedule.
+nothing to record it.** `afk caught` reads the workflow runs the agent's own
+`[bot]` account started on the heads it pushed, and counts the jobs that failed
+on them. The operator reads it. Nothing else does, and nothing aggregates it on
+a schedule.
 
-**2. The log line stays.** It is what the operator sees in the journal when a
-catch happens. `afk caught` is what counts catches. Neither replaces the other,
-and a duplicated log line no longer changes a count.
+**2. A catch is one check on one head.** It holds the head, its branch, the
+check, the failed job's page, and when the run was created. A check is counted
+once for each head, however many runs saw it fail there, so the count is exact
+where the log is at least once. A check that fails again on the next head - the
+fix did not fix it - is the next catch: the gate passed that head too, so it let
+the failure through again. The fix round, the pull request and the job are not
+held; the head and its branch lead to each of them.
+
+**3. A check a human re-runs green is not a catch.** A failure that passes when
+nothing changed is one no gate could have caught, which is not what §8 asks
+about.
+
+**4. The log line stays, and names the same catches.** It is what the operator
+sees in the journal when a catch happens, and `afk caught` is what counts
+catches. Neither replaces the other, and a duplicated log line no longer changes
+a count.
 
 ## Consequences
 
@@ -49,8 +60,8 @@ and a duplicated log line no longer changes a count.
   stands: the record is work state, and GitHub owns it.
 - A wipe of the store or the state directory loses nothing that `afk caught`
   reads.
-- Every catch since the agent first pushed is counted, including those made
-  before this was built.
+- Every catch GitHub still keeps is counted, including those made before this
+  was built.
 
 **Negative**
 
@@ -58,15 +69,24 @@ and a duplicated log line no longer changes a count.
   reads through the Checks API and can fail on, is not counted. This
   repository's CI is Actions alone.
 - The App needs Actions: read, which it did not need before.
-- It lasts only as long as GitHub keeps the runs. GitHub's API documentation
-  does not say how long that is. GitHub also serves only the first thousand
-  runs of a filtered listing, newest first, so a longer history is counted in
+- It lasts only as long as GitHub keeps the runs. From 2026-10-01 a workflow
+  run is kept for the repository's Actions retention period, which defaults to
+  90 days and can be at most 90 on a public repository and 400 on a private
+  one; before then runs were kept 400 days or more
+  ([changelog](https://github.blog/changelog/2026-08-27-actions-retention-will-cover-checks-workflow-runs-and-statuses/),
+  [settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)).
+  This repository and `corygyarmathy/dotfiles` are both public, so `afk caught`
+  counts the last 90 days at most. That is a window, not the durable record
+  issue #86 asked for, and a longer one needs the agent to keep a copy after
+  all.
+- GitHub serves only the first thousand runs of a filtered listing, newest
+  first, though its count is of all of them, so a longer history is counted in
   part. `afk caught` says so when it happens.
-- A check that failed and was then re-run green by a human is expected to read
-  as not failed. A run's conclusion is taken to be its latest attempt's, so the
-  listing would not serve it. This has not been checked against GitHub.
-- It costs a request per failed run each time it is asked, which is fine by
-  hand and is why nothing asks on a schedule.
+- A pull request a human opens from a branch the agent pushed may have its
+  first run read as the human's, and its catches missed. GitHub documents the
+  `actor` filter as the account that made the push, and a run's actor as the
+  account that triggered it; which one it is when they differ has not been
+  checked.
 
 ## Alternatives considered
 

@@ -125,7 +125,7 @@ A red CI run sent back to the session that wrote the branch, to be fixed and pus
 _Avoid_: CI round, fix round
 
 **Catch**:
-A check that failed on a head the agent pushed, which the local gate had passed. Counted once for each head and check, however many runs saw it fail there. Distinct from a fix: a fix is what the agent does about a red run, and a catch is what the red run says about the gate.
+A check that failed or timed out on a head the agent pushed, which the local gate had passed. Counted once for each head and check, however many runs saw it fail there. A check that was cancelled, or passed when a human re-ran it, is not one. Distinct from a fix: a fix is what the agent does about a red run, and a catch is what the red run says about the gate.
 _Avoid_: CI miss, escape
 
 **Resource token**:
