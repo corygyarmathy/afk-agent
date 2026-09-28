@@ -212,6 +212,8 @@ func (tr *tracker) claimed(id int64) bool {
 // reviewer is a fixture model: each call takes the next answer.
 type reviewer struct {
 	answers []error
+	// replies, by call, replace the fixture's reply text.
+	replies []string
 	asked   []opencode.Request
 	diffs   []string
 	specs   []string
@@ -230,7 +232,11 @@ func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 	if err != nil {
 		return opencode.Reply{}, err
 	}
-	return opencode.Reply{Text: "The change is sound. One nit: Reserve has no test.", Cost: 0.0123}, nil
+	text := "The change is sound. One nit: Reserve has no test."
+	if i := len(m.asked) - 1; i < len(m.replies) {
+		text = m.replies[i]
+	}
+	return opencode.Reply{Text: text, Cost: 0.0123}, nil
 }
 
 func transient(ref model.Ref) error {
@@ -1023,5 +1029,104 @@ func TestAMarkerFromAnyoneElseIsNotARequest(t *testing.T) {
 	}
 	if posted := tr.byAgent(); len(posted) == 1 && strings.Contains(posted[0].Body, "implement job") {
 		t.Error("the review says the implement job asked for it")
+	}
+}
+
+// The review is posted so that reading it after the operator's own reading is
+// the easy path (#124): one comment, all of it inside one <details>, whose
+// summary names the head and nothing else - no counts, no verdict.
+func TestAReviewIsPostedCollapsedUnderASummaryNamingOnlyTheHead(t *testing.T) {
+	f := setup(t, newTracker(command(1)), &reviewer{})
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	posted := f.tr.byAgent()
+	if len(posted) != 1 {
+		t.Fatalf("%d comments from the agent, want 1", len(posted))
+	}
+	b := strings.TrimSpace(posted[0].Body)
+	if !strings.HasPrefix(b, "<details>") || !strings.HasSuffix(b, "</details>") || strings.Count(b, "<details>") != 1 {
+		t.Fatalf("the review is not wholly inside one <details>:\n%s", b)
+	}
+	summary := "<summary>Advisory review of <code>" + git.Short(head) + "</code>. Open it after your own reading.</summary>"
+	if !strings.HasPrefix(b, "<details>\n"+summary+"\n") {
+		t.Errorf("the review's summary is not %q:\n%s", summary, b)
+	}
+	for _, want := range []string{review.Marker(head), "does not gate or block merging", "Reserve has no test"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the review does not contain %q:\n%s", want, b)
+		}
+	}
+}
+
+// The prompt carries the parameters the skill takes, and what a finding needs
+// to cite a line at the reviewed head rather than on a review thread.
+func TestThePromptCarriesTheFloorTheFoldCutAndThePermalinkBase(t *testing.T) {
+	f := setup(t, newTracker(command(1)), &reviewer{})
+	f.deps.Floor = "blocker"
+	f.deps.FoldCut = 120
+	f.deps.Repo = "owner/name"
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	prompt := f.model.asked[0].Prompt
+	for _, want := range []string{
+		"severity floor of `blocker`",
+		"fold cut of 120",
+		"https://github.com/owner/name/blob/" + head + "/",
+		"<details>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt does not contain %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// Unset, the floor and the fold cut are the skill's own defaults: the prompt
+// names no value of its own for either.
+func TestWithoutAFloorOrAFoldCutThePromptLeavesTheSkillsDefaults(t *testing.T) {
+	f := setup(t, newTracker(command(1)), &reviewer{})
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	prompt := f.model.asked[0].Prompt
+	for _, want := range []string{"the skill's default severity floor", "its default fold cut"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt does not contain %q:\n%s", want, prompt)
+		}
+	}
+	for _, unwanted := range []string{"severity floor of `", "fold cut of "} {
+		if strings.Contains(prompt, unwanted) {
+			t.Errorf("the prompt names a value for %q:\n%s", unwanted, prompt)
+		}
+	}
+}
+
+// An advisory review is append-only (#123): once posted it is never edited or
+// deleted. A replayed transition - here verify, its commit lost after the
+// review landed - runs the model again, and a different reply leaves the
+// posted review as it was.
+func TestAReplayedTransitionDoesNotRewriteAPostedReview(t *testing.T) {
+	tr := newTracker(command(1))
+	m := &reviewer{replies: []string{"The first reply.", "A different reply."}}
+	f := setup(t, tr, m)
+	f.run.Store = &losesCommit{Store: f.store, state: review.Start}
+
+	f.drive()
+	if len(m.asked) != 2 {
+		t.Fatalf("the model ran %d times; the lost commit should have replayed the review", len(m.asked))
+	}
+	posted := tr.byAgent()
+	if len(posted) != 1 {
+		t.Fatalf("%d comments from the agent, want the one review", len(posted))
+	}
+	if b := posted[0].Body; !strings.Contains(b, "The first reply.") || strings.Contains(b, "A different reply.") {
+		t.Errorf("the posted review was rewritten:\n%s", b)
+	}
+	if tr.posts != 1 {
+		t.Errorf("posted %d times, want 1", tr.posts)
+	}
+	if j := f.now(); j.State != review.Start || !j.NextRunAt.IsZero() {
+		t.Errorf("job = %+v, want it at rest", j)
 	}
 }

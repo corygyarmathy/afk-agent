@@ -83,6 +83,18 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--size-signal <n>     AFK_SIZE_SIGNAL",
 		},
 		{
+			name:     "help lists the review's severity floor",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--review-floor <s>    AFK_REVIEW_FLOOR",
+		},
+		{
+			name:     "help lists the review's fold cut",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--review-fold-cut <n> AFK_REVIEW_FOLD_CUT",
+		},
+		{
 			name:     "version",
 			args:     []string{"version"},
 			want:     ExitOK,
@@ -1015,6 +1027,39 @@ func (closedTracker) RequiredChecks(context.Context, string) ([]string, error) {
 
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
+}
+
+// The floor and the fold cut are the skill's inputs, passed through (#124).
+// Unset is not an error: the skill's own defaults hold, and none is chosen here.
+func TestTheReviewsFloorAndFoldCutAreReadFromTheParameters(t *testing.T) {
+	t.Setenv("AFK_REVIEW_FLOOR", "")
+	t.Setenv("AFK_REVIEW_FOLD_CUT", "")
+
+	rp, err := (&params{reviewFloor: "consider", reviewFoldCut: "120"}).review()
+	if err != nil || rp.floor != "consider" || rp.foldCut != 120 {
+		t.Errorf("review() = %+v, %v; want consider and 120", rp, err)
+	}
+	if rp, err := (&params{}).review(); err != nil || rp.floor != "" || rp.foldCut != 0 {
+		t.Errorf("unset: review() = %+v, %v; want neither, and no error", rp, err)
+	}
+	t.Setenv("AFK_REVIEW_FLOOR", "blocker")
+	t.Setenv("AFK_REVIEW_FOLD_CUT", "30")
+	if rp, err := (&params{}).review(); err != nil || rp.floor != "blocker" || rp.foldCut != 30 {
+		t.Errorf("from the environment: review() = %+v, %v; want blocker and 30", rp, err)
+	}
+
+	for _, tc := range []struct {
+		p    params
+		want string
+	}{
+		{params{reviewFloor: "nit"}, "--review-floor"},
+		{params{reviewFoldCut: "small"}, "--review-fold-cut"},
+		{params{reviewFoldCut: "0"}, "--review-fold-cut"},
+	} {
+		if _, err := tc.p.review(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("review(%+v) = %v, want an error naming %s", tc.p, err, tc.want)
+		}
+	}
 }
 
 func TestModelChoiceIsReadFromTheParameters(t *testing.T) {

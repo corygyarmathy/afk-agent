@@ -80,6 +80,16 @@ Model choice, for afk run and afk work:
                                             run tries the next candidate
   --catalogue-age <dur> AFK_CATALOGUE_AGE   how long the cached catalogue is used
 
+What a review reports, for afk run and afk work:
+
+  --review-floor <s>    AFK_REVIEW_FLOOR     the least severity a review reports: blocker,
+                                             should-fix or consider
+  --review-fold-cut <n> AFK_REVIEW_FOLD_CUT  changed lines below which a review folds
+                                             Approach into Correctness
+
+Both are the reviewing-changes skill's inputs, passed to it in the review's
+prompt. Without them the skill's own defaults hold: should-fix, and 50.
+
 What a job says on the tracker, for afk run and afk work:
 
   --effect-rounds <n>   AFK_EFFECT_ROUNDS    times a push, a pull request, a comment or a label
@@ -173,6 +183,9 @@ type params struct {
 	modelAttempts string
 	tierWait      string
 	modelTimeout  string
+
+	reviewFloor   string
+	reviewFoldCut string
 
 	effectRounds  string
 	handBackLabel string
@@ -626,6 +639,40 @@ func (p *params) bindModel(fs *flag.FlagSet) {
 	fs.StringVar(&p.modelAttempts, "model-attempts", "", "candidates tried before a tier is exhausted (AFK_MODEL_ATTEMPTS)")
 	fs.StringVar(&p.tierWait, "tier-wait", "", "how long an exhausted tier defers (AFK_TIER_WAIT)")
 	fs.StringVar(&p.modelTimeout, "model-timeout", "", "the longest one model run may take (AFK_MODEL_TIMEOUT)")
+}
+
+// bindReview binds what a review reports: the reviewing-changes skill's
+// severity floor and fold cut.
+func (p *params) bindReview(fs *flag.FlagSet) {
+	fs.StringVar(&p.reviewFloor, "review-floor", "", "the least severity a review reports: blocker, should-fix or consider (AFK_REVIEW_FLOOR)")
+	fs.StringVar(&p.reviewFoldCut, "review-fold-cut", "", "changed lines below which a review folds Approach into Correctness (AFK_REVIEW_FOLD_CUT)")
+}
+
+// reviewParams is what a review reports, resolved. Zero values are unset.
+type reviewParams struct {
+	floor   string
+	foldCut int
+}
+
+// review resolves what a review reports. Both are optional, and neither is
+// defaulted here: they are the skill's inputs, the skill has defaults of its
+// own, and an unset one leaves the skill's in place rather than choosing a
+// second value in Go. The severities are the skill's words, checked so that a
+// typo fails here rather than reaching a model that would guess.
+func (p *params) review() (reviewParams, error) {
+	var rp reviewParams
+	switch rp.floor = optional(p.reviewFloor, "AFK_REVIEW_FLOOR"); rp.floor {
+	case "", "blocker", "should-fix", "consider":
+	default:
+		return reviewParams{}, usagef("--review-floor: %q is not blocker, should-fix or consider", rp.floor)
+	}
+	if v := optional(p.reviewFoldCut, "AFK_REVIEW_FOLD_CUT"); v != "" {
+		var err error
+		if rp.foldCut, err = count(v, "review-fold-cut"); err != nil {
+			return reviewParams{}, err
+		}
+	}
+	return rp, nil
 }
 
 // bindImplement binds what implementing an issue needs beyond the tracker.
