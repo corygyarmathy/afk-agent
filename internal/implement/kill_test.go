@@ -111,6 +111,9 @@ func TestKillingAnImplementAnywhereStillProducesOneOfEach(t *testing.T) {
 			if n := len(got.Reactions[1]); n != 1 || !intake.Claimed(got.Reactions[1], agent) {
 				t.Errorf("the command has %d reactions after a kill at %s, want the one claim", n, at)
 			}
+			if n := len(got.IssueEyes); n != 1 || !intake.Claimed(got.IssueEyes, agent) {
+				t.Errorf("the issue has %d reactions after a kill at %s, want the one claim", n, at)
+			}
 		})
 	}
 }
@@ -447,6 +450,7 @@ type killTracker struct {
 type killFile struct {
 	Comments  []github.Comment
 	Reactions map[int64][]github.Reaction
+	IssueEyes []github.Reaction
 	PRs       []github.PullRequest
 	Opened    int
 	Labels    []string
@@ -574,11 +578,22 @@ func (ft *killTracker) Label(_ context.Context, n int, label string) error {
 	return nil
 }
 
+// Only the issue is claimed this way: there is one.
 func (ft *killTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
-	return nil, nil
+	f, err := ft.load()
+	return f.IssueEyes, err
 }
 
-func (ft *killTracker) ReactToIssue(context.Context, int, string) error { return nil }
+func (ft *killTracker) ReactToIssue(_ context.Context, _ int, content string) error {
+	f, err := ft.load()
+	if err != nil {
+		return err
+	}
+	if !intake.Claimed(f.IssueEyes, agent) {
+		f.IssueEyes = append(f.IssueEyes, github.Reaction{Login: agent, Content: content})
+	}
+	return ft.save(f)
+}
 
 func (ft *killTracker) RequiredChecks(context.Context, string) ([]string, error) {
 	return nil, nil
