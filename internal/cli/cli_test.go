@@ -83,13 +83,13 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--size-signal <n>     AFK_SIZE_SIGNAL",
 		},
 		{
-			name:     "help lists the review's severity floor",
+			name:     "help lists the advisory review's severity floor",
 			args:     []string{"help"},
 			want:     ExitOK,
 			stdoutIs: "--review-floor <s>    AFK_REVIEW_FLOOR",
 		},
 		{
-			name:     "help lists the review's fold cut",
+			name:     "help lists the advisory review's fold cut",
 			args:     []string{"help"},
 			want:     ExitOK,
 			stdoutIs: "--review-fold-cut <n> AFK_REVIEW_FOLD_CUT",
@@ -718,7 +718,7 @@ func TestTheLoginIsReadOnce(t *testing.T) {
 // tracker through the one the command built, so a process has one token and
 // one login (ADR 0005 §5).
 func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS", "AFK_EFFECT_ROUNDS", "AFK_HAND_BACK_LABEL"} {
+	for _, env := range []string{"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_REVIEW_NEEDS", "AFK_EFFECT_ROUNDS", "AFK_HAND_BACK_LABEL", "AFK_REVIEW_FLOOR", "AFK_REVIEW_FOLD_CUT"} {
 		t.Setenv(env, "")
 	}
 	// A login already read, so nothing here reaches a network.
@@ -733,6 +733,8 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 		modelTimeout:  "45m",
 		effectRounds:  "4",
 		handBackLabel: "needs-decision",
+		reviewFloor:   "consider",
+		reviewFoldCut: "120",
 	}
 
 	deps, err := reviewDeps(context.Background(), p, nil, tr)
@@ -741,6 +743,9 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 	}
 	if deps.Bound != 3 || deps.Rounds != 4 || deps.HandBackLabel != "needs-decision" {
 		t.Errorf("deps = %+v, want the attempt bound, the rounds and the hand-back label read from the parameters", deps)
+	}
+	if deps.Floor != "consider" || deps.FoldCut != 120 || deps.Repo != "o/n" {
+		t.Errorf("floor %q, fold cut %d, repo %q; want consider, 120 and the tracker's o/n", deps.Floor, deps.FoldCut, deps.Repo)
 	}
 	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); deps.Model != want {
 		t.Errorf("model = %+v, want %+v", deps.Model, want)
@@ -752,6 +757,8 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
 		{func(p *params) { p.effectRounds = "0" }, "--effect-rounds"},
 		{func(p *params) { p.handBackLabel = "" }, "--hand-back-label is required"},
+		{func(p *params) { p.reviewFloor = "nit" }, "--review-floor"},
+		{func(p *params) { p.reviewFoldCut = "0" }, "--review-fold-cut"},
 	} {
 		spoilt := p
 		tc.spoil(&spoilt)
