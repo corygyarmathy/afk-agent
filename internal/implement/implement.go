@@ -12,15 +12,16 @@
 //	                                         implementing  it failed: back to the session that wrote it
 //	                                         handing-back  hand-back on the issue
 //	pushing      --implement-push--------->  opening       the denylist, then the push
-//	                                         implementing  over the size signal: back to the session, once, to be cut
+//	                                         pushing       over the size signal: the work as it is to its whole branch, under the next key
+//	                                         implementing  ... and seen there: back to the session, once, to be cut
 //	                                         handing-back  a denied path, or out of rounds: hand-back
 //	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
-//	                                         opening       a first piece's rest: filed, blocked and linked, each under the next key
+//	                                         opening       a first piece's rest: filed, then blocked, each under the next key
 //	                                         opening       the pull request's sensitive line, edited under the next key
 //	                                         opening       the pull request, under the next key
 //	                                         pushing       the push is not on the remote: again
 //	                                         handing-back  someone else pushed, the work is over the size signal,
-//	                                                       or the pull request is out of rounds
+//	                                                       or a first piece's rest or the pull request is out of rounds
 //	watching     --implement-watch-------->  reviewing     CI is green on the pushed head
 //	                                         watching      not finished: again after the CI wait
 //	                                         implementing  red: back to the session, with what CI said
@@ -100,7 +101,7 @@ type Tracker interface {
 	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
 	EditPullRequest(ctx context.Context, number int, body string) error
-	OpenIssues(ctx context.Context) ([]github.Issue, error)
+	IssuesBy(ctx context.Context, login string) ([]github.Issue, error)
 	CreateIssue(ctx context.Context, is github.NewIssue) (github.Issue, error)
 	BlockedBy(ctx context.Context, n int) ([]github.Issue, error)
 	AddBlockedBy(ctx context.Context, n int, blocker int64) error

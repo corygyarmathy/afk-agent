@@ -26,8 +26,8 @@ label, when `afk` is given `--eligibility-label`
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
-| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push goes back to the session instead, once, to be [cut](#the-size-signal). |
-| `implement-open` | `opening` | Reads the push back from the remote, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, files a first piece's rest, blocks it and names it in the link line, then brings the sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
+| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
+| `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failing checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
@@ -88,9 +88,11 @@ has the reasoning. The code is
 [`internal/implement/description.go`](../../internal/implement/description.go).
 Its sections, in this order, each left out when it has nothing to say:
 
-1. **The link line**, `Closes #N`, or `Part of #N` on a first piece, which
-   names the issue filed for the rest once it is filed
-   ([the size signal](#the-size-signal)). The agent's.
+1. **The link line**, `Closes #N`, or `Part of #N. The rest is #R.` on a
+   first piece, naming the issue filed for the rest
+   ([the size signal](#the-size-signal)). The advisory review reads that line
+   back ([`review.md`](review.md)), so it is the one straight after the
+   marker. The agent's.
 2. **The sensitive line**, only on a pull request that touches a sensitive
    path: `**Sensitive:** job store schema (…), CI (…)`, each label the
    operator named that matched, in the operator's order, with the files it
@@ -182,18 +184,34 @@ non-test lines the work may have before its size needs a decision. The code is
   what is left to `.git/afk-remainder.md`, and give the piece a title as the
   description file's first line. A refactor the rest needs is the natural
   first piece, and an incidental one goes in the rest. The piece is gated and
-  measured again. There is no second cut, and a fix after the push is never
-  cut.
-- **A piece under the signal opens as part of the issue**: `Part of #N` in
-  place of `Closes #N`, under the session's title. Then the agent files the
-  rest as a new issue in the same repository: what the session said is left,
-  and a link to the pull request. It is blocked by the issue with a native
-  dependency, and carries no label, so whether and when it is worked is the
-  operator's decision. Last, the pull request's link line names it:
-  `Part of #N. The rest is #R.` Each of the three is read back from the
-  tracker and made under the next key until it is there. A rest never filed
-  hands the pull request back. A dependency or a link line that never lands
-  is a log line, and the work goes on.
+  measured again, with the gate's attempts afresh, as a fix has. There is no
+  second cut, and a fix after the push is never cut.
+- **The work is kept before it is cut.** It is pushed as it is to
+  `<branch>-whole` first, and read back there, so nothing the cut does loses
+  it: a cut that fails - its gate red to the last attempt, nothing committed,
+  or the branch switched - hands back on the issue naming that branch rather
+  than saying nothing was pushed, and a rest's issue names it too, since some
+  of what is left may be written there. A new branch skips a number whose
+  `-whole` is still on the remote. A `-whole` branch the agent did not push is
+  left alone, and the work is not cut: it is pushed as it is, and handed back
+  as over the signal. So is work whose `-whole` push never lands. The agent
+  never deletes a `-whole` branch; that is the operator's, once the work is
+  merged or dropped.
+- **A piece under the signal opens as part of the issue.** Before its pull
+  request opens, the agent files the rest as a new issue in the same
+  repository: what the session said is left, and the branch that is the first
+  piece. It is blocked by the issue with a native dependency, and carries no
+  label, so whether and when it is worked is the operator's decision. Then the
+  pull request opens once, under the session's title, with
+  `Part of #N. The rest is #R.` in place of `Closes #N`, and GitHub's
+  cross-reference puts it on the rest's timeline. The rest and its dependency
+  are each read back from the tracker and made under the next key until they
+  are there. The rest is read back closed as well as open, so one the operator
+  closes at once is not filed again. A rest never filed hands the work back on
+  the issue, as a pull request never opened does. A dependency that never
+  lands fails nothing: the description says so under the link line, for the
+  operator to add by hand. Once seen, the dependency is not made again, so one
+  the operator removes stays removed.
 - **A session may stop at a first piece by itself**, as the prompt tells it
   it can, and say what is left in the same file. Its pull request is a piece
   too, with no cut: `Part of`, not `Closes`, so merging it does not close an
@@ -201,7 +219,8 @@ non-test lines the work may have before its size needs a decision. The code is
 - **A piece still over the signal**, or work the session left as it was
   because it found no coherent piece, is pushed and no pull request is opened.
   The issue gets a hand-back with both counts, the signal, the cut and the
-  branch, so the work is kept and a human decides what becomes of it. At the
+  branch - and `<branch>-whole`, the work before the cut - so the work is kept
+  and a human decides what becomes of it. At the
   signal or under it, nothing changes.
 - **The override** is the instructions of the command the job claimed, and
   only those: "don't split" or "do not split", anywhere in them, opens the pull
@@ -252,7 +271,7 @@ The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session, the session's description and what it says is left,
-whether the work was cut, the rest's issue, the sensitive line, gate attempts
+whether the work was cut and the commit kept on `<branch>-whole`, the rest's issue and whether it was blocked, the sensitive line, gate attempts
 and fixes, the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.

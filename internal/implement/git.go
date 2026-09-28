@@ -47,9 +47,11 @@ func prepare(ctx context.Context, remote git.Remote, dir, prefix string, issue i
 			taken[strings.TrimPrefix(ref, "refs/heads/")] = true
 		}
 	}
+	// A branch whose whole is still there is taken too: its cut would find
+	// the work kept for an earlier one where it keeps its own.
 	for k := 1; ; k++ {
 		branch = prefix + strconv.Itoa(issue) + "-" + strconv.Itoa(k)
-		if !taken[branch] {
+		if !taken[branch] && !taken[wholeBranch(branch)] {
 			break
 		}
 	}
@@ -61,6 +63,13 @@ func prepare(ctx context.Context, remote git.Remote, dir, prefix string, issue i
 		return "", "", "", err
 	}
 	return branch, base, into, nil
+}
+
+// wholeBranch is where work sent back to be cut is pushed first, as it was, so
+// that nothing the cut does can lose it (#127). Not spelled as a branch of the
+// agent's (IssueOf): a pull request opened from it is a human's.
+func wholeBranch(branch string) string {
+	return branch + "-whole"
 }
 
 // relay copies the workspace's branch into relayDir, a bare repository only

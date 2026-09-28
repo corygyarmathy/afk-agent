@@ -8,7 +8,9 @@ merging on its own. A refactor the rest needs is the natural first piece. A
 refactor the work does not need goes in the rest, and is never mixed into the
 piece. Rewrite the commits on `{{.Branch}}` so that it holds the piece and
 nothing else - reset it and commit again if you need to, but do not create,
-switch or delete branches - and run the local gate, `{{.Gate}}`, on it.
+switch or delete branches - and run the local gate, `{{.Gate}}`, on it. The
+work as it stands is kept on the remote as `{{.Kept}}`, so nothing you reset
+away is lost: it is named in the issue filed for the rest.
 
 Then write what is left to `.git/afk-remainder.md`, in GitHub-flavoured
 markdown: the agent files it as a new issue, for a human to decide on. Say

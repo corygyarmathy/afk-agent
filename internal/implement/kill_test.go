@@ -182,9 +182,10 @@ func TestKillingAHandBackStillHandsBackOnce(t *testing.T) {
 	}
 }
 
-// Work over the size signal is pushed once and handed back once, on the issue,
-// and killing the process between the commit that decides either and the
-// effect, then running again, still does. No pull request is opened.
+// Work over the size signal whose session finds no piece to cut it to is kept
+// as it was once, pushed once and handed back once, on the issue, and killing
+// the process between the commit that decides any of them and the effect, then
+// running again, still does. No pull request is opened.
 func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
 	for _, at := range []string{"before-push", "after-push", "before-hand-back-commit", "before-hand-back", "before-hand-back-label"} {
 		t.Run(at, func(t *testing.T) {
@@ -221,11 +222,15 @@ func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1"); len(strings.Fields(pushes)) != 1 {
-				t.Errorf("%d pushes to afk/7-1 after a kill at %s, want 1:\n%s", len(strings.Fields(pushes)), at, pushes)
+			// The work is kept as it was before it went back to be cut,
+			// and the cut, which leaves it as it is, is pushed too.
+			for _, branch := range []string{"afk/7-1", "afk/7-1-whole"} {
+				if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/"+branch); len(strings.Fields(pushes)) != 1 {
+					t.Errorf("%d pushes to %s after a kill at %s, want 1:\n%s", len(strings.Fields(pushes)), branch, at, pushes)
+				}
 			}
-			if branches, _ := run(remote, "git", "for-each-ref", "--format=%(refname)", "refs/heads/afk/"); branches != "refs/heads/afk/7-1" {
-				t.Errorf("branches %q after a kill at %s, want afk/7-1 alone: the work done once", branches, at)
+			if branches, _ := run(remote, "git", "for-each-ref", "--format=%(refname)", "refs/heads/afk/"); branches != "refs/heads/afk/7-1\nrefs/heads/afk/7-1-whole" {
+				t.Errorf("branches %q after a kill at %s, want afk/7-1 and its whole: the work done once", branches, at)
 			}
 			var handBacks, others int
 			for _, c := range got.Comments {
@@ -250,14 +255,15 @@ func TestKillingASizeHandBackPushesAndHandsBackOnce(t *testing.T) {
 	}
 }
 
-// Work over the size signal is cut once, and its piece is pushed once and
-// opened once, as part of the issue. The rest is filed once, blocked by the
-// issue once, and named in the link line, and killing the process anywhere on
-// the way, then running again, still does (#127).
+// Work over the size signal is kept as it is once, cut once, and its piece is
+// pushed once and opened once, as part of the issue. The rest is filed once
+// and blocked by the issue once before it, and named in its link line, and
+// killing the process anywhere on the way, then running again, still does
+// (#127).
 func TestKillingACutStillFilesTheRestOnceAndOpensOnce(t *testing.T) {
 	for _, at := range []string{
 		"model", "before-cut-commit", "after-cut", "before-push", "after-push", "before-pr", "after-pr",
-		"before-rest", "after-rest", "before-block", "after-block", "before-link",
+		"before-rest", "after-rest", "before-block", "after-block",
 	} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
@@ -300,8 +306,11 @@ func TestKillingACutStillFilesTheRestOnceAndOpensOnce(t *testing.T) {
 			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1"); len(strings.Fields(pushes)) != 1 {
 				t.Errorf("%d pushes to afk/7-1 after a kill at %s, want 1: the piece, never the uncut work:\n%s", len(strings.Fields(pushes)), at, pushes)
 			}
-			if b, _ := run(remote, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "afk/7-1\nmain" {
-				t.Errorf("the remote has %q after a kill at %s, want main and afk/7-1", b, at)
+			if pushes, _ := run(remote, "git", "reflog", "show", "--format=%H", "refs/heads/afk/7-1-whole"); len(strings.Fields(pushes)) != 1 {
+				t.Errorf("%d pushes to afk/7-1-whole after a kill at %s, want 1: the uncut work, kept:\n%s", len(strings.Fields(pushes)), at, pushes)
+			}
+			if b, _ := run(remote, "git", "for-each-ref", "--format=%(refname:short)", "refs/heads"); b != "afk/7-1\nafk/7-1-whole\nmain" {
+				t.Errorf("the remote has %q after a kill at %s, want main, afk/7-1 and its whole", b, at)
 			}
 			if got.Opened != 1 || len(got.PRs) != 1 {
 				t.Fatalf("%d pull requests opened after a kill at %s, want 1", got.Opened, at)
@@ -598,7 +607,7 @@ func (ft *killTracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	return github.Issue{Number: n, ID: issueID, State: "open", Title: "Reserve a job", Labels: f.LabelsOn[n]}, err
 }
 
-func (ft *killTracker) OpenIssues(context.Context) ([]github.Issue, error) {
+func (ft *killTracker) IssuesBy(context.Context, string) ([]github.Issue, error) {
 	f, err := ft.load()
 	return f.Filed, err
 }
@@ -771,21 +780,9 @@ func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRe
 	return pr, nil
 }
 
-// Nothing here names a sensitive path, so the one edit is a first piece's link
-// line, naming its rest.
-func (ft *killTracker) EditPullRequest(_ context.Context, n int, body string) error {
-	ft.die("before-link")
-	f, err := ft.load()
-	if err != nil {
-		return err
-	}
-	for i := range f.PRs {
-		if f.PRs[i].Number == n {
-			f.PRs[i].Body = body
-			return ft.save(f)
-		}
-	}
-	return errors.New("PATCH pull request: 404 Not Found")
+// Nothing here names a sensitive path, so no description is ever edited.
+func (ft *killTracker) EditPullRequest(context.Context, int, string) error {
+	return errors.New("no description is edited without a sensitive path")
 }
 
 func (ft *killTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {

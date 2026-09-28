@@ -74,11 +74,9 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 			return transition.Result{}, err
 		}
 		if !Whole(instructions) {
-			p.Cut, p.Cutting = true, true
-			if err := d.save(in.Job.ID, p); err != nil {
-				return transition.Result{}, err
+			if res, ok, err := d.keepWhole(ctx, in, p, relayDir, head); err != nil || ok {
+				return res, err
 			}
-			return transition.Result{State: Implementing, RunAt: in.Now}, nil
 		}
 	}
 
@@ -112,6 +110,55 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		return push(ctx, relayDir, d.Remote, head, p.Branch, p.Pushed)
 	})}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
+}
+
+// keepWhole is work over the signal on its way to be cut: first pushed as it is
+// to wholeBranch, and read back there, then sent to its session to be cut. A
+// cut that then fails - a red gate, nothing committed, the branch switched -
+// hands back pointing at the work it was cut from rather than losing it, and
+// the rest's issue names it, where what is left may be written already.
+//
+// It reports false when the whole cannot be kept: a branch of that name the
+// agent did not push, or a push that never landed. The work is then not cut,
+// and goes on to be pushed as it is, which hands it back as over the signal,
+// kept on its own branch.
+//
+// The cut is one bounded round, like a fix: the gate's attempts start again
+// for it.
+func (d *Deps) keepWhole(ctx context.Context, in transition.In, p progress, relayDir, head string) (transition.Result, bool, error) {
+	whole := wholeBranch(p.Branch)
+	at, err := remoteHead(ctx, d.Remote, whole)
+	if err != nil {
+		return transition.Result{}, false, err
+	}
+	switch {
+	case at == head:
+		p.Uncut = head
+		p.Cut, p.Cutting = true, true
+		p.Attempts = 0
+		if err := d.save(in.Job.ID, p); err != nil {
+			return transition.Result{}, false, err
+		}
+		return transition.Result{State: Implementing, RunAt: in.Now}, true, nil
+	case at != "":
+		d.logf("%s: `%s` is at `%s`, which the agent did not push, so the work is not cut: it is pushed as it is", in.Job.ID, whole, git.Short(at))
+		return transition.Result{}, false, nil
+	}
+	stem := fmt.Sprintf("whole-%s-%s", p.Branch, head)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		d.logf("%s: the push of `%s` to `%s` was made %d times and never landed, so the work is not cut: it is pushed as it is", in.Job.ID, git.Short(head), whole, spent.Rounds)
+		return transition.Result{}, false, nil
+	}
+	if err != nil {
+		return transition.Result{}, false, err
+	}
+	// Read back by the next pass here: pushing is where the job stays until
+	// the whole is seen on the remote.
+	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
+		return push(ctx, relayDir, d.Remote, head, whole, "")
+	}}
+	return transition.Result{State: Pushing, RunAt: in.Now, Effects: []transition.Effect{effect}}, true, nil
 }
 
 // openPR is `implement-open`: once the push is on the remote, the pull request.
@@ -167,11 +214,6 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if pr, ok, err := d.open(ctx, from(p.Branch)); err != nil {
 		return transition.Result{}, err
 	} else if ok {
-		if p.piece() {
-			if res, done, err := d.rest(ctx, in, p, pr); err != nil || !done {
-				return res, err
-			}
-		}
 		return d.resensitize(ctx, in, p, pr)
 	}
 
@@ -184,11 +226,21 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 		if !Whole(instructions) {
-			cut := ""
+			kept := "The branch is the work, kept: to have it as one pull request, open one from it by hand."
 			if p.Cut {
-				cut = " It went back to the session once to be cut to a first coherent piece, and is still over: the session found no piece, or cut too little."
+				kept = fmt.Sprintf("It went back to the session once to be cut to a first coherent piece, and is still over: the session found no piece, or cut too little. The branch is what the cut left, and `%s` the work before it, both kept: to have either as one pull request, open one from it by hand.", wholeBranch(p.Branch))
 			}
-			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review.%s The branch is the work, kept: to have it as one pull request, open one from it by hand. To have it in pieces, split the issue.", p.Lines, p.Tests, d.SizeSignal, cut), "")
+			return d.handBackIssue(ctx, in, p, fmt.Sprintf("The work is %d changed lines, and %d changed lines of tests, which is over the size signal of %d: more than one concern, or more than one sitting's review. %s To have it in pieces, split the issue.", p.Lines, p.Tests, d.SizeSignal, kept), "")
+		}
+	}
+
+	// A first piece's rest is filed and blocked before its pull request
+	// opens, which then names it.
+	if p.piece() {
+		var res transition.Result
+		var done bool
+		if p, res, done, err = d.rest(ctx, in, p); err != nil || !done {
+			return res, err
 		}
 	}
 
@@ -215,7 +267,10 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if !p.piece() || title == "" {
 		title = is.Title
 	}
-	link := linkLine(n, p.piece(), 0)
+	link := linkLine(n, p.piece(), p.Rest)
+	if p.Unblocked {
+		link += "\n\n" + unblockedNote(n, p.Rest)
+	}
 	if session == "" && strings.TrimSpace(p.Description) != "" {
 		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])
 	}
