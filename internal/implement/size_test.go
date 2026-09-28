@@ -68,7 +68,7 @@ func TestWorkOverTheSizeSignalIsPushedAndHandedBack(t *testing.T) {
 	if len(posted) != 1 || f.tr.commentedOn[0] != issue {
 		t.Fatalf("comments %+v on %v, want one hand-back on the issue", posted, f.tr.commentedOn)
 	}
-	for _, want := range []string{"without opening a pull request", "12 changed lines", "5 changed lines of tests", "size signal of 10", "`afk/7-1` is on the remote at `" + at[:12] + "`"} {
+	for _, want := range []string{"without opening a pull request", "12 changed lines", "5 changed lines of tests", "size signal of 10", "open one from it by hand", "`afk/7-1` is on the remote at `" + at[:12] + "`"} {
 		if !strings.Contains(posted[0].Body, want) {
 			t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
 		}
