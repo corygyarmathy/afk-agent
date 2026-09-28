@@ -136,7 +136,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	// human decides what becomes of it. Only the command's instructions can
 	// ask for it opened whatever its size.
 	if (size.Count{Lines: p.Lines, Tests: p.Tests}).Over(d.SizeSignal) {
-		instructions, err := d.instructions(ctx, n)
+		instructions, err := d.instructions(ctx, in.Job.ID, n)
 		if err != nil {
 			return transition.Result{}, err
 		}

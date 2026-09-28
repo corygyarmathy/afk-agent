@@ -19,7 +19,6 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -144,7 +143,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 			return transition.Result{}, err
 		}
 	}
-	instructions, err := d.spec(ctx, ws, n)
+	instructions, err := d.spec(ctx, in.Job.ID, ws, n)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -408,12 +407,12 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bo
 
 // spec writes the issue, and the instructions of the command that asked for
 // it, where the prompt says they are. It returns the instructions.
-func (d *Deps) spec(ctx context.Context, ws string, n int) (string, error) {
+func (d *Deps) spec(ctx context.Context, jobID, ws string, n int) (string, error) {
 	is, err := d.Tracker.Issue(ctx, n)
 	if err != nil {
 		return "", err
 	}
-	instructions, err := d.instructions(ctx, n)
+	instructions, err := d.instructions(ctx, jobID, n)
 	if err != nil {
 		return "", err
 	}
@@ -430,24 +429,40 @@ func (d *Deps) spec(ctx context.Context, ws string, n int) (string, error) {
 	return instructions, os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
 }
 
-// instructions is the text after the word in the most recent `/implement` the
-// agent claimed on the issue, or empty. Read from the tracker each time rather
-// than kept in the store (ADR 0001 §5).
-func (d *Deps) instructions(ctx context.Context, n int) (string, error) {
+// request is the command this job's last claim took: the newest of the
+// commands it claimed, whose instructions the work is done to. None for work
+// nobody asked for, whatever an older command on the issue said. The claim
+// writes it before there is a workspace, so clear leaves it, and the next claim
+// writes over it.
+type request struct {
+	Command int64 `json:"command,omitempty"`
+}
+
+func (d *Deps) saveRequest(jobID string, claimed []github.Comment) error {
+	var a request
+	if len(claimed) > 0 {
+		a.Command = claimed[len(claimed)-1].ID
+	}
+	return statefile.Save(d.requestPath(jobID), a)
+}
+
+// instructions is the text after the word in the command this job claimed, or
+// empty. Only which command is kept: its text is read from the tracker each
+// time rather than kept (ADR 0001 §5). Lost with the state directory, the work
+// has no instructions.
+func (d *Deps) instructions(ctx context.Context, jobID string, n int) (string, error) {
+	var a request
+	if err := statefile.Load(d.requestPath(jobID), &a); errors.Is(err, os.ErrNotExist) || (err == nil && a.Command == 0) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
 	comments, err := d.Tracker.Comments(ctx, n)
 	if err != nil {
 		return "", err
 	}
-	for i := len(comments) - 1; i >= 0; i-- {
-		c := comments[i]
-		if !intake.IsCommand(c, d.Login, Word) {
-			continue
-		}
-		reactions, err := d.Tracker.Reactions(ctx, c.ID)
-		if err != nil {
-			return "", err
-		}
-		if intake.Claimed(reactions, d.Login) {
+	for _, c := range comments {
+		if c.ID == a.Command {
 			return Instructions(c), nil
 		}
 	}
@@ -463,8 +478,8 @@ func Instructions(c github.Comment) string {
 
 // Whole reports whether a command's instructions ask for the work in one pull
 // request whatever its size: "don't split", or "do not split", anywhere in
-// them. It is the only override of the size signal, and only a command has
-// instructions, so unattended work never has it (#107).
+// them. It is the only override of the size signal, and only the command a job
+// claimed gives it instructions, so unattended work never has it (#107).
 func Whole(instructions string) bool {
 	return wholeWords.MatchString(instructions)
 }
@@ -538,6 +553,10 @@ func (d *Deps) workspacePath(jobID string) string {
 
 func (d *Deps) progressPath(jobID string) string {
 	return filepath.Join(d.StateDir, "progress", jobID+".json")
+}
+
+func (d *Deps) requestPath(jobID string) string {
+	return filepath.Join(d.StateDir, "requests", jobID+".json")
 }
 
 func (d *Deps) relayPath(jobID string) string {

@@ -41,10 +41,9 @@ func big(dir string) error {
 	return nil
 }
 
-// claimed is an /implement with instructions that the agent has claimed.
-func claimed(tr *tracker, body string) {
-	tr.comments = append(tr.comments, github.Comment{ID: 1, Login: "alice", Association: "OWNER", Body: body})
-	tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+// commanded is an /implement with instructions, for the job to claim.
+func commanded(tr *tracker, id int64, body string) {
+	tr.comments = append(tr.comments, github.Comment{ID: id, Login: "alice", Association: "OWNER", Body: body})
 }
 
 // Over the size signal, the work is pushed and no pull request is opened. The
@@ -89,7 +88,7 @@ func TestWorkOverTheSizeSignalIsPushedAndHandedBack(t *testing.T) {
 // for one pull request has consented to its size in advance.
 func TestOverTheSizeSignalWithOnePullRequestAskedForOpensIt(t *testing.T) {
 	tr := newTracker()
-	claimed(tr, "/implement one PR, don't split")
+	commanded(tr, 1, "/implement one PR, don't split")
 	f := setup(t, tr)
 	f.deps.SizeSignal = 10
 	f.model.then(big)
@@ -102,6 +101,30 @@ func TestOverTheSizeSignalWithOnePullRequestAskedForOpensIt(t *testing.T) {
 	}
 	if posted := f.tr.byAgent(); len(posted) != 0 {
 		t.Errorf("the agent said %+v, want nothing", posted)
+	}
+}
+
+// The override is this job's own command's. One an earlier job claimed says
+// nothing about work nobody has commanded since.
+func TestAnOlderCommandDoesNotOverrideTheSizeSignal(t *testing.T) {
+	tr := newTracker()
+	commanded(tr, 1, "/implement one PR, don't split")
+	tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f := setup(t, tr)
+	f.deps.SizeSignal = 10
+	f.model.then(big)
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.tr.opened) != 0 {
+		t.Errorf("%d pull requests opened, want none", len(f.tr.opened))
+	}
+	if strings.Contains(f.model.asked[0].Prompt, "one pull request, whatever its size") {
+		t.Errorf("the session was told to make one pull request:\n%s", f.model.asked[0].Prompt)
+	}
+	if posted := f.tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, "size signal of 10") {
+		t.Errorf("the agent said %+v, want the size hand-back", posted)
 	}
 }
 
@@ -134,7 +157,7 @@ func TestThePromptCarriesTheSizeRule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newTracker()
 			if tc.command != "" {
-				claimed(tr, tc.command)
+				commanded(tr, 1, tc.command)
 			}
 			f := setup(t, tr)
 			f.model.then(commit("ok"))

@@ -257,6 +257,9 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err := d.clear(in.Job.ID); err != nil {
 		return transition.Result{}, err
 	}
+	if err := d.saveRequest(in.Job.ID, commands); err != nil {
+		return transition.Result{}, err
+	}
 	return book.Owe(ctx, in, Claiming, owed.Record{Next: Implementing, Due: true, Items: items})
 }
 
