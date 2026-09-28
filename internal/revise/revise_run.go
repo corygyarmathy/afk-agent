@@ -187,7 +187,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	case work.GateSwitched:
 		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
 	case work.GateEmpty:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed)), "")
+		return d.handBack(ctx, in, p, p.empty(), "")
 	case work.GateExhausted:
 		return d.handBack(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
 	case work.GateDirty:
@@ -362,6 +362,16 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	}
 	p.Into = into
 	return p, "", w.Save(jobID, p)
+}
+
+// empty is the hand-back's words for a session that committed nothing on top
+// of the lease: the head the send-back was written against, or after a red CI
+// run the revision's own last push.
+func (p progress) empty() string {
+	if p.Pushed == p.Read {
+		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed))
+	}
+	return fmt.Sprintf("The session committed nothing on top of `%s`, the revision's last push, to fix what CI said, so there is nothing to push.", git.Short(p.Pushed))
 }
 
 // rewrote is the hand-back's words for a session that rewrote the head the

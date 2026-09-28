@@ -171,6 +171,10 @@ type revFixture struct {
 	store  store.Store
 	reg    *transition.Registry
 	runner *transition.Runner
+
+	// at is the runner's clock, and logs what the kind logged.
+	at   time.Time
+	logs []string
 }
 
 func jobID() string {
@@ -211,15 +215,18 @@ func revisionFixture(t *testing.T) *revFixture {
 		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
 		Attempts:      3,
 		Denylist:      []string{"flake.lock", ".github/**", "**/secrets.yaml"},
+		CIWait:        10 * time.Minute,
+		CICeiling:     2 * time.Hour,
+		CIFixes:       2,
 		HandOffLabel:  handOff,
 		HandBackLabel: "needs-decision",
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
-	return &revFixture{
-		t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg,
-		runner: &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return now }},
-	}
+	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, at: now}
+	d.Log = func(msg string) { f.logs = append(f.logs, msg) }
+	f.runner = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
+	return f
 }
 
 // claim arms and claims the send-back, leaving the job due in revising.
@@ -315,8 +322,8 @@ func TestARevisionAddsCommitsOnTopOfTheSendBacksHead(t *testing.T) {
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo to Bar.\" done in `deadbee`."))
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s", job.State, revise.Replying)
 	}
 	at := f.remoteHead()
 	if at == f.head {
@@ -349,8 +356,8 @@ func TestADeclinedPointIsKeptAndTheRevisionGoesOn(t *testing.T) {
 	})
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s: a declined point does not stop the revision", job.State, revise.Watching)
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s: a declined point does not stop the revision", job.State, revise.Replying)
 	}
 	first, second := strings.Index(spec, "Rename Foo to Bar."), strings.Index(spec, "And drop the flag.")
 	if first < 0 || second < first {
@@ -529,8 +536,8 @@ func TestATransientFailureMovesToTheNextCandidate(t *testing.T) {
 	f.model.then(commitOn("bar.txt"), replyOn("## Points\n\n- \"Rename Foo\" done."))
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s", job.State, revise.Replying)
 	}
 	if len(f.model.asked) < 2 {
 		t.Fatalf("%d model runs, want the tier retried", len(f.model.asked))
@@ -648,8 +655,8 @@ func TestATransientFailureLeavesNothingForTheNextCandidate(t *testing.T) {
 	})
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s", job.State, revise.Replying)
 	}
 	if started != f.head {
 		t.Errorf("the next candidate started at %s, want the send-back's head %s", git.Short(started), git.Short(f.head))
@@ -674,8 +681,8 @@ func TestTheDenylistReadsOnlyWhatTheRevisionAdds(t *testing.T) {
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s: the pull request's own flake.lock is not the revision's\n%s", job.State, revise.Watching, f.handBack())
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s: the pull request's own flake.lock is not the revision's\n%s", job.State, revise.Replying, f.handBack())
 	}
 	if at := f.remoteHead(); at == f.head || !f.ancestor(f.head, at) {
 		t.Errorf("the revision was not pushed on top of %s: the remote is at %s", git.Short(f.head), git.Short(at))
@@ -745,8 +752,8 @@ func TestASendBackWithNoBranchIsRevisedOnThePullRequests(t *testing.T) {
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
 
 	job := f.drive()
-	if job.State != revise.Watching {
-		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
+	if job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
 	}
 	if at := f.remoteHead(); at == f.head || !f.ancestor(f.head, at) {
 		t.Errorf("the revision was not pushed to feature: it is at %s", git.Short(at))

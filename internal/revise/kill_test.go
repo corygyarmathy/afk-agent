@@ -208,6 +208,14 @@ func (ft *fileTracker) save(f trackerFile) error {
 	return os.Rename(tmp, ft.path)
 }
 
+func (ft *fileTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
+	return nil, errors.New("the claim reads no check runs")
+}
+
+func (ft *fileTracker) RequiredChecks(context.Context, string) ([]string, error) {
+	return nil, errors.New("the claim reads no required checks")
+}
+
 func (ft *fileTracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	f, err := ft.load()
 	return github.PullRequest{Number: n, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, Labels: f.Labels}, err

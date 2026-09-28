@@ -132,9 +132,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if tr == nil {
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
-	// The revision's gate and its bound, the paths it may not push, and the
-	// tier it runs on are the implement kind's: one local gate, one denylist
-	// and one tier serve both.
+	// The revision's gate and its bound, the paths it may not push, its CI
+	// bounds and the tier it runs on are the implement kind's: one local
+	// gate, one denylist, one CI and one tier serve both.
 	ip, err := p.implement()
 	if err != nil {
 		return nil, err
@@ -173,6 +173,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
 		Denylist:      ip.denylist,
+		CIWait:        ip.ciWait,
+		CICeiling:     ip.ciCeiling,
+		CIFixes:       ip.ciFixes,
 		HandOffLabel:  handOff,
 		HandBackLabel: ep.handBackLabel,
 		// Beside the store, as every other kind's state directory is.

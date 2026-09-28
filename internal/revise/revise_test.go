@@ -37,6 +37,13 @@ type tracker struct {
 
 	// writes counts every write, by what it was.
 	writes map[string]int
+
+	// checks is the check runs on a commit, by the time they are asked
+	// about: green on every head, unless a test says otherwise. required is
+	// the checks the base branch's rules require.
+	checks   func(sha string, call int) []github.CheckRun
+	required []string
+	asks     int
 }
 
 func newTracker() *tracker {
@@ -51,6 +58,23 @@ func newTracker() *tracker {
 		nextID:    1000,
 		writes:    map[string]int{},
 	}
+}
+
+func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, error) {
+	tr.asks++
+	if tr.checks == nil {
+		return green(sha, tr.asks), nil
+	}
+	return tr.checks(sha, tr.asks), nil
+}
+
+func (tr *tracker) RequiredChecks(context.Context, string) ([]string, error) {
+	return tr.required, nil
+}
+
+// green is every check passed.
+func green(string, int) []github.CheckRun {
+	return []github.CheckRun{{Name: "build", Status: "completed", Conclusion: "success"}, {Name: "lint", Status: "completed", Conclusion: "skipped"}}
 }
 
 // say posts a comment on subject n, as someone other than the agent.

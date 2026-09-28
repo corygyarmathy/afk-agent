@@ -1,7 +1,7 @@
 // Package revise is the revise job kind's transitions: a send-back on a pull
 // request becomes a revision of it (#131).
 //
-// A send-back's whole way to a revision (#145, #146):
+// A send-back's whole way to a revision (#145, #146, #147):
 //
 //	start     --revise---------->  claiming   claim every unanswered command, and refuse what cannot be revised
 //	claiming  --revise-claimed-->  revising   the claims, the replies and the hand-off label taken off are on the tracker
@@ -16,9 +16,14 @@
 //	pushing   --revise-push----->  pushed     the denylist, and the leased push
 //	                               pushing    the push did not land: again, under the next key
 //	                               handing-back  a denied path, the read head rewritten, or out of rounds
-//	pushed    --revise-pushed--->  watching   the push is on the remote: CI is #147's
+//	pushed    --revise-pushed--->  watching   the push is on the remote
 //	                               pushing    not landed yet: again
 //	                               handing-back  someone else pushed during the revision
+//	watching  --revise-watch---->  replying   CI is green on the pushed head: the reply is #149's
+//	                               watching   not finished: again after the CI wait
+//	                               revising   red: back to the revision's session, with what CI said
+//	                               handing-back  out of fixes, past the ceiling, or someone else pushed
+//	                               start      the pull request was closed: at rest
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
 //	deferred  --revise-resume----> revising   the tier again, from its first model
 //
@@ -87,6 +92,7 @@ const (
 	Pushing     = "pushing"
 	Pushed      = "pushed"
 	Watching    = "watching"
+	Replying    = "replying"
 	Deferred    = "deferred"
 	HandingBack = "handing-back"
 )
@@ -98,6 +104,8 @@ const Word = "/revise"
 type Tracker interface {
 	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
+	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
+	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 }
 
 // Model runs one model. opencode.Command is one.
@@ -148,6 +156,14 @@ type Deps struct {
 	Gate     string
 	Attempts int
 
+	// CIWait is how long a head whose checks are not finished waits before
+	// it is looked at again, CICeiling how long after its push they may
+	// take before the revision is handed back, and CIFixes how many times a
+	// red run is sent back to the session. Parameters.
+	CIWait    time.Duration
+	CICeiling time.Duration
+	CIFixes   int
+
 	// Denylist is the paths the agent may never push, as globs (see work).
 	// A parameter.
 	Denylist []string
@@ -164,7 +180,8 @@ type Deps struct {
 	StateDir string
 
 	// Log receives one line each time a candidate's run fails transiently,
-	// which nothing else keeps once the next candidate runs. Nil is silent.
+	// which nothing else keeps once the next candidate runs, and one each
+	// time CI fails a head the local gate passed. Nil is silent.
 	Log func(msg string)
 }
 
@@ -184,6 +201,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise-gate", Kind: store.KindRevise, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
 		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
+		{Name: "revise-watch", Kind: store.KindRevise, From: Watching, Run: d.watch},
 		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
 		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
 	}
