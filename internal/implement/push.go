@@ -57,6 +57,17 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 	}
 	p.Lines, p.Tests = c.Lines, c.Tests
 
+	// Recomputed with each push, on what the pull request will show: a fix
+	// that newly touches a sensitive path adds it.
+	p.Sensitive = ""
+	if len(d.Sensitive) > 0 {
+		paths, err := changed(ctx, relayDir, p.Base, head)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		p.Sensitive = sensitiveLine(d.Sensitive, paths)
+	}
+
 	// The stem is new with each head, and a head is pushed only by the work
 	// that made it: out of rounds, the work is handed back, and a later
 	// command starts it over on a new branch.
@@ -128,10 +139,10 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		}
 	}
 
-	if _, ok, err := d.open(ctx, from(p.Branch)); err != nil {
+	if pr, ok, err := d.open(ctx, from(p.Branch)); err != nil {
 		return transition.Result{}, err
 	} else if ok {
-		return transition.Result{State: Watching, RunAt: in.Now}, nil
+		return d.resensitize(ctx, in, p, pr)
 	}
 
 	// Over the size signal, the pushed branch is the work's to keep, and a
@@ -173,13 +184,13 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 	}
-	body := description(n, d.ReviewProcedure, session)
+	body := description(n, d.ReviewProcedure, p.Sensitive, session)
 	if utf8.RuneCountInString(body) > bodyLimit {
 		// Over it, GitHub refuses the pull request every round. Cutting
 		// the session's part would drop what the operator needed, so it
 		// goes whole, as a missing one does.
 		d.logf("%s: the description is over GitHub's %d characters, so the pull request opens with the agent's parts only", in.Job.ID, bodyLimit)
-		body = description(n, d.ReviewProcedure, "")
+		body = description(n, d.ReviewProcedure, p.Sensitive, "")
 	}
 	req := github.NewPullRequest{Title: is.Title, Head: p.Branch, Base: p.Into, Body: body}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
@@ -191,6 +202,39 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 		_, err := d.Tracker.CreatePullRequest(ctx, req)
 		return err
 	})}
+	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
+}
+
+// resensitize brings the open pull request's sensitive line to what the push
+// just seen on the remote touches, and leaves the rest of its description as
+// it was. It is Go's own fixed part, which the written-once rule lets it
+// update. An edit that never lands is logged and costs the work nothing: the
+// description is orientation, and the diff is still reviewable without it.
+func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress, pr github.PullRequest) (transition.Result, error) {
+	watch := transition.Result{State: Watching, RunAt: in.Now}
+	was := strings.ReplaceAll(pr.Body, "\r\n", "\n")
+	body, ok := withSensitive(was, p.Sensitive)
+	if !ok {
+		if p.Sensitive != "" {
+			d.logf("%s: the description of #%d has no reminder to put the sensitive paths ahead of, so it is left as it is", in.Job.ID, pr.Number)
+		}
+		return watch, nil
+	}
+	if body == was {
+		return watch, nil
+	}
+	stem := fmt.Sprintf("description-%s-%s", p.Branch, p.Head)
+	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
+	if spent, ok := transition.Spent(err); ok {
+		d.logf("%s: the description of #%d was edited %d times for the sensitive paths at `%s` and never showed them, so it is left as it is", in.Job.ID, pr.Number, spent.Rounds, git.Short(p.Head))
+		return watch, nil
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+	effect := transition.Effect{Key: key, Do: func(ctx context.Context) error {
+		return d.Tracker.EditPullRequest(ctx, pr.Number, body)
+	}}
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 

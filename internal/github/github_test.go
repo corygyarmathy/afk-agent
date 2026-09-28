@@ -339,6 +339,25 @@ func TestCreatePullRequestSendsItsFields(t *testing.T) {
 	}
 }
 
+func TestEditPullRequestSendsOnlyTheBody(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "PATCH", "/repos/o/n/pulls/40", "application/vnd.github+json") {
+			return
+		}
+		var in map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"body": "Closes #7."}; fmt.Sprint(in) != fmt.Sprint(want) {
+			t.Errorf("sent %v, want %v", in, want)
+		}
+		fmt.Fprint(w, `{"number":40,"state":"open"}`)
+	})
+	if err := c.EditPullRequest(context.Background(), 40, "Closes #7."); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReactionsOnAPullRequestItself(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

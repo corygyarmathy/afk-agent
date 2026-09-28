@@ -50,7 +50,7 @@ func matchSegments(pattern, name []string) bool {
 			return false
 		}
 		if ok, err := path.Match(pattern[0], name[0]); err != nil || !ok {
-			// A malformed pattern matches nothing here. ValidDenylist
+			// A malformed pattern matches nothing here. validGlobs
 			// refuses one before it gets this far.
 			return false
 		}
@@ -66,21 +66,27 @@ func ValidDenylist(denylist []string) error {
 	if len(denylist) == 0 {
 		return fmt.Errorf("the denylist is empty")
 	}
-	for _, pattern := range denylist {
+	return validGlobs("denylist", denylist)
+}
+
+// validGlobs reports the first of patterns that is not a well-formed glob as
+// matches reads one. what names the list, for the refusal.
+func validGlobs(what string, patterns []string) error {
+	for _, pattern := range patterns {
 		if pattern == "" || strings.HasPrefix(pattern, "/") {
-			return fmt.Errorf("denylist pattern %q is not a path relative to the repository", pattern)
+			return fmt.Errorf("%s pattern %q is not a path relative to the repository", what, pattern)
 		}
 		for _, seg := range strings.Split(pattern, "/") {
 			// git names a path with none of these, so a pattern that
 			// has one matches nothing: `secrets/`, `./flake.lock`.
 			if seg == "" || seg == "." || seg == ".." {
-				return fmt.Errorf("denylist pattern %q has an empty, . or .. segment, and would match no path", pattern)
+				return fmt.Errorf("%s pattern %q has an empty, . or .. segment, and would match no path", what, pattern)
 			}
 			if seg == "**" {
 				continue
 			}
 			if _, err := path.Match(seg, ""); err != nil {
-				return fmt.Errorf("denylist pattern %q: %v", pattern, err)
+				return fmt.Errorf("%s pattern %q: %v", what, pattern, err)
 			}
 		}
 	}

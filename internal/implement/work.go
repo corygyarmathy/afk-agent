@@ -89,6 +89,10 @@ type progress struct {
 	Lines int `json:"lines,omitempty"`
 	Tests int `json:"tests,omitempty"`
 
+	// Sensitive is the description's sensitive line for the work at Head,
+	// or empty when it touches no sensitive path.
+	Sensitive string `json:"sensitive,omitempty"`
+
 	// Fixes is how many times CI has sent the work back to the session,
 	// and FixedHead the head the last of them was counted for.
 	Fixes     int    `json:"fixes,omitempty"`

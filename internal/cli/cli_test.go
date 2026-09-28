@@ -101,6 +101,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--review-fold-cut <n> AFK_REVIEW_FOLD_CUT",
 		},
 		{
+			name:     "help lists the sensitive paths",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "--sensitive <paths>   AFK_SENSITIVE",
+		},
+		{
 			name:     "version",
 			args:     []string{"version"},
 			want:     ExitOK,
@@ -787,7 +793,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_REVIEW_PROCEDURE", "AFK_EFFECT_ROUNDS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_REVIEW_PROCEDURE", "AFK_SENSITIVE", "AFK_EFFECT_ROUNDS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT"} {
 		t.Setenv(env, "")
 	}
@@ -814,6 +820,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		effectRounds:  "4",
 
 		reviewProcedure: "https://github.com/o/skills/blob/main/docs/operators-review.md",
+		sensitive:       "job store schema = internal/store/**, cmd/migrate/*.go; CI=.github/workflows/**;",
 	}
 
 	d, err := implementDeps(context.Background(), full, nil, tr)
@@ -833,6 +840,18 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	}
 	if want := (opencode.Command{Path: "/bin/opencode", Timeout: 45 * time.Minute}); d.Model != want {
 		t.Errorf("model = %+v, want %+v", d.Model, want)
+	}
+	if want := []implement.Sensitive{
+		{Label: "job store schema", Globs: []string{"internal/store/**", "cmd/migrate/*.go"}},
+		{Label: "CI", Globs: []string{".github/workflows/**"}},
+	}; fmt.Sprint(d.Sensitive) != fmt.Sprint(want) {
+		t.Errorf("sensitive = %v, want %v, in the operator's order", d.Sensitive, want)
+	}
+	// The sensitive paths are optional: without them no pull request says any.
+	none := full
+	none.sensitive = ""
+	if d, err := implementDeps(context.Background(), none, nil, tr); err != nil || len(d.Sensitive) != 0 {
+		t.Errorf("without sensitive paths: deps %+v, err %v; want none and no error", d, err)
 	}
 	// The procedure is optional: without it the reminder says it has no link.
 	unset := full
@@ -864,6 +883,11 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
 		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 		{func(p *params) { p.reviewProcedure = "docs/operators-review.md" }, "--review-procedure"},
+		{func(p *params) { p.sensitive = "internal/store/**" }, "--sensitive"},
+		{func(p *params) { p.sensitive = "=internal/store/**" }, "--sensitive"},
+		{func(p *params) { p.sensitive = "store=" }, "--sensitive"},
+		{func(p *params) { p.sensitive = "store=src/[a" }, "--sensitive"},
+		{func(p *params) { p.sensitive = "store=a/**;store=b/**" }, "--sensitive"},
 		{func(p *params) { p.reviewProcedure = "javascript:alert(1)" }, "--review-procedure"},
 	} {
 		p := full
@@ -1049,6 +1073,7 @@ func (closedTracker) RequiredChecks(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 
+func (closedTracker) EditPullRequest(context.Context, int, string) error { return nil }
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }

@@ -109,6 +109,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		HandBackLabel:   ep.handBackLabel,
 		HandOffLabel:    ip.handOffLabel,
 		Denylist:        ip.denylist,
+		Sensitive:       ip.sensitive,
 		CIWait:          ip.ciWait,
 		CICeiling:       ip.ciCeiling,
 		CIFixes:         ip.ciFixes,

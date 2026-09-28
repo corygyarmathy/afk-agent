@@ -69,7 +69,13 @@ type tracker struct {
 
 	// failIssues is how many of the next issue reads fail.
 	failIssues int
+
+	// failEdits is how many of the next edits of a pull request's
+	// description fail, without landing.
+	failEdits int
 }
+
+var errEdit = errors.New("PATCH pull request: 502 Bad Gateway")
 
 func newTracker(comments ...github.Comment) *tracker {
 	return &tracker{state: "open", comments: comments, reactions: map[int64][]github.Reaction{}, nextID: 1000}
@@ -192,6 +198,22 @@ func (tr *tracker) CreatePullRequest(_ context.Context, req github.NewPullReques
 		tr.prs = append(tr.prs, pr)
 	}
 	return pr, err
+}
+
+func (tr *tracker) EditPullRequest(_ context.Context, n int, body string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.failEdits > 0 {
+		tr.failEdits--
+		return errEdit
+	}
+	for i := range tr.prs {
+		if tr.prs[i].Number == n {
+			tr.prs[i].Body = body
+			return nil
+		}
+	}
+	return errors.New("PATCH pull request: 404 Not Found")
 }
 
 // byAgent is the comments the agent wrote.

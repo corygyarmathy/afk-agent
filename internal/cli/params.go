@@ -117,11 +117,15 @@ Implementing an issue, for afk run and afk work:
   --review-procedure <url>
                         AFK_REVIEW_PROCEDURE the operator's review procedure, which each pull
                                              request's description links
+  --sensitive <paths>   AFK_SENSITIVE        paths whose pull requests say so, as
+                                             <label>=<globs>, semicolon-separated, the
+                                             globs comma-separated as --denylist's are
 
-All but --implement-needs and --review-procedure are required to implement, with
-the model choice parameters and the two above; implementing also needs the
-heavy-build token's capacity. Without --review-procedure, a description's
-reminder says it has no link to the procedure.
+All but --implement-needs, --review-procedure and --sensitive are required to
+implement, with the model choice parameters and the two above; implementing also
+needs the heavy-build token's capacity. Without --review-procedure, a
+description's reminder says it has no link to the procedure. Without
+--sensitive, no pull request says it touches a sensitive path.
 
 The tracker, for afk intake, afk run and afk work:
 
@@ -182,6 +186,7 @@ type params struct {
 	sizeSignal     string
 
 	reviewProcedure string
+	sensitive       string
 
 	opencode      string
 	enrolment     string
@@ -698,6 +703,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.ciFixes, "ci-fixes", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_FIXES)")
 	fs.StringVar(&p.sizeSignal, "size-signal", "", "changed non-test lines a pull request may have before a hand-back (AFK_SIZE_SIGNAL)")
 	fs.StringVar(&p.reviewProcedure, "review-procedure", "", "the operator's review procedure, which each pull request's description links (AFK_REVIEW_PROCEDURE)")
+	fs.StringVar(&p.sensitive, "sensitive", "", "paths whose pull requests say so, as <label>=<globs>, semicolon-separated (AFK_SENSITIVE)")
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how
@@ -750,6 +756,9 @@ type implementParams struct {
 	// reviewProcedure is optional. It is a URL: the description links it
 	// as written.
 	reviewProcedure string
+
+	// sensitive is optional, and empty is the feature off.
+	sensitive []implement.Sensitive
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -816,7 +825,37 @@ func (p *params) implement() (implementParams, error) {
 		}
 		ip.reviewProcedure = v
 	}
+	if ip.sensitive, err = sensitive(optional(p.sensitive, "AFK_SENSITIVE")); err != nil {
+		return implementParams{}, err
+	}
 	return ip, nil
+}
+
+// sensitive reads the sensitive paths: `<label>=<globs>` for each label,
+// separated by semicolons, and the globs separated by commas as the denylist's
+// are. A label may have spaces in it: `job store schema=internal/store/**`.
+func sensitive(v string) ([]implement.Sensitive, error) {
+	var list []implement.Sensitive
+	for _, entry := range strings.Split(v, ";") {
+		if entry = strings.TrimSpace(entry); entry == "" {
+			continue
+		}
+		label, globs, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, usagef("--sensitive: %q is not <label>=<globs>", entry)
+		}
+		s := implement.Sensitive{Label: strings.TrimSpace(label)}
+		for _, g := range strings.Split(globs, ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				s.Globs = append(s.Globs, g)
+			}
+		}
+		list = append(list, s)
+	}
+	if err := implement.ValidSensitive(list); err != nil {
+		return nil, usagef("--sensitive: %v", err)
+	}
+	return list, nil
 }
 
 // modelParams is model choice, resolved.

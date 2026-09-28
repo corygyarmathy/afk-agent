@@ -408,6 +408,22 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr NewPullRequest) (Pull
 	return w.pullRequest(), nil
 }
 
+// EditPullRequest replaces a pull request's description with body, and
+// changes nothing else about it. Making the same edit twice is the same as
+// making it once.
+func (c *Client) EditPullRequest(ctx context.Context, number int, body string) error {
+	u, err := c.repoURL("/pulls/%d", number)
+	if err != nil {
+		return err
+	}
+	resp, err := c.send(ctx, http.MethodPatch, u, mediaJSON, map[string]string{"body": body})
+	if err != nil {
+		return err
+	}
+	drain(resp.Body)
+	return nil
+}
+
 // Label adds a label to an issue or a pull request. Adding a label it already
 // has is not an error, and a label the repository does not have yet is
 // created.

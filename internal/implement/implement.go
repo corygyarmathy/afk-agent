@@ -14,6 +14,7 @@
 //	pushing      --implement-push--------->  opening       the denylist, then the push
 //	                                         handing-back  a denied path, or out of rounds: hand-back
 //	opening      --implement-open--------->  watching      the push is on the remote, and so is the pull request
+//	                                         opening       the pull request's sensitive line, edited under the next key
 //	                                         opening       the pull request, under the next key
 //	                                         pushing       the push is not on the remote: again
 //	                                         handing-back  someone else pushed, the work is over the size signal,
@@ -95,6 +96,7 @@ type Tracker interface {
 	owed.Tracker
 	OpenPullRequests(ctx context.Context) ([]github.PullRequest, error)
 	CreatePullRequest(ctx context.Context, pr github.NewPullRequest) (github.PullRequest, error)
+	EditPullRequest(ctx context.Context, number int, body string) error
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 }
@@ -163,6 +165,11 @@ type Deps struct {
 	// denied). A parameter.
 	Denylist []string
 
+	// Sensitive is the paths the operator named as deserving closer
+	// reading, by label (see Sensitive). A pull request that touches one
+	// says so in its description. A parameter; empty, nothing is said.
+	Sensitive []Sensitive
+
 	// SizeSignal is the changed non-test lines a pull request may have
 	// before the work needs a decision (package size): over it, the work is
 	// pushed, and handed back on the issue rather than opened. The session is
@@ -198,7 +205,8 @@ type Deps struct {
 	// what it failed with, which nothing else keeps once the next candidate
 	// runs (#98). And one each time the session's part of a description is
 	// set aside - unreadable, with no Start here, or too long for GitHub -
-	// which the pull request alone cannot tell from no part. Nil is silent. It is a log rather than a notification: nothing
+	// which the pull request alone cannot tell from no part. And one when an
+	// edit of its sensitive line never lands. Nil is silent. It is a log rather than a notification: nothing
 	// here is the operator's to act on.
 	Log func(msg string)
 }
