@@ -62,6 +62,11 @@ type progress struct {
 	// far.
 	Reply string `json:"reply,omitempty"`
 
+	// Replays is how many pushes by someone else the revision has been
+	// replayed onto. Progress.Pushed is the last of them, until the
+	// revision's own push lands.
+	Replays int `json:"replays,omitempty"`
+
 	// Measured is whether the head last pushed was measured: a measure that
 	// failed is logged, and the push went on without it. Lines, Tests and
 	// Sensitive are empty then, and say nothing.

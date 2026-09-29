@@ -1,7 +1,7 @@
 // Package revise is the revise job kind's transitions: a send-back on a pull
 // request becomes a revision of it (#131).
 //
-// A send-back's whole way to a revision (#145, #146):
+// A send-back's whole way to a revision (#145, #146, #134):
 //
 //	start     --revise---------->  claiming   claim every unanswered command, and refuse what cannot be revised
 //	claiming  --revise-claimed-->  revising   the claims, the replies and the hand-off label taken off are on the tracker
@@ -19,13 +19,20 @@
 //	pushed    --revise-pushed--->  watching   the push is on the remote, and the sensitive line right or given up on: CI is #147's
 //	                               pushed     the sensitive line edited: read back
 //	                               pushing    not landed yet: again
-//	                               handing-back  someone else pushed during the revision
+//	                               replaying  someone else pushed during the revision
+//	                               handing-back  the branch was deleted during the revision
+//	replaying --revise-replay--->  gating     the revision's own commits, on top of their push
+//	                               pushed     the revision's push had landed, and theirs is on top of it
+//	                               handing-back  their push dropped what was read, a replay conflicts, or out of replays
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
 //	deferred  --revise-resume----> revising   the tier again, from its first model
 //
 // The revision's own commits go on top of the head the send-back was written
 // against, and are pushed under a lease pinned to that head: a push made while
-// the revision ran is never overwritten (#146).
+// the revision ran is never overwritten (#146). When the lease refuses because
+// someone else pushed, the revision's own commits are replayed onto their push,
+// gated again and pushed under a lease pinned to it, a bounded number of times
+// (#134).
 //
 // Each push is measured as the pull request will show it after the revision:
 // the whole of it, against its base branch's current tip, which a rebase the
@@ -33,8 +40,8 @@
 // sensitive line is brought to what it touches, and the size kept for the
 // reply. A measure that fails is logged, and never holds back the push. The
 // rest of the description is never rewritten. The workspace, the relay, the
-// gate and its retries, the denylist and the leased push are package work,
-// shared with implement.
+// gate and its retries, the denylist, the leased push and the replay are
+// package work, shared with implement.
 //
 // The claim is its own transition for the reason implement's and review's are:
 // it is committed before anything can fail. A job that failed ahead of its
@@ -95,6 +102,7 @@ const (
 	Gating      = "gating"
 	Pushing     = "pushing"
 	Pushed      = "pushed"
+	Replaying   = "replaying"
 	Watching    = "watching"
 	Deferred    = "deferred"
 	HandingBack = "handing-back"
@@ -162,6 +170,10 @@ type Deps struct {
 	// A parameter.
 	Denylist []string
 
+	// Replays is how many times a revision is replayed onto someone else's
+	// push before one more is handed back. A parameter.
+	Replays int
+
 	// Sensitive is the paths the operator named as deserving closer reading,
 	// which the description's sensitive line names when the pull request
 	// touches one. Empty is the feature off. A parameter.
@@ -199,6 +211,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise-gate", Kind: store.KindRevise, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
 		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
+		{Name: "revise-replay", Kind: store.KindRevise, From: Replaying, Run: d.replay},
 		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
 		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
 	}

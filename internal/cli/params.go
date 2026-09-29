@@ -131,6 +131,15 @@ needs the heavy-build token's capacity. Without --review-procedure, a
 description's reminder says it has no link to the procedure. Without
 --sensitive, no pull request says it touches a sensitive path.
 
+Revising a pull request, for afk run and afk work:
+
+  --replays <n>         AFK_REPLAYS          times a revision is replayed onto a push someone
+                                             else made during it, then a hand-back; 0 hands
+                                             back at once (required with --branch-prefix)
+
+A revision also takes the gate, its attempts, the tier, the denylist and the
+hand-off label from implementing an issue.
+
 The tracker, for afk intake, afk run and afk work; afk caught takes the first three:
 
   --repo <owner/name>   AFK_REPO          repository commands are read from
@@ -221,6 +230,7 @@ type params struct {
 	ciCeiling      string
 	ciFixes        string
 	sizeSignal     string
+	replays        string
 
 	reviewProcedure string
 	sensitive       string
@@ -872,6 +882,27 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.sizeSignal, "size-signal", "", "changed non-test lines a pull request may have before a hand-back (AFK_SIZE_SIGNAL)")
 	fs.StringVar(&p.reviewProcedure, "review-procedure", "", "the operator's review procedure, which each pull request's description links (AFK_REVIEW_PROCEDURE)")
 	fs.StringVar(&p.sensitive, "sensitive", "", "paths whose pull requests say so, as <label>=<globs>, semicolon-separated (AFK_SENSITIVE)")
+}
+
+// bindRevise binds what revising a pull request needs beyond what implementing
+// an issue does.
+func (p *params) bindRevise(fs *flag.FlagSet) {
+	fs.StringVar(&p.replays, "replays", "", "times a revision is replayed onto someone else's push before a hand-back (AFK_REPLAYS)")
+}
+
+// replayBound is how many times a revision is replayed onto someone else's push,
+// resolved. Required rather than defaulted, as every bound is. Zero is a bound
+// too: a revision that hands back at the first push made during it.
+func (p *params) replayBound() (int, error) {
+	v, err := required(p.replays, "replays", "AFK_REPLAYS")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, usagef("--replays: %q is not a whole number", v)
+	}
+	return n, nil
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how

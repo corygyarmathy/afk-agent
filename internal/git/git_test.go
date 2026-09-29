@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -254,5 +255,36 @@ func TestAnErrorNamesTheCommandAfterGitsOwnOptions(t *testing.T) {
 	_, err := git.RunEnv(context.Background(), "", git.Isolated, "-C", t.TempDir(), "-c", "core.hooksPath=/dev/null", "no-such-command")
 	if err == nil || !strings.HasPrefix(err.Error(), "git no-such-command: ") {
 		t.Errorf("err = %v, want it to begin git no-such-command", err)
+	}
+}
+
+// A process that carries the token is refused in or under a workspace, whose
+// configuration is the model's to write, and a link into one is no way round
+// it. Anywhere else, including a directory whose name only begins like one, it
+// runs.
+func TestTheRemoteIsNeverReachedFromAWorkspace(t *testing.T) {
+	state := t.TempDir()
+	workspaces := filepath.Join(state, "workspaces")
+	ws := filepath.Join(workspaces, "revise-pr-12")
+	beside := filepath.Join(state, "workspaces-old")
+	for _, dir := range []string{ws, beside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(state, "link")
+	if err := os.Symlink(ws, link); err != nil {
+		t.Fatal(err)
+	}
+	r := git.Remote{URL: t.TempDir(), Untrusted: []string{workspaces}}
+	for _, dir := range []string{workspaces, ws, link} {
+		if _, err := r.Run(context.Background(), dir, "version"); err == nil || !strings.Contains(err.Error(), "refusing to reach the remote") {
+			t.Errorf("Run in %s: err = %v, want a refusal", dir, err)
+		}
+	}
+	for _, dir := range []string{"", state, beside} {
+		if _, err := r.Run(context.Background(), dir, "version"); err != nil {
+			t.Errorf("Run in %q: %v", dir, err)
+		}
 	}
 }

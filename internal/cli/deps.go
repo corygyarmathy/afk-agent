@@ -14,6 +14,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // reviewDeps builds what the review's transitions reach, from the parameters and
@@ -49,7 +50,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Tracker:       tr.client,
 		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Store:         st,
-		Checkout:      review.Git{Remote: remote(tr)}.Checkout,
+		Checkout:      review.Git{Remote: remote(tr, stateDir), Relays: work.Workspace{StateDir: stateDir}.Relays()}.Checkout,
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
@@ -100,7 +101,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		Model:           opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Login:           login,
 		BranchPrefix:    ip.branchPrefix,
-		Remote:          remote(tr),
+		Remote:          remote(tr, stateDir),
 		Resolve:         resolve,
 		Bound:           m.attempts,
 		TierWait:        m.tierWait,
@@ -152,6 +153,10 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
+	rp, err := p.replayBound()
+	if err != nil {
+		return nil, err
+	}
 	stateDir, resolve, err := resolver(p, m)
 	if err != nil {
 		return nil, err
@@ -166,7 +171,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Store:         st,
 		Login:         login,
 		Repo:          tr.client.Repo,
-		Remote:        remote(tr),
+		Remote:        remote(tr, stateDir),
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
@@ -174,6 +179,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
 		Denylist:      ip.denylist,
+		Replays:       rp,
 		Sensitive:     ip.sensitive,
 		HandOffLabel:  handOff,
 		HandBackLabel: ep.handBackLabel,
@@ -185,9 +191,13 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 // remote is the tracker's repository as git reaches it, with the installation
 // token minted and cached by the App the tracker uses: a clone, a fetch or a
 // push is the agent on the tracker like any other request (ADR 0005), and a
-// private repository is read as a public one is.
-func remote(tr *tracker) git.Remote {
-	return git.Remote{URL: "https://github.com/" + tr.client.Repo + ".git", Token: tr.app.Token, Refused: tr.app.Refused}
+// private repository is read as a public one is. It is never reached from a
+// job's workspace under stateDir, whose configuration is the model's to write.
+func remote(tr *tracker, stateDir string) git.Remote {
+	return git.Remote{
+		URL: "https://github.com/" + tr.client.Repo + ".git", Token: tr.app.Token, Refused: tr.app.Refused,
+		Untrusted: []string{work.Workspace{StateDir: stateDir}.Workspaces()},
+	}
 }
 
 // resolver is the state directory, and the candidate list for one job kind's

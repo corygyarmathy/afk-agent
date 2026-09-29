@@ -902,7 +902,7 @@ func TestGitChecksOutThePullRequestHead(t *testing.T) {
 	gitIn(t, src, "update-ref", "refs/pull/7/head", "HEAD")
 
 	dst := t.TempDir()
-	got, err := review.Git{Remote: git.Remote{URL: src}}.Checkout(context.Background(), dst, 7)
+	got, err := review.Git{Remote: git.Remote{URL: src}, Relays: t.TempDir()}.Checkout(context.Background(), dst, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -911,6 +911,42 @@ func TestGitChecksOutThePullRequestHead(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "store.go")); err != nil {
 		t.Errorf("the head's files are not in the workspace: %v", err)
+	}
+}
+
+// As the command surface builds it, the remote refuses to be reached from a
+// workspace, and a review's checkout is in one: the fetch that carries the
+// token is made in a relay outside it, and the head brought in from there.
+func TestGitChecksOutIntoAWorkspaceTheRemoteRefuses(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on PATH")
+	}
+	src := t.TempDir()
+	gitIn(t, src, "init", "--quiet")
+	gitIn(t, src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "one")
+	gitIn(t, src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "head")
+	want := gitIn(t, src, "rev-parse", "HEAD")
+	gitIn(t, src, "update-ref", "refs/pull/7/head", "HEAD")
+
+	state := t.TempDir()
+	workspaces, relays := filepath.Join(state, "workspaces"), filepath.Join(state, "relays")
+	dst := filepath.Join(workspaces, "review-7")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	remote := git.Remote{URL: src, Untrusted: []string{workspaces}}
+	got, err := review.Git{Remote: remote, Relays: relays}.Checkout(context.Background(), dst, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("checked out %s, want %s", got, want)
+	}
+	if n := gitIn(t, dst, "rev-list", "--count", "HEAD"); n != "1" {
+		t.Errorf("the checkout has %s commits, want the one head: a review's fetch is shallow", n)
+	}
+	if entries, _ := os.ReadDir(relays); len(entries) != 0 {
+		t.Errorf("the relay was left behind: %v", entries)
 	}
 }
 
@@ -948,7 +984,7 @@ func TestGitLeavesTheTokenNowhereTheSessionCanRead(t *testing.T) {
 		return "ghs_secret", nil
 	}}
 	dst := t.TempDir()
-	got, err := review.Git{Remote: remote}.Checkout(context.Background(), dst, 7)
+	got, err := review.Git{Remote: remote, Relays: t.TempDir()}.Checkout(context.Background(), dst, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
