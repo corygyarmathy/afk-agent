@@ -9,7 +9,9 @@ ADR 0004 §6 and ADR 0007, as ADR 0001 carries them. The spec is
 [`internal/implement`](../../internal/implement); the workspace, the relay, the
 local gate and its retries, the denylist, the leased push, the CI watch and its
 fixes, and the hand-back on a pull request are
-[`internal/work`](../../internal/work), which `/revise` uses too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
+[`internal/work`](../../internal/work); the wait for the review and the
+hand-off label are [`internal/handoff`](../../internal/handoff). `/revise` uses
+both too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 ## What it does
 

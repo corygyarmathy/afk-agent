@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/size"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // sections is the session's part of the reply, in the order it is posted.
@@ -60,10 +61,19 @@ func (d *Deps) replyBody(n int, p progress) string {
 	return b.String()
 }
 
+// hidden is an HTML comment: how every marker the agent reads back is written.
+var hidden = regexp.MustCompile(`(?s)<!--.*?-->`)
+
 // Sections is the session's part of the reply: the sections it wrote under
 // the headings the prompt names, in that order, with empty ones and anything
 // else left out. A heading written twice is one section.
+//
+// It carries no hidden line. The reply is a comment the agent wrote, so a
+// marker the session typed would be read back as the agent's own: a review of
+// a head, say, that was never written. An opening left unclosed is shown
+// rather than hide the rest.
 func Sections(text string) string {
+	text = strings.ReplaceAll(hidden.ReplaceAllString(text, ""), "<!--", "&lt;!--")
 	bodies := map[string]*strings.Builder{}
 	var at *strings.Builder
 	fence := false
@@ -99,9 +109,8 @@ func Sections(text string) string {
 }
 
 // awaitReview is `revise-review`: ask for the advisory review of the green
-// head, wait for it, and hand the pull request off once it is there. The wait
-// is implement's (work.AwaitReview); the review job claims the reply this job
-// posted as its request.
+// head, wait for it, and hand the pull request off once it is there (package
+// handoff). The review job claims the reply this job posted as its request.
 func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	pr, err := d.Tracker.PullRequest(ctx, n)
@@ -119,26 +128,24 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	if err != nil {
 		return transition.Result{}, err
 	}
-	r, err := d.work().AwaitReview(ctx, in, d.reviews(), n, p.Progress)
+	r, err := d.handOffDeps().AwaitReview(ctx, in, n, p.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	switch r.State {
-	case work.ReviewPosted:
+	case handoff.Done:
 		return transition.Result{State: HandingOff, RunAt: in.Now}, nil
-	case work.ReviewHandedBack:
+	case handoff.HandedBack:
 		return d.rest(in.Job.ID)
-	case work.ReviewHandBack:
+	case handoff.HandBack:
 		return d.handBackReplied(ctx, in, p, r.Reason, r.Output)
 	}
 	return transition.Result{State: Reviewing, RunAt: r.RunAt, Effects: r.Effects}, nil
 }
 
 // handOff is `revise-hand-off`: the hand-off label back on the pull request,
-// read back from the tracker, as implement's is and for the same reason: a
-// process killed between the commit and the label would leave the pull request
-// reviewed and never handed off. There is no round cap on revisions: the next
-// send-back is a new one.
+// read back from the tracker (package handoff). There is no round cap on
+// revisions: the next send-back is a new one.
 func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	pr, err := d.Tracker.PullRequest(ctx, n)
@@ -155,21 +162,17 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 	if err != nil {
 		return transition.Result{}, err
 	}
-	for _, l := range pr.Labels {
-		if strings.EqualFold(l, d.HandOffLabel) {
-			return d.rest(in.Job.ID)
-		}
-	}
-	stem := fmt.Sprintf("revise-hand-off-pr-%d-%s", n, p.Pushed)
-	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
-	if spent, ok := transition.Spent(err); ok {
-		return d.handBackReplied(ctx, in, p, fmt.Sprintf("CI is green on `%s` and it has its review, but the `%s` label was applied %d times and never appeared.", git.Short(p.Pushed), d.HandOffLabel, spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
-	}
+	r, err := d.handOffDeps().HandOff(ctx, in, pr, p.Pushed, fmt.Sprintf("revise-hand-off-pr-%d-%s", n, p.Pushed))
 	if err != nil {
 		return transition.Result{}, err
 	}
-	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandOffLabel) })}
-	return transition.Result{State: HandingOff, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
+	switch r.State {
+	case handoff.Done:
+		return d.rest(in.Job.ID)
+	case handoff.HandBack:
+		return d.handBackReplied(ctx, in, p, r.Reason, r.Output)
+	}
+	return transition.Result{State: HandingOff, RunAt: r.RunAt, Effects: r.Effects}, nil
 }
 
 // handBackReplied is a hand-back once the reply is posted. The reply stays as
@@ -198,8 +201,8 @@ func (d *Deps) rest(jobID string) (transition.Result, error) {
 	return transition.Result{State: Start}, errors.Join(d.work().Clear(jobID), d.clear(jobID))
 }
 
-// reviews is the wait for the review, and its bounds: implement's, since one
-// review job serves both kinds.
-func (d *Deps) reviews() work.Reviews {
-	return work.Reviews{Comments: d.Tracker, Store: d.Store, Login: d.Login, Ask: d.AskReview, Wait: d.CIWait, Rounds: d.Rounds}
+// handOffDeps is the hand-off's view of this kind, and its bounds:
+// implement's, since one review job serves both kinds.
+func (d *Deps) handOffDeps() handoff.Deps {
+	return handoff.Deps{Work: d.work(), Tracker: d.Tracker, Store: d.Store, Login: d.Login, Ask: d.AskReview, Label: d.HandOffLabel, Wait: d.CIWait, Rounds: d.Rounds}
 }

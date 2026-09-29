@@ -231,7 +231,7 @@ type Deps struct {
 	SizeSignal int
 
 	// AskReview makes the pull request's review job due now, under a lease
-	// of its own (work.ReviewAsker): how the revision asks for the advisory
+	// of its own (handoff.Asker): how the revision asks for the advisory
 	// review of its green head.
 	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 

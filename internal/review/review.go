@@ -216,7 +216,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if asked {
 		items = append(items, owed.ClaimPullRequest(n))
 	}
-	reply, err := d.askedByRevision(ctx, comments, pr)
+	reply, err := d.askedByRevision(ctx, comments, n, pr.HeadSHA)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -289,6 +289,19 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	head, err := d.Checkout(ctx, ws, n)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	// The revise job asks by making this job due, and one already due -
+	// deferred, or on its way here - is left as it is. The reply it left
+	// the head with is then a request the claim never saw: back to the
+	// claim, which takes it, so the review claims and links it.
+	comments, err := d.Tracker.Comments(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if reply, err := d.askedByRevision(ctx, comments, n, head); err != nil {
+		return transition.Result{}, err
+	} else if reply != 0 {
+		return transition.Result{State: Start, RunAt: in.Now}, nil
 	}
 	diff, err := d.Tracker.Diff(ctx, n)
 	if err != nil {
@@ -515,8 +528,8 @@ func (d *Deps) implementedFor(pr github.PullRequest) int {
 	return n
 }
 
-// askedByRevision is the reply the revise job left pull request pr at its
-// head with, if nobody has claimed it: a comment the agent wrote carrying
+// askedByRevision is the reply the revise job left pull request n at head
+// with, if nobody has claimed it: a comment the agent wrote carrying
 // owed.RevisionReplyMarker for that head, with no 👀 from the agent on it yet.
 // Zero if there is none.
 //
@@ -524,8 +537,8 @@ func (d *Deps) implementedFor(pr github.PullRequest) int {
 // comment the agent wrote still instructs nothing. The reply is what that job
 // posted, so the claim is on it, as implement's is on the description it
 // wrote. A reply for another head is not this review's to claim.
-func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, pr github.PullRequest) (int64, error) {
-	marker := owed.RevisionReplyMarker(pr.Number, pr.HeadSHA)
+func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, n int, head string) (int64, error) {
+	marker := owed.RevisionReplyMarker(n, head)
 	for _, c := range comments {
 		if !strings.EqualFold(c.Login, d.Login) || !strings.Contains(c.Body, marker) {
 			continue

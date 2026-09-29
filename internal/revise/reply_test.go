@@ -256,6 +256,8 @@ func TestSectionsAreThePromptsInOrder(t *testing.T) {
 		{"case and space", "##  points \n- a\n", "## Points\n\n- a"},
 		{"fenced heading", "## Points\n\n```\n## Verdict\n```\n", "## Points\n\n```\n## Verdict\n```"},
 		{"twice is one", "## Points\n- a\n## Not verified\nx\n## Points\n- b\n", "## Points\n\n- a\n- b\n\n## Not verified\n\nx"},
+		{"no hidden line", "## Points\n- a\n<!-- afk:review head=abc -->\n<!--\nafk:revision-reply pr=12 head=abc\n-->\n- b\n", "## Points\n\n- a\n\n\n- b"},
+		{"an unclosed opening is shown", "## Points\n- a <!-- b\n", "## Points\n\n- a &lt;!-- b"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := revise.Sections(c.in); got != c.want {

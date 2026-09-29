@@ -7,9 +7,10 @@ The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repositor
 sub-issues #145, #146, #134, #147, #148 and #149. The transitions are
 [`internal/revise`](../../internal/revise). The workspace, the relay, the local
 gate and its retries, the denylist, the leased push, the replay, the CI watch
-and its fixes, the wait for the review and the hand-back on a pull request are
-[`internal/work`](../../internal/work), shared with
-[`implement.md`](implement.md).
+and its fixes, and the hand-back on a pull request are
+[`internal/work`](../../internal/work); the wait for the review and the
+hand-off label are [`internal/handoff`](../../internal/handoff). Both are
+shared with [`implement.md`](implement.md).
 
 ## What it does
 
@@ -49,11 +50,9 @@ send-back, against the head the operator then read.
 ## The reply
 
 One comment on the pull request answering every command of the send-back,
-posted once CI is green on the revision's final head, so that everything it
-links is what the operator will read. It is the revision's orientation, as the
-description is for implement's pull request, and is posted before the
-advisory review so that the operator reads it first
-([#149](https://github.com/corygyarmathy/afk-agent/issues/149)). The code is
+posted once CI is green on the revision's final head, and before the advisory
+review ([#149](https://github.com/corygyarmathy/afk-agent/issues/149)). The
+code is
 [`internal/revise/revise_reply.go`](../../internal/revise/revise_reply.go).
 
 - **The agent's part** is a compare link from the head the send-back was
@@ -62,12 +61,11 @@ advisory review so that the operator reads it first
   the push ([`implement.md`](implement.md#the-description)); over it is a
   note, never a cut or a hand-back.
 - **The session's part** is `.git/afk-reply.md`, under these headings, in
-  this order, each left out when it is empty: **Points**, each `done` with its
-  commit or `not done` with one line why; **Suggested follow-ups**, owed no
-  answer; **Not verified**. The agent orders them, and posts nothing else the
-  session wrote: no narration, no "tests pass", no self-rating.
-- **Done is the session's own report.** The links are what make it cheap to
-  check, and nothing that reads as a verdict is added.
+  this order, each left out when it is empty: **Points**, each `done` with
+  its commit's full SHA or `not done` with one line why; **Suggested
+  follow-ups**, owed no answer; **Not verified**. The agent orders them, and
+  posts nothing else the session wrote: no narration, no "tests pass", no
+  self-rating, and no HTML comment, so no marker.
 - **Posted once, and never edited.** It is read back by a marker naming the
   new head, beside one marker for each command it answers. A later `/revise`
   written before the reply or a hand-back is read as written while the
@@ -77,17 +75,16 @@ advisory review so that the operator reads it first
 
 The review is the `review` job the revise job makes due for the new head,
 never a `/review` comment (ADR 0001 §14). It reviews the whole pull request.
-Its request is claimed with a 👀 on the reply, which the revise job posted, as
-implement's is claimed on the description it wrote; the description's 👀 is
-implement's for the life of the pull request. The review links the reply it
-claimed ([`review.md`](review.md)). The hand-off label goes back on once the
-review is there.
+Its request is claimed with a 👀 on the reply, which the revise job posted,
+never on the description. The review links the reply it claimed
+([`review.md`](review.md)). The hand-off label goes back on once the review is
+there.
 
 A **hand-back** is a comment saying what stopped the revision, and the
 hand-back label. The pull request stays open, with the branch as the revision
 left it. Before the reply, the hand-back lists the points done so far, from the
-session's reply file. After the reply, it links the reply and leaves it as it
-is: the reply is still true about the change. A review that fails after the
+session's reply file. After the reply, it links the reply, which is never
+edited. A review that fails after the
 reply is posted is a hand-back too: the review job's own, when its post never
 appears, or the revision's, when the review job parks.
 
@@ -127,7 +124,7 @@ There is no revise tier of its own. It requires one parameter of its own:
 
 `afk work` runs revise jobs and answers `/revise` only when implement jobs
 run too, and `--replays` is set. Without either it says so on stderr, and
-`/revise` is left unanswered rather than claimed and parked.
+leaves `/revise` unanswered.
 
 ## Running one by hand
 

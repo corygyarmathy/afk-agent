@@ -10,13 +10,13 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 const (
@@ -398,7 +398,7 @@ func setup(t *testing.T, tr *tracker) *fixture {
 		CICeiling:     2 * time.Hour,
 		CIFixes:       2,
 		Store:         s,
-		AskReview:     work.ReviewAsker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
+		AskReview:     handoff.Asker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
 		StateDir:      t.TempDir(),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)

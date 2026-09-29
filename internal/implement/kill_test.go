@@ -17,6 +17,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
@@ -24,7 +25,6 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // The environment the parent hands the helper process.
@@ -423,7 +423,7 @@ func TestHelperRunsAnImplement(t *testing.T) {
 		CICeiling:     48 * time.Hour,
 		CIFixes:       1,
 		Store:         askStore{s, ft},
-		AskReview:     work.ReviewAsker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		AskReview:     handoff.Asker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:      filepath.Join(dir, "state"),
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)

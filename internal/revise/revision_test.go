@@ -15,6 +15,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -24,7 +25,6 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 var (
@@ -251,7 +251,7 @@ func revisionFixture(t *testing.T) *revFixture {
 		TierWait: time.Hour,
 		Repo:     repo, Login: agent, HandBackLabel: d.HandBackLabel, StateDir: state,
 	}
-	d.AskReview = work.ReviewAsker(transition.Armer{Store: s, Holder: "ask-review", LeaseTTL: time.Minute})
+	d.AskReview = handoff.Asker(transition.Armer{Store: s, Holder: "ask-review", LeaseTTL: time.Minute})
 	reg := transition.MustRegistry(append(revise.Transitions(d), review.Transitions(rd)...)...)
 	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, at: now}
 	d.Log = func(msg string) { f.logs = append(f.logs, msg) }

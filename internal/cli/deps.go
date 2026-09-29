@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -120,7 +121,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		ReviewProcedure: ip.reviewProcedure,
 		Store:           st,
 		// A holder of its own: it leases the review job, never this one.
-		AskReview: work.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		AskReview: handoff.Asker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		StateDir:  stateDir,
 	}, nil
 }
@@ -192,7 +193,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		HandOffLabel:  handOff,
 		HandBackLabel: ep.handBackLabel,
 		// A holder of its own: it leases the review job, never this one.
-		AskReview: work.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		AskReview: handoff.Asker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		// Beside the store, as every other kind's state directory is.
 		StateDir: stateDir,
 	}, nil

@@ -17,13 +17,13 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // A process killed at any point from the revision's push to its hand-off, then
@@ -179,7 +179,7 @@ func TestHelperAnswers(t *testing.T) {
 		SizeSignal:    1000,
 		HandOffLabel:  handOff,
 		HandBackLabel: "needs-decision",
-		AskReview:     work.ReviewAsker(transition.Armer{Store: st, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+		AskReview:     handoff.Asker(transition.Armer{Store: st, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
 		StateDir:      state,
 	}
 	rd := &review.Deps{
