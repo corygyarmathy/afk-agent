@@ -628,6 +628,63 @@ func TestOpenCreatesTheStoreInAnEmptyDirectory(t *testing.T) {
 	}
 }
 
+// The store is opened as a URI, so a path is only safe if the characters a URI
+// gives meaning to are escaped. Unescaped, a `#` drops the rest of the path, a
+// `?` hands it to the driver as a query, and a leading `//` reads as a host.
+func TestOpenOpensTheFileItIsGiven(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a#b", "a?b", "a%23b", "a%b", "a b"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(root, name, "state.db")
+			openAt(t, path)
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("no store at %s: %v", path, err)
+			}
+		})
+	}
+	// Each subtest's directory must be the only thing it created.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			t.Errorf("stray file %s in %s", e.Name(), root)
+		}
+	}
+}
+
+func TestOpenTakesAPathWithALeadingDoubleSlash(t *testing.T) {
+	dir := t.TempDir()
+	openAt(t, "/"+filepath.Join(dir, "state.db"))
+	if _, err := os.Stat(filepath.Join(dir, "state.db")); err != nil {
+		t.Fatalf("no store in %s: %v", dir, err)
+	}
+}
+
+func TestOpenTakesARelativePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	openAt(t, filepath.Join("a#b", "state.db"))
+	if _, err := os.Stat(filepath.Join(dir, "a#b", "state.db")); err != nil {
+		t.Fatalf("no store at a#b/state.db in %s: %v", dir, err)
+	}
+}
+
+// openAt opens the store at path, making its directory first, and closes it
+// when the test ends.
+func openAt(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", path, err)
+	}
+	t.Cleanup(func() { s.Close() })
+}
+
 func TestIDIsStableAndDistinguishesTheNumberSpace(t *testing.T) {
 	// GitHub shares one number space across issues and pull requests, so issue
 	// 12 and pull request 12 are different subjects and must not collide.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -62,7 +63,23 @@ func dsn(path string) string {
 	// SQLite defaults it off.
 	q.Add("_pragma", "foreign_keys(on)")
 	q.Add("_pragma", "busy_timeout(5000)")
-	return "file:" + path + "?" + q.Encode()
+	return "file:" + uriPath(path) + "?" + q.Encode()
+}
+
+// uriPath escapes path for a file: URI, so the store opens the file it names.
+// Unescaped, a `#` ends the path, a `?` ends it too (the driver cuts the query
+// at the first one), and SQLite decodes a `%` escape that was only ever part of
+// a file name. An absolute path gets an empty authority, `file:///...`, because
+// a path starting `//` would otherwise be read as one.
+//
+// Not net/url's URL: given a relative path, it writes `file://rel/...` and
+// makes the first directory the host.
+func uriPath(path string) string {
+	path = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
+	if strings.HasPrefix(path, "/") {
+		return "//" + path
+	}
+	return path
 }
 
 func (s *sqliteStore) Close() error { return s.db.Close() }

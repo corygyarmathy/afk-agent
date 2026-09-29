@@ -124,8 +124,7 @@ func TestKillingARevisionStillPushesOnce(t *testing.T) {
 // red run sent back to the session. "before-revising" kills after the watch has
 // saved the fix it counted but before the red run is committed, so the watch
 // decides again on a progress that has counted it. "session.2" kills inside the
-// fix's session, after it has committed. Not `#`: the subtest's name is in the
-// store's path, and the store opens it as a URI, where `#` begins a fragment.
+// fix's session, after it has committed.
 func TestKillingARevisionsFixStillPushesOncePerRound(t *testing.T) {
 	for _, at := range []string{"watching", "before-revising", "revising", "session.2", "gating.2", "pushing.2", "pushed.2", "watching.2"} {
 		t.Run(at, func(t *testing.T) {
