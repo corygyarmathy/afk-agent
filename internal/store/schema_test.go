@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,10 +15,11 @@ import (
 )
 
 // openRaw opens the store file directly, to inspect the schema the package
-// built rather than the API it exposes.
+// built rather than the API it exposes. It escapes the path as Open does, and
+// sets none of Open's pragmas, so what it reads is what Open left on disk.
 func openRaw(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path)
+	db, err := sql.Open("sqlite", "file:"+store.URIPath(path))
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
 	}
@@ -25,9 +27,15 @@ func openRaw(t *testing.T, path string) *sql.DB {
 	return db
 }
 
+// newStoreFile puts the store under a directory whose name a URI would misread,
+// so openRaw has to name the file the same way Open does.
 func newStoreFile(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "state.db")
+	dir := filepath.Join(t.TempDir(), "a#b%23c")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "state.db")
 	s, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
