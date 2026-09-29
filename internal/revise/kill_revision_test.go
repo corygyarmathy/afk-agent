@@ -107,11 +107,13 @@ func TestKillingARevisionStillPushesOnce(t *testing.T) {
 //
 // A kill point `state.n` is the nth time the job is committed to state, so
 // `.2` is the fix's round. The job is seeded in revising, so "revising" is the
-// red run sent back to the session. "session.2" kills inside the fix's session,
-// after it has committed. Not `#`: the subtest's name is in the store's path,
-// and the store opens it as a URI, where `#` begins a fragment.
+// red run sent back to the session. "before-revising" kills after the watch has
+// saved the fix it counted but before the red run is committed, so the watch
+// decides again on a progress that has counted it. "session.2" kills inside the
+// fix's session, after it has committed. Not `#`: the subtest's name is in the
+// store's path, and the store opens it as a URI, where `#` begins a fragment.
 func TestKillingARevisionsFixStillPushesOncePerRound(t *testing.T) {
-	for _, at := range []string{"watching", "revising", "session.2", "gating.2", "pushing.2", "pushed.2", "watching.2"} {
+	for _, at := range []string{"watching", "before-revising", "revising", "session.2", "gating.2", "pushing.2", "pushed.2", "watching.2"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
 			remote, head, count := revisionRemoteCounting(t, dir)
@@ -156,6 +158,9 @@ func TestKillingARevisionsFixStillPushesOncePerRound(t *testing.T) {
 			}
 			if got := finalState(t, state); got != revise.Replying {
 				t.Errorf("the job is in %q, want %s: green after the fix", got, revise.Replying)
+			}
+			if n := keptFixes(t, state); n != 1 {
+				t.Errorf("%d fixes counted, want one: one red head", n)
 			}
 		})
 	}
@@ -311,6 +316,22 @@ func keptReply(t *testing.T, state string) string {
 	return p.Reply
 }
 
+// keptFixes is how many fixes the revision's progress counted.
+func keptFixes(t *testing.T, state string) int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(state, "progress", jobID()+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Fixes int `json:"fixes"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Fixes
+}
+
 // finalState is the job's state once the helpers are done.
 func finalState(t *testing.T, state string) string {
 	t.Helper()
@@ -332,7 +353,9 @@ func jobState(t *testing.T, s store.Store, id string) string {
 
 // killStore is a store that kills the process at a named state change, after
 // the change is committed: the point between a commit and the effect it
-// performs. `state.n` is the nth commit to state.
+// performs. `state.n` is the nth commit to state. `before-state` kills before
+// the change is committed instead: the point between what a transition saved
+// beside the store and the commit that moves the job on.
 type killStore struct {
 	store.Store
 	at    string
@@ -341,22 +364,32 @@ type killStore struct {
 }
 
 func (k *killStore) Commit(ctx context.Context, c store.Commit) error {
-	if err := k.Store.Commit(ctx, c); err != nil {
-		return err
-	}
 	if k.seen == nil {
 		k.seen = map[string]int{}
 	}
 	k.seen[c.State]++
-	want, nth, _ := strings.Cut(k.at, ".")
+	at, before := strings.CutPrefix(k.at, "before-")
+	want, nth, _ := strings.Cut(at, ".")
 	if nth == "" {
 		nth = "1"
 	}
-	if want == c.State && nth == strconv.Itoa(k.seen[c.State]) {
-		os.WriteFile(k.ready, nil, 0o644)
-		select {}
+	hit := want == c.State && nth == strconv.Itoa(k.seen[c.State])
+	if hit && before {
+		k.die()
+	}
+	if err := k.Store.Commit(ctx, c); err != nil {
+		return err
+	}
+	if hit {
+		k.die()
 	}
 	return nil
+}
+
+// die tells the test it is ready to be killed, and waits to be.
+func (k *killStore) die() {
+	os.WriteFile(k.ready, nil, 0o644)
+	select {}
 }
 
 // seedReviseJob creates the revision job in the state #146 starts from, and

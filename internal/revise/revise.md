@@ -35,7 +35,7 @@ This workspace is not the one you may be used to, in three ways:
 {{- if .Failed}}
 
 This is not the first attempt. An earlier session worked on this branch, and
-its commits are still on it. Then a check failed: {{.Why}} The output is in
+its commits are still on it. Then the local gate or CI failed: {{.Why}} The output is in
 `.git/afk-gate.log`. Read it first, and fix the cause.
 {{- end}}
 

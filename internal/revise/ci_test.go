@@ -215,6 +215,75 @@ func TestAFixsPushGoesThroughTheDenylist(t *testing.T) {
 	}
 }
 
+// A fix's push is leased on the revision's own push, as the revision's first
+// was on the send-back's head: someone else's push during the fix is theirs,
+// and the fix is handed back rather than pushed over it.
+func TestAFixsPushIsLeasedOnTheRevisionsPush(t *testing.T) {
+	f := setupRevision(t)
+	var theirs string
+	f.model.then(
+		reviseOn("bar.txt", "## Points\n\n- done."),
+		func(dir string) error {
+			if err := f.someoneElsePushes("other.txt"); err != nil {
+				return err
+			}
+			theirs = f.remoteHead()
+			return commitOn("fix.txt")(dir)
+		},
+	)
+	var first string
+	f.tr.checks = redOn(&first)
+
+	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
+	}
+	if at := f.remoteHead(); at != theirs {
+		t.Errorf("the remote is at %s, want their push %s left alone", git.Short(at), git.Short(theirs))
+	}
+	want := "Someone else changed `feature` while the revision ran: it is at `" + git.Short(theirs) + "`, not at `" + git.Short(first) + "` where the agent left it."
+	if body := f.handBack(); !strings.Contains(body, want) {
+		t.Errorf("the hand-back does not say %q:\n%s", want, body)
+	}
+}
+
+// A workspace lost after the revision pushed is handed back when CI sends a
+// red run to it, rather than made afresh from the send-back's head: the points
+// would be done over, and the lease would refuse the push over the revision's
+// own.
+func TestAWorkspaceLostAfterThePushHandsBack(t *testing.T) {
+	f := setupRevision(t)
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
+	var first string
+	f.tr.checks = redOn(&first)
+
+	f.step(revise.Watching)
+	if job := f.once(); job.State != revise.Revising {
+		t.Fatalf("the job is in %q, want %s: CI was red", job.State, revise.Revising)
+	}
+	if err := os.RemoveAll(filepath.Join(f.deps.StateDir, "workspaces", jobID())); err != nil {
+		t.Fatal(err)
+	}
+
+	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want once: nothing is done over", len(f.model.asked))
+	}
+	if at := f.remoteHead(); at != first {
+		t.Errorf("the remote is at %s, want the revision's push %s", git.Short(at), git.Short(first))
+	}
+	body := f.handBack()
+	for _, want := range []string{"lost the revision's workspace after it pushed `" + git.Short(first) + "`", "\"Rename Foo\" done."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the hand-back does not say %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Someone else") {
+		t.Errorf("the hand-back blames someone else for the agent's own push:\n%s", body)
+	}
+}
+
 // A fix that commits nothing is handed back, and says it was the fix that
 // added nothing.
 func TestAFixThatCommitsNothingHandsBack(t *testing.T) {
@@ -326,5 +395,25 @@ func TestAClosedPullRequestWhileCIRunsRests(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "workspaces", jobID())); !os.IsNotExist(err) {
 		t.Errorf("the workspace is still there: %v", err)
+	}
+}
+
+// A closed pull request's rest that was cleared but not committed - killed
+// between the two - rests on the next run too, rather than read the progress
+// it cleared as a lost revision to hand back.
+func TestAClosedPullRequestClearedButNotCommittedRests(t *testing.T) {
+	f := setupRevision(t)
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."))
+	f.step(revise.Watching)
+	f.tr.pr.State = "closed"
+	if err := os.Remove(filepath.Join(f.deps.StateDir, "progress", jobID()+".json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest", job.State)
+	}
+	if f.handBack() != "" || f.handedBack() {
+		t.Error("a closed pull request was handed back")
 	}
 }

@@ -9,8 +9,9 @@
 //	                               claiming   made again, under the next key
 //	revising  --revise-run------>  gating     one candidate model, in the workspace, on the send-back's head
 //	                               revising   it failed transiently: the next candidate
-//	                               handing-back  the branch was deleted, or pushed over, since the send-back
-//	gating    --revise-gate----->  pushing    the local gate passed
+//	                               handing-back  the branch was deleted, or pushed over, since the send-back,
+//	                                             or the workspace was lost after the revision pushed
+//	gating   --revise-gate----->  pushing    the local gate passed
 //	                               revising   it failed: back to the session that wrote it
 //	                               handing-back  out of attempts, or the session rewrote the read head
 //	pushing   --revise-push----->  pushed     the denylist, and the leased push

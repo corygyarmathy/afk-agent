@@ -282,7 +282,8 @@ func revisionMarkers(ids []int64) string {
 // workspace is the revision's workspace and its progress, made afresh from the
 // head the send-back was written against unless both are there and agree.
 // gone is why the revision cannot start from that head, for a hand-back: the
-// branch deleted, or pushed over, since the send-back was claimed.
+// branch deleted, or pushed over, since the send-back was claimed, or the
+// workspace lost after the revision pushed.
 //
 // The head is fetched through the relay - a repository the agent owns and has
 // isolated - and brought into the workspace locally with no token, because the
@@ -298,6 +299,13 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return progress{}, "", err
+	}
+	if err == nil && p.Read == sb.Head && p.Pushed != p.Read {
+		// A red run sent back after the revision pushed, to a workspace that
+		// is gone or on another branch. Made afresh from the send-back's
+		// head, it would do the points over, and its push, leased on that
+		// head, would be refused by the revision's own.
+		return p, fmt.Sprintf("The agent lost the revision's workspace after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(p.Pushed)), nil
 	}
 	if err := w.Clear(jobID); err != nil {
 		return progress{}, "", err

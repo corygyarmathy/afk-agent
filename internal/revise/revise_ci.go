@@ -16,22 +16,26 @@ import (
 // fixes, or past the ceiling, the revision is handed back with the points done
 // so far.
 func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, error) {
+	n := in.Job.Subject.Number
+	pr, err := d.Tracker.PullRequest(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	// Before the progress is read: clearing it is how a closed pull request
+	// comes to rest, and a run killed or failed after the clear but before
+	// its commit comes back here with the progress gone. That is not a lost
+	// revision to hand back on a pull request nobody is reading.
+	if pr.State != "open" {
+		// Closed, or merged, by a human. That is their decision about the
+		// pull request, and there is nothing to say about it.
+		return transition.Result{State: Start}, errors.Join(d.work().Clear(in.Job.ID), d.clear(in.Job.ID))
+	}
 	p, err := d.load(in.Job.ID)
 	if errors.Is(err, os.ErrNotExist) {
 		return d.handBackLost(ctx, in)
 	}
 	if err != nil {
 		return transition.Result{}, err
-	}
-	n := in.Job.Subject.Number
-	pr, err := d.Tracker.PullRequest(ctx, n)
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if pr.State != "open" {
-		// Closed, or merged, by a human. That is their decision about the
-		// pull request, and there is nothing to say about it.
-		return transition.Result{State: Start}, errors.Join(d.work().Clear(in.Job.ID), d.clear(in.Job.ID))
 	}
 	r, err := d.work().Watch(ctx, in, d.ci(), n, &p.Progress)
 	if err != nil {
