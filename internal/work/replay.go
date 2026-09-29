@@ -12,25 +12,32 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/git"
 )
 
-// Stuck is a replay that could not be made: the commit that would not go onto
-// the new head, and why.
-type Stuck struct {
+// Conflict is a replay that could not be made: the commit that would not go
+// onto the new head, and why.
+type Conflict struct {
 	// Commit is the work's commit that stopped the replay, and Subject its
 	// first line.
 	Commit  string
 	Subject string
 
-	// Paths is where it conflicts with the new head. Empty for a merge
-	// commit, which is not replayed at all.
+	// Paths is where it conflicts with the new head. Empty for a commit
+	// that is not replayed at all: a merge commit, or one with no parent,
+	// which a merge of an unrelated history brings in.
 	Paths []string
+
+	// Parents is how many parents Commit has.
+	Parents int
 }
 
-// Said is what a hand-back says about a replay onto onto that stuck.
-func (s Stuck) Said(onto string) string {
-	if len(s.Paths) == 0 {
-		return fmt.Sprintf("`%s` (%s) is a merge commit, and the agent does not replay one onto `%s`.", git.Short(s.Commit), s.Subject, git.Short(onto))
+// Said is what a hand-back says about a replay onto onto that conflicted.
+func (c Conflict) Said(onto string) string {
+	switch {
+	case len(c.Paths) > 0:
+		return fmt.Sprintf("`%s` (%s) conflicts with `%s` in %s.", git.Short(c.Commit), c.Subject, git.Short(onto), Quoted(c.Paths))
+	case c.Parents == 0:
+		return fmt.Sprintf("`%s` (%s) has no parent, and the agent does not replay a history with a root of its own onto `%s`.", git.Short(c.Commit), c.Subject, git.Short(onto))
 	}
-	return fmt.Sprintf("`%s` (%s) conflicts with `%s` in %s.", git.Short(s.Commit), s.Subject, git.Short(onto), Quoted(s.Paths))
+	return fmt.Sprintf("`%s` (%s) is a merge commit, and the agent does not replay one onto `%s`.", git.Short(c.Commit), c.Subject, git.Short(onto))
 }
 
 // Replay puts the work's own commits - those on the workspace's branch that
@@ -46,9 +53,10 @@ func (s Stuck) Said(onto string) string {
 //
 // Only the work's commits are replayed. Everything onto has - the head the work
 // started from, and anyone else's push on top of it - is kept as it is. A
-// commit that conflicts, or a merge commit, stops the replay with nothing in
-// the workspace changed. A workspace already on top of onto is left as it is.
-func Replay(ctx context.Context, workspace, relayDir, branch, onto string) (head string, stuck *Stuck, err error) {
+// commit that conflicts, a merge commit, or a commit with no parent stops the
+// replay with nothing in the workspace changed. A workspace already on top of
+// onto is left as it is.
+func Replay(ctx context.Context, workspace, relayDir, branch, onto string) (head string, conflict *Conflict, err error) {
 	const work, replayed = "refs/afk/work", "refs/afk/replayed"
 	if _, err := git.RunEnv(ctx, relayDir, git.Isolated, "fetch", "--quiet", "--no-tags", "--force", workspace, "+refs/heads/"+branch+":"+work); err != nil {
 		return "", nil, err
@@ -77,14 +85,14 @@ func Replay(ctx context.Context, workspace, relayDir, branch, onto string) (head
 		}
 		commit := ids[0]
 		if len(ids) != 2 {
-			return "", &Stuck{Commit: commit, Subject: subject(ctx, relayDir, commit)}, nil
+			return "", &Conflict{Commit: commit, Subject: subject(ctx, relayDir, commit), Parents: len(ids) - 1}, nil
 		}
 		tree, paths, err := mergeTree(ctx, relayDir, ids[1], head, commit)
 		if err != nil {
 			return "", nil, err
 		}
 		if len(paths) > 0 {
-			return "", &Stuck{Commit: commit, Subject: subject(ctx, relayDir, commit), Paths: paths}, nil
+			return "", &Conflict{Commit: commit, Subject: subject(ctx, relayDir, commit), Paths: paths, Parents: 1}, nil
 		}
 		if head, err = recommit(ctx, relayDir, commit, tree, head); err != nil {
 			return "", nil, err

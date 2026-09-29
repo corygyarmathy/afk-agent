@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
-
-	"github.com/corygyarmathy/afk-agent/internal/git"
 )
 
 // GateTail is how much of the gate's output is kept for the session that has
@@ -105,7 +103,7 @@ func (w Workspace) Check(ctx context.Context, jobID string, p *Progress, command
 		// unread: a session runs the gate itself, and what that leaves
 		// behind is not the work. A file the work needed but nobody added
 		// goes too, and the gate says so.
-		if _, err := git.Run(ctx, ws, "clean", "--quiet", "--force", "-d"); err != nil {
+		if _, err := inWorkspace(ctx, ws, "clean", "--quiet", "--force", "-d"); err != nil {
 			return GateResult{}, err
 		}
 		passed, output, err := RunGate(ctx, ws, command)

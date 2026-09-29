@@ -21,6 +21,7 @@
 //	                               replaying  someone else pushed during the revision
 //	                               handing-back  the branch was deleted during the revision
 //	replaying --revise-replay--->  gating     the revision's own commits, on top of their push
+//	                               watching   the revision's push had landed, and theirs is on top of it
 //	                               handing-back  their push dropped what was read, a replay conflicts, or out of replays
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
 //	deferred  --revise-resume----> revising   the tier again, from its first model

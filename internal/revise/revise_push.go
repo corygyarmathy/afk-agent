@@ -104,7 +104,9 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 // replay is `revise-replay`: someone else pushed to the branch while the
 // revision ran, and the revision's own commits go on top of their push, to be
 // gated and pushed again under a lease pinned to it. Nothing they pushed, and
-// nothing the send-back was written against, is rewritten. It hands back when
+// nothing the send-back was written against, is rewritten. A push on top of the
+// revision's own, once it landed, is no push during it: the revision moves on
+// to be watched. It hands back when
 // their push dropped what the agent last saw there, when a replay conflicts,
 // and when the revision has already been replayed as many times as it may be.
 //
@@ -138,6 +140,27 @@ func (d *Deps) replay(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
+	// A push on top of the revision's own, after it landed and before the
+	// agent read it back - a bot that pushes after every push - is not one
+	// made during the revision: the revision is on the branch, and lands as
+	// it would have. The relay holds only what the branch has, so a head it
+	// has is one the branch has. It is checked before a replay is counted,
+	// so that a replay counted and then killed is not taken for it.
+	if p.Head != "" && p.Head != p.Pushed {
+		if has, err := work.HasCommit(ctx, relayDir, p.Head); err != nil {
+			return transition.Result{}, err
+		} else if has {
+			if landed, err := work.Ancestor(ctx, relayDir, p.Head, at); err != nil {
+				return transition.Result{}, err
+			} else if landed {
+				p.Pushed, p.PushedAt = p.Head, in.Now
+				if err := d.save(in.Job.ID, p); err != nil {
+					return transition.Result{}, err
+				}
+				return transition.Result{State: Watching, RunAt: in.Now}, nil
+			}
+		}
+	}
 	// Their push has to be on top of the lease: the head the send-back was
 	// written against, the agent's own last push, or the last push the
 	// revision was replayed onto. One that dropped it rewrote what was
@@ -163,10 +186,10 @@ func (d *Deps) replay(ctx context.Context, in transition.In) (transition.Result,
 			return transition.Result{}, err
 		}
 	}
-	if _, stuck, err := work.Replay(ctx, d.work().Dir(in.Job.ID), relayDir, p.Branch, p.Pushed); err != nil {
+	if _, conflict, err := work.Replay(ctx, d.work().Dir(in.Job.ID), relayDir, p.Branch, p.Pushed); err != nil {
 		return transition.Result{}, err
-	} else if stuck != nil {
-		return d.handBack(ctx, in, p, fmt.Sprintf("Someone else pushed to `%s` while the revision ran, and the revision does not replay onto their push: %s Nothing was pushed, and the agent does not push over anyone else's work.", p.Branch, stuck.Said(p.Pushed)), "")
+	} else if conflict != nil {
+		return d.handBack(ctx, in, p, fmt.Sprintf("Someone else pushed to `%s` while the revision ran, and the revision does not replay onto their push: %s Nothing was pushed, and the agent does not push over anyone else's work.", p.Branch, conflict.Said(p.Pushed)), "")
 	}
 	return transition.Result{State: Gating, RunAt: in.Now}, nil
 }

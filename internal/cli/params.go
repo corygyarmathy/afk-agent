@@ -134,7 +134,8 @@ description's reminder says it has no link to the procedure. Without
 Revising a pull request, for afk run and afk work:
 
   --replays <n>         AFK_REPLAYS          times a revision is replayed onto a push someone
-                                             else made during it, then a hand-back (required)
+                                             else made during it, then a hand-back; 0 hands
+                                             back at once (required with --branch-prefix)
 
 A revision also takes the gate, its attempts, the tier, the denylist and the
 hand-off label from implementing an issue.
@@ -890,13 +891,18 @@ func (p *params) bindRevise(fs *flag.FlagSet) {
 }
 
 // replayBound is how many times a revision is replayed onto someone else's push,
-// resolved. Required rather than defaulted, as every bound is.
+// resolved. Required rather than defaulted, as every bound is. Zero is a bound
+// too: a revision that hands back at the first push made during it.
 func (p *params) replayBound() (int, error) {
 	v, err := required(p.replays, "replays", "AFK_REPLAYS")
 	if err != nil {
 		return 0, err
 	}
-	return count(v, "replays")
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, usagef("--replays: %q is not a whole number", v)
+	}
+	return n, nil
 }
 
 // bindEffects binds what both job kinds need to say things on the tracker: how

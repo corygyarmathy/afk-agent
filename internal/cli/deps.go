@@ -50,7 +50,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Tracker:       tr.client,
 		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Store:         st,
-		Checkout:      review.Git{Remote: remote(tr, stateDir)}.Checkout,
+		Checkout:      review.Git{Remote: remote(tr, stateDir), Relays: work.Workspace{StateDir: stateDir}.Relays()}.Checkout,
 		Resolve:       resolve,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,

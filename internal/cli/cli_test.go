@@ -1119,7 +1119,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		replays, want string
 	}{
 		{"", "--replays is required"},
-		{"0", "--replays"},
+		{"-1", "--replays"},
 		{"some", "--replays"},
 	} {
 		p := full
@@ -1127,6 +1127,12 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		if _, err := reviseDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("replays %q: err = %v, want it to contain %q", tc.replays, err, tc.want)
 		}
+	}
+	// No replay at all is a bound an operator may set: the first push made
+	// during a revision hands it back.
+	full.replays = "0"
+	if rd, err := reviseDeps(context.Background(), full, nil, tr); err != nil || rd.Replays != 0 {
+		t.Errorf("replays 0: deps = %+v, err = %v; want a bound of 0", rd, err)
 	}
 }
 

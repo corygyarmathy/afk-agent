@@ -299,7 +299,7 @@ plus model choice,
 gate, attempts, denylist and tier: there is no revise tier of its own. It
 requires one parameter of its own, `--replays`: how many times a revision is
 replayed onto a push someone else made during it before the next such push
-hands it back.
+hands it back. `0` hands back at the first.
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the

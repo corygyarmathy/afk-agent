@@ -91,16 +91,14 @@ func FetchInto(ctx context.Context, relayDir string, remote git.Remote, ref stri
 // will refuse a head that moved on.
 //
 // The fetch carries no token, so nothing the workspace's .git/config says can
-// send one anywhere. It reads objects alone (upload-pack). A session may
-// already have run in the workspace (Replay), so neither command runs a hook
-// or an fsmonitor the workspace names: the agent's own git is not the
-// session's to run code through.
+// send one anywhere. A session may already have run in the workspace
+// (Replay), so both commands run as inWorkspace runs them: nothing that
+// configuration names is run by the agent's git.
 func Import(ctx context.Context, relayDir, workspace, branch, ref, commit string) error {
-	noHooks := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
-	if _, err := git.RunEnv(ctx, workspace, git.Isolated, append(noHooks, "fetch", "--quiet", "--no-tags", "--force", relayDir, "+"+ref+":refs/afk/import")...); err != nil {
+	if _, err := inWorkspace(ctx, workspace, "fetch", "--quiet", "--no-tags", "--force", relayDir, "+"+ref+":refs/afk/import"); err != nil {
 		return err
 	}
-	if _, err := git.RunEnv(ctx, workspace, git.Isolated, append(noHooks, "checkout", "--quiet", "--force", "-B", branch, commit)...); err != nil {
+	if _, err := inWorkspace(ctx, workspace, "checkout", "--quiet", "--force", "-B", branch, commit); err != nil {
 		return err
 	}
 	return nil
@@ -192,7 +190,7 @@ func HasCommit(ctx context.Context, dir, commit string) (bool, error) {
 
 // Commits is how many commits the workspace's branch has on top of base.
 func Commits(ctx context.Context, dir, base string) (int, error) {
-	out, err := git.Run(ctx, dir, "rev-list", "--count", base+"..HEAD")
+	out, err := inWorkspace(ctx, dir, "rev-list", "--count", base+"..HEAD")
 	if err != nil {
 		return 0, err
 	}
@@ -203,22 +201,22 @@ func Commits(ctx context.Context, dir, base string) (int, error) {
 // files and not committed: empty for a clean tree. Untracked files are not
 // counted; the gate cleans them away before it runs.
 func Uncommitted(ctx context.Context, dir string) (string, error) {
-	return git.Run(ctx, dir, "status", "--porcelain", "--untracked-files=no")
+	return inWorkspace(ctx, dir, "status", "--porcelain", "--untracked-files=no")
 }
 
 // Reset puts the workspace back at base, on the branch it has checked out,
 // with nothing untracked.
 func Reset(ctx context.Context, dir, base string) error {
-	if _, err := git.Run(ctx, dir, "reset", "--quiet", "--hard", base); err != nil {
+	if _, err := inWorkspace(ctx, dir, "reset", "--quiet", "--hard", base); err != nil {
 		return err
 	}
-	_, err := git.Run(ctx, dir, "clean", "--quiet", "--force", "-d")
+	_, err := inWorkspace(ctx, dir, "clean", "--quiet", "--force", "-d")
 	return err
 }
 
 // BranchOf is the branch the workspace has checked out, or HEAD if none is.
 func BranchOf(ctx context.Context, dir string) (string, error) {
-	return git.Run(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	return inWorkspace(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
 }
 
 // MergeBase is the commit a branch diverged from into, three-dot, which is the

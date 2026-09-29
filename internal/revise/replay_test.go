@@ -222,8 +222,47 @@ func TestAPushThatDropsTheReadHeadIsNotReplayedOnto(t *testing.T) {
 	}
 }
 
+// A push someone makes on top of the revision's own, after it landed and
+// before the agent read it back, is not a push made during the revision: the
+// revision is on the branch, so nothing is replayed and nothing is handed back.
+// A bot that pushes after every push does this routinely.
+func TestAPushOnTopOfTheRevisionsOwnPushIsNotReplayedOnto(t *testing.T) {
+	for _, replays := range []int{2, 0} {
+		t.Run(fmt.Sprintf("replays %d", replays), func(t *testing.T) {
+			f := setupRevision(t)
+			f.deps.Replays = replays
+			f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
+
+			f.claim()
+			if job := f.step(revise.Pushed); job.State != revise.Pushed {
+				t.Fatalf("the job is in %q, want %s", job.State, revise.Pushed)
+			}
+			ours := f.remoteHead()
+			if err := f.someoneElsePushes("formatted.txt"); err != nil {
+				t.Fatal(err)
+			}
+			theirs := f.remoteHead()
+
+			job := f.drive()
+			if job.State != revise.Watching {
+				t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
+			}
+			if at := f.remoteHead(); at != theirs {
+				t.Errorf("the remote is at %s, want their push %s left as it is", git.Short(at), git.Short(theirs))
+			}
+			if p := f.replayed(); p.Replays != 0 || p.Pushed != ours {
+				t.Errorf("progress is %+v, want no replay and the revision's own push %s as the lease", p, git.Short(ours))
+			}
+			if n := len(f.model.asked); n != 1 {
+				t.Errorf("%d model runs, want 1", n)
+			}
+		})
+	}
+}
+
 type replayedProgress struct {
 	Read    string `json:"read"`
+	Pushed  string `json:"pushed"`
 	Replays int    `json:"replays"`
 }
 

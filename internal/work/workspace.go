@@ -40,7 +40,13 @@ func (w Workspace) Workspaces() string {
 // RelayDir is the bare repository only the agent writes, which the push is
 // made from.
 func (w Workspace) RelayDir(jobID string) string {
-	return filepath.Join(w.StateDir, "relays", jobID+".git")
+	return filepath.Join(w.Relays(), jobID+".git")
+}
+
+// Relays is the directory every job's relay is under: outside the workspaces,
+// so that the remote may be reached from it.
+func (w Workspace) Relays() string {
+	return filepath.Join(w.StateDir, "relays")
 }
 
 // ProgressPath is where the job's progress waits.
