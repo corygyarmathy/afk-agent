@@ -9,6 +9,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // remainderFile is where, in the workspace's .git, the session says what is
@@ -204,8 +205,8 @@ func (d *Deps) restBody(jobID, marker string, n int, p progress) string {
 		return fmt.Sprintf("%s\nWhat is left of #%d once `%s`, its first piece, is in.%s\n\n%s\n\nIt is blocked by #%d, which the first piece does not close, and it is not labelled for the agent: whether and when it is worked is yours to decide.\n", marker, n, p.Branch, uncut, remainder, n)
 	}
 	b := body(p.Remainder)
-	if over(b) {
-		d.logf("%s: what the session says is left is over GitHub's %d characters, so the issue for it is filed without it", jobID, bodyLimit)
+	if work.OverLimit(b) {
+		d.logf("%s: what the session says is left is over GitHub's %d characters, so the issue for it is filed without it", jobID, github.BodyLimit)
 		b = body("")
 	}
 	return b

@@ -35,6 +35,10 @@ type tracker struct {
 	issues    map[int]github.Issue
 	nextID    int64
 
+	// editFails is the error every edit of the pull request's description
+	// fails with, or nil.
+	editFails error
+
 	// writes counts every write, by what it was.
 	writes map[string]int
 }
@@ -42,7 +46,7 @@ type tracker struct {
 func newTracker() *tracker {
 	return &tracker{
 		pr: github.PullRequest{
-			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo,
+			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main",
 			Login: "alice", Labels: []string{handOff, "bug"},
 		},
 		comments:  map[int][]github.Comment{},
@@ -137,6 +141,18 @@ func (tr *tracker) Unlabel(_ context.Context, n int, label string) error {
 		}
 	}
 	tr.pr.Labels = kept
+	return nil
+}
+
+func (tr *tracker) EditPullRequest(_ context.Context, n int, body string) error {
+	tr.writes["edit"]++
+	if tr.editFails != nil {
+		return tr.editFails
+	}
+	if n != 12 {
+		return &github.StatusError{Code: 404, Status: "404 Not Found"}
+	}
+	tr.pr.Body = body
 	return nil
 }
 
