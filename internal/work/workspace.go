@@ -28,13 +28,25 @@ type Workspace struct {
 
 // Dir is the job's checkout.
 func (w Workspace) Dir(jobID string) string {
-	return filepath.Join(w.StateDir, "workspaces", jobID)
+	return filepath.Join(w.Workspaces(), jobID)
+}
+
+// Workspaces is the directory every job's checkout is under: what the remote
+// is never reached from (git.Remote.Untrusted).
+func (w Workspace) Workspaces() string {
+	return filepath.Join(w.StateDir, "workspaces")
 }
 
 // RelayDir is the bare repository only the agent writes, which the push is
 // made from.
 func (w Workspace) RelayDir(jobID string) string {
-	return filepath.Join(w.StateDir, "relays", jobID+".git")
+	return filepath.Join(w.Relays(), jobID+".git")
+}
+
+// Relays is the directory every job's relay is under: outside the workspaces,
+// so that the remote may be reached from it.
+func (w Workspace) Relays() string {
+	return filepath.Join(w.StateDir, "relays")
 }
 
 // ProgressPath is where the job's progress waits.

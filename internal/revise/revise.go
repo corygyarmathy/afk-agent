@@ -1,7 +1,7 @@
 // Package revise is the revise job kind's transitions: a send-back on a pull
 // request becomes a revision of it (#131).
 //
-// A send-back's whole way to a revision (#145, #146, #147):
+// A send-back's whole way to a revision (#145, #146, #134, #147):
 //
 //	start     --revise---------->  claiming   claim every unanswered command, and refuse what cannot be revised
 //	claiming  --revise-claimed-->  revising   the claims, the replies and the hand-off label taken off are on the tracker
@@ -11,15 +11,20 @@
 //	                               revising   it failed transiently: the next candidate
 //	                               handing-back  the branch was deleted, or pushed over, since the send-back,
 //	                                             or the workspace was lost after the revision pushed
-//	gating   --revise-gate----->  pushing    the local gate passed
+//	gating    --revise-gate----->  pushing    the local gate passed
 //	                               revising   it failed: back to the session that wrote it
 //	                               handing-back  out of attempts, or the session rewrote the read head
-//	pushing   --revise-push----->  pushed     the denylist, and the leased push
+//	pushing   --revise-push----->  pushed     the denylist, the size and the sensitive paths, and the leased push
 //	                               pushing    the push did not land: again, under the next key
 //	                               handing-back  a denied path, the read head rewritten, or out of rounds
-//	pushed    --revise-pushed--->  watching   the push is on the remote
+//	pushed    --revise-pushed--->  watching   the push is on the remote, and the sensitive line right or given up on: CI is #147's
+//	                               pushed     the sensitive line edited: read back
 //	                               pushing    not landed yet: again
-//	                               handing-back  someone else pushed during the revision
+//	                               replaying  someone else pushed during the revision
+//	                               handing-back  the branch was deleted during the revision
+//	replaying --revise-replay--->  gating     the revision's own commits, on top of their push
+//	                               pushed     the revision's push had landed, and theirs is on top of it
+//	                               handing-back  their push dropped what was read, a replay conflicts, or out of replays
 //	watching  --revise-watch---->  replying   CI is green on the pushed head: the reply is #149's
 //	                               watching   not finished: again after the CI wait
 //	                               revising   red: back to the revision's session, with what CI said
@@ -30,9 +35,19 @@
 //
 // The revision's own commits go on top of the head the send-back was written
 // against, and are pushed under a lease pinned to that head: a push made while
-// the revision ran is never overwritten (#146). The workspace, the relay, the
-// gate and its retries, the denylist and the leased push are package work,
-// shared with implement.
+// the revision ran is never overwritten (#146). When the lease refuses because
+// someone else pushed, the revision's own commits are replayed onto their push,
+// gated again and pushed under a lease pinned to it, a bounded number of times
+// (#134).
+//
+// Each push is measured as the pull request will show it after the revision:
+// the whole of it, against its base branch's current tip, which a rebase the
+// operator made before sending it back has moved (#148). The description's
+// sensitive line is brought to what it touches, and the size kept for the
+// reply. A measure that fails is logged, and never holds back the push. The
+// rest of the description is never rewritten. The workspace, the relay, the
+// gate and its retries, the denylist, the leased push and the replay are
+// package work, shared with implement.
 //
 // The claim is its own transition for the reason implement's and review's are:
 // it is committed before anything can fail. A job that failed ahead of its
@@ -79,6 +94,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -92,6 +108,7 @@ const (
 	Gating      = "gating"
 	Pushing     = "pushing"
 	Pushed      = "pushed"
+	Replaying   = "replaying"
 	Watching    = "watching"
 	Replying    = "replying"
 	Deferred    = "deferred"
@@ -107,6 +124,7 @@ type Tracker interface {
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
+	EditPullRequest(ctx context.Context, number int, body string) error
 }
 
 // Model runs one model. opencode.Command is one.
@@ -169,6 +187,15 @@ type Deps struct {
 	// A parameter.
 	Denylist []string
 
+	// Replays is how many times a revision is replayed onto someone else's
+	// push before one more is handed back. A parameter.
+	Replays int
+
+	// Sensitive is the paths the operator named as deserving closer reading,
+	// which the description's sensitive line names when the pull request
+	// touches one. Empty is the feature off. A parameter.
+	Sensitive []sensitive.Path
+
 	// HandOffLabel is the label the hand-off applies, which a claim that
 	// moves on to the work takes off. A parameter.
 	HandOffLabel string
@@ -203,6 +230,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
 		{Name: "revise-watch", Kind: store.KindRevise, From: Watching, Run: d.watch},
+		{Name: "revise-replay", Kind: store.KindRevise, From: Replaying, Run: d.replay},
 		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
 		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
 	}

@@ -100,7 +100,9 @@ history and never a second review of a head already reviewed.
   `https://github.com/<owner>/<name>.git`, with an installation token in that
   one `git` process's environment and none of the agent user's global or
   system `git` configuration, so a private repository is reviewed as a public
-  one is. The App needs Contents: read for it
+  one is. That process runs in a bare repository the agent owns, never in the
+  workspace the session reads, and the head is brought into the workspace
+  from there with no token. The App needs Contents: read for it
   ([The App's permissions](#the-apps-permissions)).
 - **opencode**, at `--opencode`, with credentials for every provider enrolled in
   the review tier.

@@ -201,13 +201,16 @@ func revisionFixture(t *testing.T) *revFixture {
 	tr.pr.HeadRef = "feature"
 	s := storetest.Open(t)
 	m := &reviser{}
+	state := t.TempDir()
 	d := &revise.Deps{
-		Tracker:       tr,
-		Model:         m,
-		Store:         s,
-		Login:         agent,
-		Repo:          repo,
-		Remote:        git.Remote{URL: remote},
+		Tracker: tr,
+		Model:   m,
+		Store:   s,
+		Login:   agent,
+		Repo:    repo,
+		// As the command surface builds it: the remote is never reached
+		// from a workspace.
+		Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
 		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst, refSecond}, nil },
 		Bound:         2,
 		TierWait:      time.Hour,
@@ -218,9 +221,10 @@ func revisionFixture(t *testing.T) *revFixture {
 		CIWait:        10 * time.Minute,
 		CICeiling:     2 * time.Hour,
 		CIFixes:       2,
+		Replays:       2,
 		HandOffLabel:  handOff,
 		HandBackLabel: "needs-decision",
-		StateDir:      t.TempDir(),
+		StateDir:      state,
 	}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
 	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, at: now}
@@ -383,9 +387,10 @@ func TestADeclinedPointIsKeptAndTheRevisionGoesOn(t *testing.T) {
 }
 
 // A push by someone else during the revision is never overwritten: the lease
-// refuses, and the job hands back on the pull request.
+// refuses, and with no replay left the job hands back on the pull request.
 func TestAPushBySomeoneElseIsNotOverwritten(t *testing.T) {
 	f := setupRevision(t)
+	f.deps.Replays = 0
 	// The session commits its revision, and someone else pushes a different
 	// commit to the branch while it runs.
 	f.model.then(func(dir string) error {
@@ -424,14 +429,19 @@ func TestAPushBySomeoneElseIsNotOverwritten(t *testing.T) {
 // someoneElsePushes makes a divergent commit on the remote's feature branch,
 // standing in for anyone pushing while the revision runs.
 func (f *revFixture) someoneElsePushes(name string) error {
-	dir := f.t.TempDir()
-	if _, err := run(dir, "git", "clone", "--quiet", f.remote, dir); err != nil {
+	return pushAs(f.t.TempDir(), f.remote, name, name+"\n")
+}
+
+// pushAs clones remote into dir, writes name with content on its feature
+// branch, and pushes the commit: someone other than the agent pushing.
+func pushAs(dir, remote, name, content string) error {
+	if _, err := run(dir, "git", "clone", "--quiet", remote, dir); err != nil {
 		return err
 	}
 	if _, err := run(dir, "git", "switch", "--quiet", "feature"); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		return err
 	}
 	if _, err := run(dir, "git", "add", name); err != nil {

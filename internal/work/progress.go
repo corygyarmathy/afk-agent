@@ -21,8 +21,9 @@ type Progress struct {
 	Nonce string `json:"nonce"`
 
 	// Branch is the branch the workspace is on. Base is the commit the work
-	// started from, and Into the default branch the work started from, which
-	// a pull request asks to merge into.
+	// started from, and Into the branch it started from, which a pull
+	// request asks to merge into: the default branch for new work, and the
+	// pull request's base branch for a revision.
 	Branch string `json:"branch"`
 	Base   string `json:"base"`
 	Into   string `json:"into"`

@@ -221,6 +221,10 @@ func (ft *fileTracker) PullRequest(_ context.Context, n int) (github.PullRequest
 	return github.PullRequest{Number: n, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, Labels: f.Labels}, err
 }
 
+func (ft *fileTracker) EditPullRequest(context.Context, int, string) error {
+	return errors.New("the claim never edits a pull request's description")
+}
+
 func (ft *fileTracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	f, err := ft.load()
 	return github.Issue{Number: n, State: "open", PullRequest: true, Labels: f.Labels}, err

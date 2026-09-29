@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -93,6 +94,15 @@ type Remote struct {
 	// it with a 401, so that the next process mints another rather than
 	// presenting a revoked one again (ADR 0005 §2). Nil tells nothing.
 	Refused func(token string)
+
+	// Untrusted is the directories whose repositories are the model's to
+	// configure - the jobs' workspaces - which Run refuses to run in or
+	// under. Isolation shuts out the global and system configuration, not
+	// the repository's own, and a workspace's .git/config can send the token
+	// elsewhere (url.*.insteadOf, http.proxy, a second extraheader). A job
+	// that needs the remote's objects in a workspace fetches them into a
+	// repository the agent owns and brings them in with no token (#134).
+	Untrusted []string
 }
 
 // refused is what a git process prints when the remote answered its token with
@@ -126,11 +136,47 @@ func (r Remote) Run(ctx context.Context, dir string, args ...string) (string, er
 	if dir == "" {
 		dir = "/"
 	}
+	if err := r.trusted(dir); err != nil {
+		return "", err
+	}
 	out, err := RunEnv(ctx, dir, env, args...)
 	if err != nil && token != "" && r.Refused != nil && strings.Contains(err.Error(), refused) {
 		r.Refused(token)
 	}
 	return out, err
+}
+
+// trusted refuses dir if it is in or under one of r.Untrusted. The paths are
+// compared as the filesystem resolves them, so a symbolic link into a
+// workspace is refused too.
+func (r Remote) trusted(dir string) error {
+	at, err := resolved(dir)
+	if err != nil {
+		return err
+	}
+	for _, u := range r.Untrusted {
+		root, err := resolved(u)
+		if err != nil {
+			return err
+		}
+		if rel, err := filepath.Rel(root, at); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("git: refusing to reach the remote from %s, which is under %s: its configuration is the model's to write", dir, u)
+		}
+	}
+	return nil
+}
+
+// resolved is path made absolute, with every symbolic link in it that exists
+// followed.
+func resolved(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real, nil
+	}
+	return abs, nil
 }
 
 // env is the environment a git process that reaches the remote runs with, and

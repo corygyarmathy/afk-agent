@@ -217,7 +217,7 @@ func TestAFixsPushGoesThroughTheDenylist(t *testing.T) {
 
 // A fix's push is leased on the revision's own push, as the revision's first
 // was on the send-back's head: someone else's push during the fix is theirs,
-// and the fix is handed back rather than pushed over it.
+// and the fix is replayed onto it rather than pushed over it (#134).
 func TestAFixsPushIsLeasedOnTheRevisionsPush(t *testing.T) {
 	f := setupRevision(t)
 	var theirs string
@@ -234,15 +234,15 @@ func TestAFixsPushIsLeasedOnTheRevisionsPush(t *testing.T) {
 	var first string
 	f.tr.checks = redOn(&first)
 
-	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
-		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
+	if job := f.drive(); job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
 	}
-	if at := f.remoteHead(); at != theirs {
-		t.Errorf("the remote is at %s, want their push %s left alone", git.Short(at), git.Short(theirs))
+	at := f.remoteHead()
+	if parent, err := run(f.remote, "git", "rev-parse", at+"^"); err != nil || parent != theirs {
+		t.Errorf("the pushed head's parent is %s, want their push %s: only the fix goes on top", git.Short(parent), git.Short(theirs))
 	}
-	want := "Someone else changed `feature` while the revision ran: it is at `" + git.Short(theirs) + "`, not at `" + git.Short(first) + "` where the agent left it."
-	if body := f.handBack(); !strings.Contains(body, want) {
-		t.Errorf("the hand-back does not say %q:\n%s", want, body)
+	if !f.ancestor(first, at) {
+		t.Errorf("the revision's push %s is not an ancestor of %s", git.Short(first), git.Short(at))
 	}
 }
 
