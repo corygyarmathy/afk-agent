@@ -19,10 +19,12 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 var (
@@ -85,6 +87,13 @@ func seed(name string) func(dir string) error {
 		_, err := run(dir, "git", "commit", "--quiet", "-m", "add "+name)
 		return err
 	}
+}
+
+// advisor is a fake model for the review job the revision asks for.
+type advisor struct{}
+
+func (advisor) Run(context.Context, opencode.Request) (opencode.Reply, error) {
+	return opencode.Reply{Text: "1. Nothing to add."}, nil
 }
 
 // revise is one session run: it commits name and writes the reply.
@@ -226,7 +235,24 @@ func revisionFixture(t *testing.T) *revFixture {
 		HandBackLabel: "needs-decision",
 		StateDir:      state,
 	}
-	reg := transition.MustRegistry(revise.Transitions(d)...)
+	// The review job the revision asks for, beside it, as the pool runs both.
+	rd := &review.Deps{
+		Tracker: tr, Model: advisor{}, Store: s,
+		Checkout: func(ctx context.Context, dir string, n int) (string, error) {
+			if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+				return "", err
+			}
+			pr, err := tr.PullRequest(ctx, n)
+			return pr.HeadSHA, err
+		},
+		Resolve:  d.Resolve,
+		Bound:    1,
+		Rounds:   2,
+		TierWait: time.Hour,
+		Repo:     repo, Login: agent, HandBackLabel: d.HandBackLabel, StateDir: state,
+	}
+	d.AskReview = work.ReviewAsker(transition.Armer{Store: s, Holder: "ask-review", LeaseTTL: time.Minute})
+	reg := transition.MustRegistry(append(revise.Transitions(d), review.Transitions(rd)...)...)
 	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, at: now}
 	d.Log = func(msg string) { f.logs = append(f.logs, msg) }
 	f.runner = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
@@ -273,7 +299,9 @@ func (f *revFixture) step(state string) store.Job {
 	return store.Job{}
 }
 
-func (f *revFixture) drive() store.Job { return f.step("") }
+// drive runs the revision up to its reply: reply_test.go takes it from there,
+// with the review job beside it.
+func (f *revFixture) drive() store.Job { return f.step(revise.Replying) }
 
 func (f *revFixture) now() store.Job {
 	f.t.Helper()

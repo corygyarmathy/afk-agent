@@ -131,6 +131,14 @@ func RevisionMarker(id int64) string {
 	return fmt.Sprintf("<!-- afk:revision comment=%d -->", id)
 }
 
+// RevisionReplyMarker is the hidden line a revision's reply carries: the
+// revision of pull request n that left it at head. It is what the review of
+// that head claims as its request (#149), beside the revision's markers for
+// the commands it answers. A hand-back does not carry it: only a reply asks.
+func RevisionReplyMarker(n int, head string) string {
+	return fmt.Sprintf("<!-- afk:revision-reply pr=%d head=%s -->", n, head)
+}
+
 // Comment is a comment on issue or pull request n, read back by marker, which
 // body must carry and which nothing else the agent says there may.
 func Comment(stem string, n int, marker, body string) Item {

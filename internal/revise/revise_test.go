@@ -48,6 +48,19 @@ type tracker struct {
 	checks   func(sha string, call int) []github.CheckRun
 	required []string
 	asks     int
+
+	// live is the bare remote whose feature branch is the pull request's
+	// head, which moves with a push as GitHub's does. Empty is pr's head,
+	// fixed.
+	live string
+
+	// drop is a marker whose comments are lost: posted, and never seen.
+	drop string
+
+	// events is every write that landed, in order, and reacts how many
+	// reactions landed on each comment.
+	events []string
+	reacts map[int64]int
 }
 
 func newTracker() *tracker {
@@ -61,6 +74,7 @@ func newTracker() *tracker {
 		issues:    map[int]github.Issue{},
 		nextID:    1000,
 		writes:    map[string]int{},
+		reacts:    map[int64]int{},
 	}
 }
 
@@ -100,7 +114,16 @@ func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, er
 	}
 	pr := tr.pr
 	pr.Labels = append([]string(nil), tr.pr.Labels...)
+	if tr.live != "" {
+		if at, err := run(tr.live, "git", "rev-parse", "refs/heads/feature"); err == nil {
+			pr.HeadSHA = at
+		}
+	}
 	return pr, nil
+}
+
+func (tr *tracker) Diff(context.Context, int) (string, error) {
+	return "", nil
 }
 
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
@@ -129,12 +152,18 @@ func (tr *tracker) Comment(_ context.Context, n int, body string) (github.Commen
 	tr.writes["comment"]++
 	tr.nextID++
 	c := github.Comment{ID: tr.nextID, Login: agent, Body: body}
+	if tr.drop != "" && strings.Contains(body, tr.drop) {
+		return c, nil
+	}
 	tr.comments[n] = append(tr.comments[n], c)
+	tr.events = append(tr.events, fmt.Sprintf("comment %d", c.ID))
 	return c, nil
 }
 
 func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	tr.writes["react"]++
+	tr.reacts[id]++
+	tr.events = append(tr.events, fmt.Sprintf("react %d", id))
 	if !intake.Claimed(tr.reactions[id], agent) {
 		tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
 	}
@@ -147,6 +176,7 @@ func (tr *tracker) ReactToIssue(context.Context, int, string) error {
 
 func (tr *tracker) Label(_ context.Context, _ int, label string) error {
 	tr.writes["label"]++
+	tr.events = append(tr.events, "label "+label)
 	for _, l := range tr.pr.Labels {
 		if l == label {
 			return nil

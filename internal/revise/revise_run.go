@@ -58,8 +58,8 @@ type progress struct {
 	Points []int64 `json:"points,omitempty"`
 
 	// Reply is the session's part of the reply, as its last run left the
-	// file. Posting it is #149's; a hand-back shows it as the points done so
-	// far.
+	// file: posted in the reply once CI is green, and shown by a hand-back
+	// before then as the points done so far.
 	Reply string `json:"reply,omitempty"`
 
 	// Replays is how many pushes by someone else the revision has been
@@ -243,7 +243,7 @@ func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Res
 // rewritten what was read. The reply so far goes with it, which is the points
 // done so far.
 func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reason, output string) (transition.Result, error) {
-	return d.handBackOn(ctx, in, p, p.Nonce, reason, output)
+	return d.handBackOn(ctx, in, p, p.Nonce, reason, p.Reply, output)
 }
 
 // handBackLost is the hand-back when the revision's record went with the state
@@ -256,12 +256,13 @@ func (d *Deps) handBackLost(ctx context.Context, in transition.In) (transition.R
 		return transition.Result{}, err
 	}
 	return d.handBackOn(ctx, in, progress{}, "lost-"+pr.HeadSHA,
-		"The agent lost its record of this revision - its state directory was wiped - so it cannot finish it.", "")
+		"The agent lost its record of this revision - its state directory was wiped - so it cannot finish it.", "", "")
 }
 
 // handBackOn owes the tracker one hand-back comment and label, keyed by key so
-// a replay says it once.
-func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key, reason, output string) (transition.Result, error) {
+// a replay says it once. detail is what was done: the session's points, or
+// once they are posted, where the reply is.
+func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key, reason, detail, output string) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	return d.work().HandBackPR(ctx, in, in.Job.ID, work.HandBack{
 		Book:        d.book(),
@@ -271,7 +272,7 @@ func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key
 		Marker:      revisionHandBackMarker(n, key),
 		Also:        revisionMarkers(p.Points),
 		Stopped:     "I stopped the revision. " + reason,
-		Detail:      p.Reply,
+		Detail:      detail,
 		Output:      output,
 		Next:        fmt.Sprintf("The pull request stays open: finish the branch by hand, or send it back again with `%s`.", Word),
 		HandingBack: HandingBack,

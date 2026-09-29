@@ -1112,7 +1112,8 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rd.Replays != 2 || rd.Gate != "go test ./..." || fmt.Sprint(rd.Remote.Untrusted) != fmt.Sprint(d.Remote.Untrusted) {
+	if rd.Replays != 2 || rd.Gate != "go test ./..." || fmt.Sprint(rd.Remote.Untrusted) != fmt.Sprint(d.Remote.Untrusted) ||
+		rd.SizeSignal != d.SizeSignal || rd.AskReview == nil {
 		t.Errorf("revise deps = %+v, want them read from the parameters", rd)
 	}
 	for _, tc := range []struct {
@@ -1303,6 +1304,16 @@ func TestAPoolAnswersOnlyTheCommandsItCanRun(t *testing.T) {
 	}
 	if strings.Join(words, " ") != "/review" {
 		t.Errorf("commands %v, want only /review", words)
+	}
+	// Nor, with no revise configured, /revise: it takes a replay bound
+	// implementing does not.
+	all := standaloneDeps(t)
+	words = nil
+	for _, c := range runnable(commands(), catalogue(&deps{review: all.review, implement: all.implement})) {
+		words = append(words, c.Word)
+	}
+	if strings.Join(words, " ") != "/review /implement" {
+		t.Errorf("commands %v, want /review and /implement", words)
 	}
 	if got := runnable(commands(), catalogue(standaloneDeps(t))); len(got) != len(commands()) {
 		t.Errorf("a pool with every kind answers %d of %d commands", len(got), len(commands()))

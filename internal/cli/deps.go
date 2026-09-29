@@ -120,7 +120,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		ReviewProcedure: ip.reviewProcedure,
 		Store:           st,
 		// A holder of its own: it leases the review job, never this one.
-		AskReview: implement.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
+		AskReview: work.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		StateDir:  stateDir,
 	}, nil
 }
@@ -134,9 +134,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
 	// The revision's gate and its bound, the paths it may not push, the
-	// sensitive paths, its CI bounds and the tier it runs on are the
-	// implement kind's: one local gate, one denylist, one list of sensitive
-	// paths, one CI and one tier serve both.
+	// sensitive paths, the size signal, its CI bounds and the tier it runs
+	// on are the implement kind's: one local gate, one denylist, one list of
+	// sensitive paths, one size signal, one CI and one tier serve both.
 	ip, err := p.implement()
 	if err != nil {
 		return nil, err
@@ -158,6 +158,10 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, err
 	}
 	stateDir, resolve, err := resolver(p, m)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := p.leaseTTL()
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +188,11 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		CIFixes:       ip.ciFixes,
 		Replays:       rp,
 		Sensitive:     ip.sensitive,
+		SizeSignal:    ip.sizeSignal,
 		HandOffLabel:  handOff,
 		HandBackLabel: ep.handBackLabel,
+		// A holder of its own: it leases the review job, never this one.
+		AskReview: work.ReviewAsker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		// Beside the store, as every other kind's state directory is.
 		StateDir: stateDir,
 	}, nil

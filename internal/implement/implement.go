@@ -192,7 +192,7 @@ type Deps struct {
 
 	// AskReview makes the pull request's review job due now, under a lease
 	// of its own: the one store write an effect makes, and it is to another
-	// job. ReviewAsker makes one.
+	// job. work.ReviewAsker makes one.
 	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 
 	// Repo is the repository, as owner/name: what the permalinks in the

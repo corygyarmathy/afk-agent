@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
-	"github.com/corygyarmathy/afk-agent/internal/review"
-	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
 )
@@ -43,65 +40,24 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 		return transition.Result{State: Start}, d.clear(in.Job.ID)
 	}
 
-	// Someone else's push is theirs, as it is while CI runs: the review job
-	// reviews the pull request's head, so a review of the agent's would never
-	// come.
-	at, err := work.RemoteHead(ctx, d.Remote, p.Branch)
+	r, err := d.work().AwaitReview(ctx, in, d.reviews(), pr.Number, p.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if at != p.Pushed {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed)), "")
-	}
-
-	comments, err := d.Tracker.Comments(ctx, pr.Number)
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if review.Reviewed(comments, d.Login, p.Pushed) {
+	switch r.State {
+	case work.ReviewPosted:
 		return transition.Result{State: HandingOff, RunAt: in.Now}, nil
-	}
-	if review.HandedBack(comments, d.Login, p.Pushed) {
-		// Asking again would write the same review, and post it into
-		// whatever stopped the last one. The review job's hand-back is the
-		// pull request's, with the same label and the error that stopped
-		// it: a second would say less, twice.
+	case work.ReviewHandedBack:
 		return transition.Result{State: Start}, d.clear(in.Job.ID)
+	case work.ReviewHandBack:
+		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, r.Reason, r.Output)
 	}
+	return transition.Result{State: Reviewing, RunAt: r.RunAt, Effects: r.Effects}, nil
+}
 
-	wait := transition.Result{State: Reviewing, RunAt: in.Now.Add(d.CIWait)}
-	subject := store.Subject{Type: store.SubjectPR, Number: pr.Number}
-	rj, err := d.Store.Job(ctx, store.ID(store.KindReview, subject))
-	switch {
-	case errors.Is(err, store.ErrNoJob):
-	case err != nil:
-		return transition.Result{}, err
-	case !rj.NextRunAt.IsZero() || (rj.Lease != nil && !rj.Lease.Expired(in.Now)):
-		// Queued, or running now: the review is on its way.
-		return wait, nil
-	case rj.State != review.Start:
-		// Parked where it failed. Starting it over would throw its state
-		// away, and it is the operator's to look at.
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("The review job for this pull request failed and stopped in `%s`, so no review of `%s` is coming.", rj.State, git.Short(p.Pushed)), "")
-	}
-
-	// No review job, or one at rest with no review of this head to show
-	// for it. Asked for again under the next key, so a request lost to a
-	// kill is made again, and one that keeps coming to nothing runs out and
-	// is handed back.
-	stem := fmt.Sprintf("review-asked-pr-%d-%s", pr.Number, p.Pushed)
-	key, err := transition.Round(ctx, d.Store, stem, 0, d.Rounds)
-	if spent, ok := transition.Spent(err); ok {
-		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, fmt.Sprintf("CI is green on `%s`, but its review was asked for %d times and never came.", git.Short(p.Pushed), spent.Rounds), transition.Noted(d.notePath(in.Job.ID), stem))
-	}
-	if err != nil {
-		return transition.Result{}, err
-	}
-	now := in.Now
-	wait.Effects = []transition.Effect{{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
-		return d.AskReview(ctx, subject, now)
-	})}}
-	return wait, nil
+// reviews is the wait for the review, and its bounds.
+func (d *Deps) reviews() work.Reviews {
+	return work.Reviews{Comments: d.Tracker, Store: d.Store, Login: d.Login, Ask: d.AskReview, Wait: d.CIWait, Rounds: d.Rounds}
 }
 
 // handOff is `implement-hand-off`: the hand-off label on the pull request,
@@ -144,13 +100,4 @@ func (d *Deps) handOff(ctx context.Context, in transition.In) (transition.Result
 	n := pr.Number
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error { return d.Tracker.Label(ctx, n, d.HandOffLabel) })}
 	return transition.Result{State: HandingOff, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
-}
-
-// ReviewAsker is Deps.AskReview, asking under a's lease. A job already queued
-// or held is left alone: that run will review the head. So is one parked away
-// from start, which awaitReview hands back.
-func ReviewAsker(a transition.Armer) func(ctx context.Context, pr store.Subject, now time.Time) error {
-	return func(ctx context.Context, pr store.Subject, now time.Time) error {
-		return a.Ask(ctx, store.KindReview, pr, review.Start, now)
-	}
 }

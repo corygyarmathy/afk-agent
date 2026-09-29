@@ -405,6 +405,20 @@ func workCmd(args []string, stderr io.Writer) error {
 	} else if kinds.implement != nil {
 		kinds.implement.Log = d.Log
 	}
+	// A revision needs everything implementing does, and its replay bound
+	// besides. Without them the pool does not answer `/revise` rather than
+	// refuse to start: runnable drops a command whose kind cannot run.
+	switch {
+	case kinds.implement == nil:
+		fmt.Fprintln(stderr, "afk work: implement jobs cannot run, so revise jobs park rather than run")
+	case optional(p.replays, "AFK_REPLAYS") == "":
+		fmt.Fprintln(stderr, "afk work: no --replays, so revise jobs park rather than run")
+	default:
+		if kinds.revise, err = reviseDeps(ctx, p, st, tr); err != nil {
+			return err
+		}
+		kinds.revise.Log = d.Log
+	}
 	d.Registry = catalogue(kinds)
 
 	in, err := newIntake(ctx, tr, st, runner.Holder, runner.LeaseTTL, taking)
