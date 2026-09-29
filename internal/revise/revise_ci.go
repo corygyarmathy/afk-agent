@@ -45,8 +45,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	case work.CIPending:
 		return transition.Result{State: Watching, RunAt: r.RunAt}, nil
 	case work.CIGreen:
-		// The reply, the advisory review and the hand-off are #149's.
-		return transition.Result{State: Replying, RunAt: in.Now}, nil
+		return d.reply(ctx, in, p)
 	case work.CIHandBack:
 		return d.handBack(ctx, in, p, r.Reason, r.Output)
 	}

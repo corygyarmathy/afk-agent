@@ -25,11 +25,21 @@
 //	replaying --revise-replay--->  gating     the revision's own commits, on top of their push
 //	                               pushed     the revision's push had landed, and theirs is on top of it
 //	                               handing-back  their push dropped what was read, a replay conflicts, or out of replays
-//	watching  --revise-watch---->  replying   CI is green on the pushed head: the reply is #149's
+//	watching  --revise-watch---->  replying   CI is green on the pushed head: the reply, owed
 //	                               watching   not finished: again after the CI wait
 //	                               revising   red: back to the revision's session, with what CI said
 //	                               handing-back  out of fixes, past the ceiling, or someone else pushed
 //	                               start      the pull request was closed: at rest
+//	replying  --revise-replied-->  reviewing  the reply is on the pull request
+//	                               replying   made again, under the next key
+//	                               watching   its record was lost: CI is looked at again
+//	reviewing --revise-review--->  handing-off  the review of the pushed head is on the pull request
+//	                               reviewing  the review job made due, or still on its way
+//	                               start      the review job handed its review back: at rest
+//	                               handing-back  someone else pushed, the review job failed, or out of rounds
+//	handing-off --revise-hand-off--> start    the hand-off label is on the pull request: at rest
+//	                               handing-off  applied under the next key
+//	                               handing-back  out of rounds
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
 //	deferred  --revise-resume----> revising   the tier again, from its first model
 //
@@ -48,6 +58,18 @@
 // rest of the description is never rewritten. The workspace, the relay, the
 // gate and its retries, the denylist, the leased push and the replay are
 // package work, shared with implement.
+//
+// A revision ends as implement's work does, in this order: the reply, the
+// advisory review, and the hand-off (#149). The reply answers every command of
+// the send-back in one comment, once CI is green on the revision's final head,
+// so everything it links is what the operator will read: the changes since
+// the head they read, a line when the pull request is over the size signal,
+// and the session's own points, follow-ups and what it did not verify. It is
+// the revision's orientation, and is read before the review. The review is the
+// review job made due for the new head, which claims the reply with a 👀 and
+// links it. The hand-off label goes back on once the review is there. Anything
+// that stops the revision after the reply is posted hands back, and leaves the
+// reply as it is: it is still true about the change.
 //
 // The claim is its own transition for the reason implement's and review's are:
 // it is committed before anything can fail. A job that failed ahead of its
@@ -111,6 +133,8 @@ const (
 	Replaying   = "replaying"
 	Watching    = "watching"
 	Replying    = "replying"
+	Reviewing   = "reviewing"
+	HandingOff  = "handing-off"
 	Deferred    = "deferred"
 	HandingBack = "handing-back"
 )
@@ -197,8 +221,19 @@ type Deps struct {
 	Sensitive []sensitive.Path
 
 	// HandOffLabel is the label the hand-off applies, which a claim that
-	// moves on to the work takes off. A parameter.
+	// moves on to the work takes off and the revision's hand-off puts back.
+	// A parameter.
 	HandOffLabel string
+
+	// SizeSignal is the changed non-test lines a pull request may have
+	// before the reply says it is over. A note, never a cut or a
+	// hand-back. A parameter.
+	SizeSignal int
+
+	// AskReview makes the pull request's review job due now, under a lease
+	// of its own (handoff.Asker): how the revision asks for the advisory
+	// review of its green head.
+	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 
 	// HandBackLabel is the label a hand-back applies. A parameter.
 	HandBackLabel string
@@ -231,6 +266,9 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
 		{Name: "revise-watch", Kind: store.KindRevise, From: Watching, Run: d.watch},
 		{Name: "revise-replay", Kind: store.KindRevise, From: Replaying, Run: d.replay},
+		{Name: "revise-replied", Kind: store.KindRevise, From: Replying, Run: d.replied},
+		{Name: "revise-review", Kind: store.KindRevise, From: Reviewing, Run: d.awaitReview},
+		{Name: "revise-hand-off", Kind: store.KindRevise, From: HandingOff, Run: d.handOff},
 		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
 		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
 	}

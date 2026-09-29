@@ -315,7 +315,8 @@ func TestHelperRevisions(t *testing.T) {
 			t.Fatal(err)
 		}
 		next, ok := reg.Next(job.Kind, job.State)
-		if !ok || job.NextRunAt.IsZero() {
+		// Up to the reply: what comes after it is TestKillingARevisionStillAnswersOnce's.
+		if !ok || job.NextRunAt.IsZero() || job.State == revise.Replying {
 			return
 		}
 		r.Run(ctx, next.Name, id)

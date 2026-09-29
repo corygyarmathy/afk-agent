@@ -9,7 +9,9 @@ ADR 0004 §6 and ADR 0007, as ADR 0001 carries them. The spec is
 [`internal/implement`](../../internal/implement); the workspace, the relay, the
 local gate and its retries, the denylist, the leased push, the CI watch and its
 fixes, and the hand-back on a pull request are
-[`internal/work`](../../internal/work), which `/revise` uses too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
+[`internal/work`](../../internal/work); the wait for the review and the
+hand-off label are [`internal/handoff`](../../internal/handoff). `/revise` uses
+both too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 ## What it does
 
@@ -307,10 +309,7 @@ implement jobs nor answers `/implement`. With it, all of these are required:
 plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
 `--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
-gate, attempts, denylist, sensitive paths, CI bounds and tier: there is no
-revise tier of its own. It requires one parameter of its own, `--replays`: how
-many times a revision is replayed onto a push someone else made during it
-before the next such push hands it back. `0` hands back at the first.
+parameters, and one of its own: [`revise.md`](revise.md#parameters).
 
 - `--review-procedure` is the URL of the operator's review procedure. Give
   one on the default branch, not a permalink: each pull request links the

@@ -21,7 +21,10 @@
 // implement job asks by making the job due, never by commenting: a comment the
 // agent wrote must never be able to instruct the agent. Its request is claimed
 // with a 👀 on the pull request's description, which it wrote, so the claim is
-// on what asked and never on anything a human wrote.
+// on what asked and never on anything a human wrote. The revise job asks the
+// same way, once CI is green on a revision, and its request is claimed with a
+// 👀 on the reply it posted for that head (#149): not on the description,
+// whose 👀 is implement's for the life of the pull request.
 //
 // Three of the transitions exist for reasons worth stating where the states
 // are.
@@ -213,6 +216,13 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if asked {
 		items = append(items, owed.ClaimPullRequest(n))
 	}
+	reply, err := d.askedByRevision(ctx, comments, n, pr.HeadSHA)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if reply != 0 {
+		items = append(items, owed.Claim(github.Comment{ID: reply}))
+	}
 
 	if pr.State != "open" {
 		// Nothing to review on a closed pull request, and nothing to say:
@@ -225,11 +235,15 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		}
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
-	if asked {
+	if asked || reply != 0 {
 		// Recorded here, where the request is taken, for the review to say
 		// which job asked. Who wrote the pull request cannot say it: a
 		// /review on it later is a human's.
-		if err := d.saveAsked(in.Job.ID, d.implementedFor(pr)); err != nil {
+		a := request{Reply: reply}
+		if asked {
+			a.Issue = d.implementedFor(pr)
+		}
+		if err := d.saveAsked(in.Job.ID, a); err != nil {
 			return transition.Result{}, err
 		}
 	}
@@ -275,6 +289,19 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	head, err := d.Checkout(ctx, ws, n)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	// The revise job asks by making this job due, and one already due -
+	// deferred, or on its way here - is left as it is. The reply it left
+	// the head with is then a request the claim never saw: back to the
+	// claim, which takes it, so the review claims and links it.
+	comments, err := d.Tracker.Comments(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if reply, err := d.askedByRevision(ctx, comments, n, head); err != nil {
+		return transition.Result{}, err
+	} else if reply != 0 {
+		return transition.Result{State: Start, RunAt: in.Now}, nil
 	}
 	diff, err := d.Tracker.Diff(ctx, n)
 	if err != nil {
@@ -331,7 +358,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	issue, err := d.askedFor(in.Job.ID)
+	asked, err := d.askedFor(in.Job.ID)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -342,7 +369,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if err := d.save(in.Job.ID, pending{Head: head, Body: body(head, ref, reply, issue), From: from}); err != nil {
+	if err := d.save(in.Job.ID, pending{Head: head, Body: d.body(n, head, ref, reply, asked), From: from}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
@@ -501,6 +528,32 @@ func (d *Deps) implementedFor(pr github.PullRequest) int {
 	return n
 }
 
+// askedByRevision is the reply the revise job left pull request n at head
+// with, if nobody has claimed it: a comment the agent wrote carrying
+// owed.RevisionReplyMarker for that head, with no 👀 from the agent on it yet.
+// Zero if there is none.
+//
+// The request is the revise job making this job due, never the comment: a
+// comment the agent wrote still instructs nothing. The reply is what that job
+// posted, so the claim is on it, as implement's is on the description it
+// wrote. A reply for another head is not this review's to claim.
+func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, n int, head string) (int64, error) {
+	marker := owed.RevisionReplyMarker(n, head)
+	for _, c := range comments {
+		if !strings.EqualFold(c.Login, d.Login) || !strings.Contains(c.Body, marker) {
+			continue
+		}
+		reactions, err := d.Tracker.Reactions(ctx, c.ID)
+		if err != nil {
+			return 0, err
+		}
+		if !intake.Claimed(reactions, d.Login) {
+			return c.ID, nil
+		}
+	}
+	return 0, nil
+}
+
 // askedByJob reports whether the implement job has asked for a review that
 // nobody has claimed: its pull request, written by the agent and carrying its
 // marker, with no 👀 from the agent on it yet.
@@ -541,16 +594,22 @@ func already(n int, c github.Comment, head string) owed.Item {
 // body is the comment a review is posted as: all of it inside one <details>,
 // under a summary that names the head and nothing else, so that the operator
 // reads it after their own reading rather than instead of it (#110). A count
-// or a verdict in the summary is what invites a rubber stamp. On the implement
-// job's pull request it says the job asked for it.
+// or a verdict in the summary is what invites a rubber stamp. When a job asked
+// for it, it says which: the implement job for its issue, or the revise job,
+// linking the reply it claimed.
 //
 // It is posted once and never edited or deleted: a send-back cites a finding
 // by its number in the latest review before it (#123), so a review of a new
 // head is a new comment.
-func body(head string, ref model.Ref, reply opencode.Reply, issue int) string {
+func (d *Deps) body(n int, head string, ref model.Ref, reply opencode.Reply, a request) string {
 	asked := ""
-	if issue != 0 {
-		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", issue)
+	switch {
+	case a.Reply != 0 && d.Repo != "":
+		asked = fmt.Sprintf(" Asked for by the revise job, once CI was green, with [its reply](https://github.com/%s/pull/%d#issuecomment-%d).", d.Repo, n, a.Reply)
+	case a.Reply != 0:
+		asked = " Asked for by the revise job, once CI was green, with its reply above."
+	case a.Issue != 0:
+		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", a.Issue)
 	}
 	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s</sub>\n\n</details>\n",
 		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), cost(ref, reply))
@@ -613,31 +672,32 @@ func (d *Deps) load(jobID string) (pending, error) {
 	return p, nil
 }
 
-// asked is the implement job's request, once its claim has been taken: the
-// issue its pull request implements. It lasts until the review is on the pull
-// request.
-type asked struct {
-	Issue int `json:"issue"`
+// request is a job's request, once its claim has been taken: the issue the
+// implement job's pull request implements, or the reply the revise job left
+// its head with. It lasts until the review is on the pull request.
+type request struct {
+	Issue int   `json:"issue,omitempty"`
+	Reply int64 `json:"reply,omitempty"`
 }
 
 func (d *Deps) askedPath(jobID string) string {
 	return filepath.Join(d.StateDir, "asked", jobID+".json")
 }
 
-func (d *Deps) saveAsked(jobID string, issue int) error {
-	return statefile.Save(d.askedPath(jobID), asked{Issue: issue})
+func (d *Deps) saveAsked(jobID string, a request) error {
+	return statefile.Save(d.askedPath(jobID), a)
 }
 
-// askedFor is the issue whose implement job asked for this review, or zero if
+// askedFor is the request a job made for this review, or the zero request if
 // nothing but a command did.
-func (d *Deps) askedFor(jobID string) (int, error) {
-	var a asked
+func (d *Deps) askedFor(jobID string) (request, error) {
+	var a request
 	err := statefile.Load(d.askedPath(jobID), &a)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return request{}, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("the request for %s: %w", jobID, err)
+		return request{}, fmt.Errorf("the request for %s: %w", jobID, err)
 	}
-	return a.Issue, nil
+	return a, nil
 }

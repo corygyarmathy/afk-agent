@@ -29,11 +29,18 @@ implement job has asked, and that review says the implement job asked for it.
 When the job asks, that review of its head is already there, and it hands off
 on it.
 
+The revise job asks the same way, once CI is green on a revision
+([`revise.md`](revise.md)). Its request is claimed with a 👀 on the reply it
+posted for that head, the agent's comment carrying the revision's reply marker,
+never on the description. A reply for an older head is not claimed. A review
+job already due when the revise job asks claims the reply from `review-run`,
+by way of `review`. The review links the reply it claimed.
+
 | transition | from | does |
 | --- | --- | --- |
-| `review` | `start` | reacts 👀 to every unanswered `/review`, and to the implement job's pull request if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
+| `review` | `start` | reacts 👀 to every unanswered `/review`, to the implement job's pull request if it has not yet, and to the revise job's reply for the head if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
 | `review-claimed` | `claiming` | reads the claims and replies back, makes any that are missing again, and once all of them are there moves on to `reviewing` or rests |
-| `review-run` | `reviewing` | checks the head out into a fresh workspace, beside the diff and the issues the pull request closes or is a first piece of, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
+| `review-run` | `reviewing` | checks the head out into a fresh workspace, going back to `start` if the revise job's reply for it is unclaimed, beside the diff and the issues the pull request closes or is a first piece of, and has one enrolled model run the `reviewing-changes` skill on it; a transient failure tries the next model, an exhausted tier or a limited budget defers |
 | `review-post` | `posting` | posts the reply, under a key numbered by posting round; out of rounds, owes a hand-back instead and moves to `handing-back` |
 | `review-verify` | `verifying` | rests once the reply is on the pull request, and sends it round again if it is not |
 | `review-handed-back` | `handing-back` | rests once the hand-back's comment and label are on the pull request, and makes whichever is missing again |

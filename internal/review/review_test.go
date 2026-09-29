@@ -20,6 +20,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
@@ -1366,5 +1367,83 @@ func TestWithoutARepositoryCitationsArePostedAsWritten(t *testing.T) {
 	}
 	if b := f.tr.byAgent()[0].Body; !strings.Contains(b, "See `internal/x.go:42`.") || strings.Contains(b, "github.com") {
 		t.Errorf("the citation was not posted as written:\n%s", b)
+	}
+}
+
+// The revise job asks for a review of the head its revision left by making the
+// job due, with no command: the reply it posted for that head is the request,
+// claimed with a 👀 on the reply and never on the description, and the review
+// links it. A reply for another head, and a human's comment carrying the
+// marker, are not requests.
+func TestTheRevisionsReplyIsARequest(t *testing.T) {
+	reply := github.Comment{ID: 40, Login: agent, Body: owed.RevisionReplyMarker(12, head) + "\n## Points\n\n- done."}
+	older := github.Comment{ID: 30, Login: agent, Body: owed.RevisionReplyMarker(12, "0ld") + "\n## Points\n\n- done."}
+	forged := github.Comment{ID: 50, Login: "mallory", Body: owed.RevisionReplyMarker(12, head)}
+	tr := newTracker(older, reply, forged)
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if !tr.claimed(reply.ID) {
+		t.Error("the reply for the head was not claimed")
+	}
+	if tr.claimed(older.ID) || tr.claimed(forged.ID) {
+		t.Error("a reply for another head, or a human's comment, was claimed")
+	}
+	if len(tr.prEyes) != 0 {
+		t.Errorf("the description was claimed: %v", tr.prEyes)
+	}
+	var posted []github.Comment
+	for _, c := range tr.byAgent() {
+		if strings.Contains(c.Body, review.Marker(head)) {
+			posted = append(posted, c)
+		}
+	}
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "Asked for by the revise job, once CI was green, with [its reply](https://github.com/owner/name/pull/12#issuecomment-40).") {
+		t.Fatalf("reviews = %+v, want one linking the reply that asked", posted)
+	}
+
+	// Claimed once: a /review later is a human's, and does not claim the
+	// reply again.
+	tr.comments = append(tr.comments, command(9))
+	f.restart()
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if n := len(tr.reactions[reply.ID]); n != 1 {
+		t.Errorf("%d reactions on the reply, want 1", n)
+	}
+}
+
+// A revision that asks while the job is already on its way - here deferred on
+// a human's /review - is left as it is, so the claim never saw its reply. The
+// review it resumes into still claims the reply and links it.
+func TestADeferredReviewClaimsTheReplyLeftWhileItWaited(t *testing.T) {
+	tr := newTracker(command(1))
+	f := setup(t, tr, &reviewer{answers: []error{transient(first), transient(second)}})
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if j := f.now(); j.State != review.Deferred {
+		t.Fatalf("job = %+v, want it deferred", j)
+	}
+
+	reply := github.Comment{ID: 40, Login: agent, Body: owed.RevisionReplyMarker(12, head) + "\n## Points\n\n- done."}
+	tr.comments = append(tr.comments, reply)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if !tr.claimed(reply.ID) {
+		t.Error("the reply left while the review waited was not claimed")
+	}
+	var posted []github.Comment
+	for _, c := range tr.byAgent() {
+		if strings.Contains(c.Body, review.Marker(head)) {
+			posted = append(posted, c)
+		}
+	}
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "[its reply](https://github.com/owner/name/pull/12#issuecomment-40)") {
+		t.Fatalf("reviews = %+v, want one linking the reply", posted)
 	}
 }
