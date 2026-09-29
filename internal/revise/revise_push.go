@@ -111,7 +111,11 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{}, err
 	}
 	if p.Pushed == p.Head {
-		// Landed already, and back for the description's edit.
+		// Landed already, and back for the description's edit - or seen
+		// landed by a replay, which the send-back has not heard of.
+		if err := d.notePushed(in.Job.ID, p.Head); err != nil {
+			return transition.Result{}, err
+		}
 		return d.resensitize(ctx, in, p)
 	}
 	switch landing, at, err := d.work().Land(ctx, &p.Progress, in.Now); {
@@ -127,7 +131,13 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	}
 	// Seen on the remote: what CI is watched on, and the lease the
-	// revision's own later pushes are pinned to (#147).
+	// revision's own later pushes are pinned to (#147). The send-back hears
+	// of it first, so that progress saved with the push is never on disk
+	// without it: a progress file lost after this is told from a revision
+	// that never pushed (#160).
+	if err := d.notePushed(in.Job.ID, p.Head); err != nil {
+		return transition.Result{}, err
+	}
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}

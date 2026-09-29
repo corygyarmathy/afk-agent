@@ -253,6 +253,9 @@ func TestAPushOnTopOfTheRevisionsOwnPushIsNotReplayedOnto(t *testing.T) {
 			if p := f.replayed(); p.Replays != 0 || p.Pushed != ours {
 				t.Errorf("progress is %+v, want no replay and the revision's own push %s as the lease", p, git.Short(ours))
 			}
+			if sb, err := f.deps.Load(jobID()); err != nil || sb.Pushed != ours {
+				t.Errorf("the send-back has pushed %q (%v), want the revision's own push %s: a progress lost after this is told from one that never pushed", sb.Pushed, err, git.Short(ours))
+			}
 			if n := len(f.model.asked); n != 1 {
 				t.Errorf("%d model runs, want 1", n)
 			}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 )
@@ -275,6 +276,44 @@ func TestAWorkspaceLostAfterThePushHandsBack(t *testing.T) {
 	}
 	body := f.handBack()
 	for _, want := range []string{"lost the revision's workspace after it pushed `" + git.Short(first) + "`", "\"Rename Foo\" done."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the hand-back does not say %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Someone else") {
+		t.Errorf("the hand-back blames someone else for the agent's own push:\n%s", body)
+	}
+}
+
+// A progress file lost after the revision pushed, with its send-back kept, is
+// handed back when CI sends a red run to it, rather than made afresh from the
+// send-back's head: without the progress the lease is gone, and the revision's
+// own push would be taken for someone else's (#160).
+func TestAProgressLostAfterThePushHandsBack(t *testing.T) {
+	f := setupRevision(t)
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
+	var first string
+	f.tr.checks = redOn(&first)
+
+	f.step(revise.Watching)
+	if job := f.once(); job.State != revise.Revising {
+		t.Fatalf("the job is in %q, want %s: CI was red", job.State, revise.Revising)
+	}
+	if err := os.Remove(filepath.Join(f.deps.StateDir, "progress", jobID()+".json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
+	}
+	if len(f.model.asked) != 1 {
+		t.Errorf("the model was asked %d times, want once: nothing is done over", len(f.model.asked))
+	}
+	if at := f.remoteHead(); at != first {
+		t.Errorf("the remote is at %s, want the revision's push %s", git.Short(at), git.Short(first))
+	}
+	body := f.handBack()
+	for _, want := range []string{"lost its record of the revision after it pushed `" + git.Short(first) + "`", owed.RevisionMarker(1)} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the hand-back does not say %q:\n%s", want, body)
 		}
