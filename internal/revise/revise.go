@@ -242,6 +242,12 @@ type SendBack struct {
 	Head   string  `json:"head"`
 	Ref    string  `json:"ref"`
 	Points []Point `json:"points"`
+
+	// Pushed is the revision's last push seen on the remote, once it has
+	// one. The progress has it too, as the lease, but the progress can be
+	// lost without the send-back: this is what tells a revision that pushed
+	// from one that never did.
+	Pushed string `json:"pushed,omitempty"`
 }
 
 // Point is one command's points, as the operator wrote them.
@@ -377,6 +383,21 @@ func (d *Deps) Load(jobID string) (SendBack, error) {
 		return SendBack{}, err
 	}
 	return sb, nil
+}
+
+// notePushed keeps head in job's send-back as the revision's push seen on the
+// remote. A send-back that is gone has nothing to keep it in: revise-run hands
+// back as lost without it.
+func (d *Deps) notePushed(jobID, head string) error {
+	sb, err := d.Load(jobID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || sb.Pushed == head {
+		return err
+	}
+	sb.Pushed = head
+	return statefile.Save(d.path(jobID), sb)
 }
 
 func (d *Deps) path(jobID string) string {
