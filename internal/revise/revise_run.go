@@ -332,9 +332,11 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		// The same, with the progress gone too: the lease went with it, and
 		// made afresh the revision would take its own push for someone
 		// else's. The send-back still has the points, so the hand-back
-		// carries their markers, and is keyed on the push as a lost
-		// record's is on the head (handBackLost).
-		return progress{Progress: work.Progress{Nonce: "lost-" + sb.Pushed}, Read: sb.Head, Points: pointIDs(sb.Points)},
+		// carries their markers. It is keyed on the push, in a form of its
+		// own: handBackLost keys on the head as "lost-<head>", and a later
+		// revision losing its record at this same head would find this
+		// hand-back's marker and take its own for already said.
+		return progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}, Read: sb.Head, Points: pointIDs(sb.Points)},
 			fmt.Sprintf("The agent lost its record of the revision after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(sb.Pushed)), nil
 	}
 	if err := w.Clear(jobID); err != nil {

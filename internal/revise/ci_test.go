@@ -313,7 +313,10 @@ func TestAProgressLostAfterThePushHandsBack(t *testing.T) {
 		t.Errorf("the remote is at %s, want the revision's push %s", git.Short(at), git.Short(first))
 	}
 	body := f.handBack()
-	for _, want := range []string{"lost its record of the revision after it pushed `" + git.Short(first) + "`", owed.RevisionMarker(1)} {
+	// Keyed apart from handBackLost's "lost-<head>", which a later
+	// revision's lost record, at this same head, would otherwise take for
+	// already said.
+	for _, want := range []string{"lost its record of the revision after it pushed `" + git.Short(first) + "`", owed.RevisionMarker(1), "key=lost-pushed-" + first + " "} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the hand-back does not say %q:\n%s", want, body)
 		}
