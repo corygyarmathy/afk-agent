@@ -165,7 +165,7 @@ func TestARevisionThatTouchesASensitivePathNamesIt(t *testing.T) {
 	f.sendBack(f.head)
 	f.model.then(writeOn("infra/main.tf"))
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
 	want := description("**Sensitive:** infra (`infra/main.tf`)")
@@ -183,7 +183,7 @@ func TestARevisionThatStopsTouchingASensitivePathDropsIt(t *testing.T) {
 	f.sendBack(head)
 	f.model.then(removeOn("infra/main.tf"))
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
 	if want := description(""); f.tr.pr.Body != want {
@@ -209,7 +209,7 @@ func TestARebasedPullRequestIsMeasuredAgainstItsBasesTip(t *testing.T) {
 	f.sendBack(head)
 	f.model.then(writeOn("infra/main.tf"))
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
 	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.pr.Body != want {
@@ -233,7 +233,7 @@ func TestAnEditThatNeverLandsIsLoggedAndTheRevisionGoesOn(t *testing.T) {
 	f.sendBack(f.head)
 	f.model.then(writeOn("infra/main.tf"))
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s: an edit that never lands costs the revision nothing", job.State, revise.Watching)
 	}
 	if got := f.tr.writes["edit"]; got != f.deps.Rounds {
@@ -275,7 +275,7 @@ func TestAPullRequestIntoAnotherBranchIsMeasuredAgainstIt(t *testing.T) {
 		return writeOn("infra/main.tf")(dir)
 	})
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
 	if strings.Contains(given, "infra/old.tf") {
@@ -301,7 +301,7 @@ func TestAPushThatCannotBeMeasuredIsLoggedAndGoesOn(t *testing.T) {
 		return writeOn("infra/main.tf")(dir)
 	})
 
-	if job := f.drive(); job.State != revise.Watching {
+	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s: a measure that fails costs the revision nothing", job.State, revise.Watching)
 	}
 	if f.handedBack() {

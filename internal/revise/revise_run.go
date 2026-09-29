@@ -208,7 +208,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	case work.GateSwitched:
 		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
 	case work.GateEmpty:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed)), "")
+		return d.handBack(ctx, in, p, p.empty(), "")
 	case work.GateExhausted:
 		return d.handBack(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
 	case work.GateDirty:
@@ -303,7 +303,8 @@ func revisionMarkers(ids []int64) string {
 // workspace is the revision's workspace and its progress, made afresh from the
 // head the send-back was written against unless both are there and agree.
 // gone is why the revision cannot start from that head, for a hand-back: the
-// branch deleted, or pushed over, since the send-back was claimed.
+// branch deleted, or pushed over, since the send-back was claimed, or the
+// workspace lost after the revision pushed.
 //
 // The head is fetched through the relay - a repository the agent owns and has
 // isolated - and brought into the workspace locally with no token, because the
@@ -319,6 +320,13 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return progress{}, "", err
+	}
+	if err == nil && p.Read == sb.Head && p.Pushed != p.Read {
+		// A red run sent back after the revision pushed, to a workspace that
+		// is gone or on another branch. Made afresh from the send-back's
+		// head, it would do the points over, and its push, leased on that
+		// head, would be refused by the revision's own.
+		return p, fmt.Sprintf("The agent lost the revision's workspace after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(p.Pushed)), nil
 	}
 	if err := w.Clear(jobID); err != nil {
 		return progress{}, "", err
@@ -389,6 +397,16 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	}
 	p.Into = into
 	return p, "", w.Save(jobID, p)
+}
+
+// empty is the hand-back's words for a session that committed nothing on top
+// of the lease: the head the send-back was written against, or after a red CI
+// run the revision's own last push.
+func (p progress) empty() string {
+	if p.Pushed == p.Read {
+		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed))
+	}
+	return fmt.Sprintf("The session committed nothing on top of `%s`, the revision's last push, to fix what CI said, so there is nothing to push.", git.Short(p.Pushed))
 }
 
 // rewrote is the hand-back's words for a session that rewrote the head the

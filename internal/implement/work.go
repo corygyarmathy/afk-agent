@@ -92,11 +92,6 @@ type progress struct {
 	// says. Either way the dependency is not made again.
 	Blocked   bool `json:"blocked,omitempty"`
 	Unblocked bool `json:"unblocked,omitempty"`
-
-	// Fixes is how many times CI has sent the work back to the session,
-	// and FixedHead the head the last of them was counted for.
-	Fixes     int    `json:"fixes,omitempty"`
-	FixedHead string `json:"fixed_head,omitempty"`
 }
 
 // run is `implement-run`: one candidate model does the work in the workspace,

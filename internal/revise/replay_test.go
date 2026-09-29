@@ -30,7 +30,7 @@ func TestAPushDuringARevisionIsReplayedOnto(t *testing.T) {
 		return nil
 	})
 
-	job := f.drive()
+	job := f.step(revise.Watching)
 	if job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
 	}
@@ -156,7 +156,7 @@ func TestAHostileWorkspaceConfigDoesNotReachTheReplay(t *testing.T) {
 		return f.someoneElsePushes("other.txt")
 	})
 
-	job := f.drive()
+	job := f.step(revise.Watching)
 	if job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
 	}
@@ -185,7 +185,7 @@ func TestTheDenylistAfterAReplayReadsOnlyTheRevisions(t *testing.T) {
 		return f.someoneElsePushes("flake.lock")
 	})
 
-	job := f.drive()
+	job := f.step(revise.Watching)
 	if job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s: their flake.lock is not the revision's\n%s", job.State, revise.Watching, f.handBack())
 	}
@@ -243,7 +243,7 @@ func TestAPushOnTopOfTheRevisionsOwnPushIsNotReplayedOnto(t *testing.T) {
 			}
 			theirs := f.remoteHead()
 
-			job := f.drive()
+			job := f.step(revise.Watching)
 			if job.State != revise.Watching {
 				t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Watching, f.handBack())
 			}

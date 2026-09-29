@@ -1,7 +1,7 @@
 // Package work is the machinery both job kinds share: a job's checkout and the
 // progress that describes it, the relay the agent pushes from, the local gate
-// and its retries, the denylist, the leased push, and the hand-back on a pull
-// request (#146).
+// and its retries, the denylist, the leased push, the CI watch and its fixes
+// (#147), and the hand-back on a pull request (#146).
 //
 // It exists so that `/implement` and `/revise` run one copy of each rather than
 // two that drift. What is kind-specific stays with the kind: the words a
@@ -51,6 +51,11 @@ type Progress struct {
 	// its one-line summary. Both empty while the branch has not failed.
 	Failure string `json:"failure,omitempty"`
 	Why     string `json:"why,omitempty"`
+
+	// Fixes is how many times CI has sent the work back to the session,
+	// and FixedHead the head the last of them was counted for.
+	Fixes     int    `json:"fixes,omitempty"`
+	FixedHead string `json:"fixed_head,omitempty"`
 }
 
 // Complete reports whether p describes a workspace: the fields a checkout is

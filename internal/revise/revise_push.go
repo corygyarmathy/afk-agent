@@ -49,8 +49,22 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 	// The denylist is checked on what the push sends, commit by commit:
 	// everything the branch at the lease does not have. What the pull
 	// request already carried, and anyone else's push the revision was
-	// replayed onto, is on the remote and was not the agent's to push.
-	paths, err := work.Touched(ctx, relayDir, p.Pushed, head)
+	// replayed onto, is on the remote and was not the agent's to push. A
+	// CI fix that rewrote the revision's own push leaves the lease out of
+	// the branch, and out of the relay: the check then reads from the head
+	// the send-back was written against, which may name someone else's
+	// path, and never misses one of the revision's.
+	since := p.Read
+	if has, err := work.HasCommit(ctx, relayDir, p.Pushed); err != nil {
+		return transition.Result{}, err
+	} else if has {
+		if kept, err := work.Ancestor(ctx, relayDir, p.Pushed, head); err != nil {
+			return transition.Result{}, err
+		} else if kept {
+			since = p.Pushed
+		}
+	}
+	paths, err := work.Touched(ctx, relayDir, since, head)
 	if err != nil {
 		return transition.Result{}, err
 	}

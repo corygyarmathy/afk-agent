@@ -134,9 +134,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
 	// The revision's gate and its bound, the paths it may not push, the
-	// sensitive paths, and the tier it runs on are the implement kind's: one
-	// local gate, one denylist, one list of sensitive paths and one tier
-	// serve both.
+	// sensitive paths, its CI bounds and the tier it runs on are the
+	// implement kind's: one local gate, one denylist, one list of sensitive
+	// paths, one CI and one tier serve both.
 	ip, err := p.implement()
 	if err != nil {
 		return nil, err
@@ -179,6 +179,9 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
 		Denylist:      ip.denylist,
+		CIWait:        ip.ciWait,
+		CICeiling:     ip.ciCeiling,
+		CIFixes:       ip.ciFixes,
 		Replays:       rp,
 		Sensitive:     ip.sensitive,
 		HandOffLabel:  handOff,

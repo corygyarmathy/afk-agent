@@ -1,7 +1,7 @@
 // Package revise is the revise job kind's transitions: a send-back on a pull
 // request becomes a revision of it (#131).
 //
-// A send-back's whole way to a revision (#145, #146, #134):
+// A send-back's whole way to a revision (#145, #146, #134, #147):
 //
 //	start     --revise---------->  claiming   claim every unanswered command, and refuse what cannot be revised
 //	claiming  --revise-claimed-->  revising   the claims, the replies and the hand-off label taken off are on the tracker
@@ -9,7 +9,8 @@
 //	                               claiming   made again, under the next key
 //	revising  --revise-run------>  gating     one candidate model, in the workspace, on the send-back's head
 //	                               revising   it failed transiently: the next candidate
-//	                               handing-back  the branch was deleted, or pushed over, since the send-back
+//	                               handing-back  the branch was deleted, or pushed over, since the send-back,
+//	                                             or the workspace was lost after the revision pushed
 //	gating    --revise-gate----->  pushing    the local gate passed
 //	                               revising   it failed: back to the session that wrote it
 //	                               handing-back  out of attempts, or the session rewrote the read head
@@ -24,6 +25,11 @@
 //	replaying --revise-replay--->  gating     the revision's own commits, on top of their push
 //	                               pushed     the revision's push had landed, and theirs is on top of it
 //	                               handing-back  their push dropped what was read, a replay conflicts, or out of replays
+//	watching  --revise-watch---->  replying   CI is green on the pushed head: the reply is #149's
+//	                               watching   not finished: again after the CI wait
+//	                               revising   red: back to the revision's session, with what CI said
+//	                               handing-back  out of fixes, past the ceiling, or someone else pushed
+//	                               start      the pull request was closed: at rest
 //	handing-back --revise-handed-back--> start  the hand-back's comment and label are on the tracker: at rest
 //	deferred  --revise-resume----> revising   the tier again, from its first model
 //
@@ -104,6 +110,7 @@ const (
 	Pushed      = "pushed"
 	Replaying   = "replaying"
 	Watching    = "watching"
+	Replying    = "replying"
 	Deferred    = "deferred"
 	HandingBack = "handing-back"
 )
@@ -115,6 +122,8 @@ const Word = "/revise"
 type Tracker interface {
 	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
+	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
+	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 	EditPullRequest(ctx context.Context, number int, body string) error
 }
 
@@ -166,6 +175,14 @@ type Deps struct {
 	Gate     string
 	Attempts int
 
+	// CIWait is how long a head whose checks are not finished waits before
+	// it is looked at again, CICeiling how long after its push they may
+	// take before the revision is handed back, and CIFixes how many times a
+	// red run is sent back to the session. Parameters.
+	CIWait    time.Duration
+	CICeiling time.Duration
+	CIFixes   int
+
 	// Denylist is the paths the agent may never push, as globs (see work).
 	// A parameter.
 	Denylist []string
@@ -191,7 +208,8 @@ type Deps struct {
 	StateDir string
 
 	// Log receives one line each time a candidate's run fails transiently,
-	// which nothing else keeps once the next candidate runs. Nil is silent.
+	// which nothing else keeps once the next candidate runs, and one each
+	// time CI fails a head the local gate passed. Nil is silent.
 	Log func(msg string)
 }
 
@@ -211,6 +229,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise-gate", Kind: store.KindRevise, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
 		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
+		{Name: "revise-watch", Kind: store.KindRevise, From: Watching, Run: d.watch},
 		{Name: "revise-replay", Kind: store.KindRevise, From: Replaying, Run: d.replay},
 		{Name: "revise-handed-back", Kind: store.KindRevise, From: HandingBack, Run: d.handedBack},
 		{Name: "revise-resume", Kind: store.KindRevise, From: Deferred, Run: d.resume},
