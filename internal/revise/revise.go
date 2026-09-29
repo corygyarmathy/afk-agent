@@ -31,7 +31,8 @@
 // the whole of it, against its base branch's current tip, which a rebase the
 // operator made before sending it back has moved (#148). The description's
 // sensitive line is brought to what it touches, and the size kept for the
-// reply. The rest of the description is never rewritten. The workspace, the relay, the
+// reply. A measure that fails is logged, and never holds back the push. The
+// rest of the description is never rewritten. The workspace, the relay, the
 // gate and its retries, the denylist and the leased push are package work,
 // shared with implement.
 //

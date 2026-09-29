@@ -250,3 +250,71 @@ func TestAnEditThatNeverLandsIsLoggedAndTheRevisionGoesOn(t *testing.T) {
 		t.Errorf("nothing logged says the edit never landed:\n%s", said)
 	}
 }
+
+// A pull request into a branch other than the default is measured against
+// that branch, and the diff its session is given starts there too: the
+// commits the branch has and the default branch lacks are not the pull
+// request's.
+func TestAPullRequestIntoAnotherBranchIsMeasuredAgainstIt(t *testing.T) {
+	f, _ := sensitiveFixture(t)
+	f.tr.pr.Body = description("")
+	f.tr.pr.BaseRef = "release"
+	f.onRemote("main", []string{"switch", "--quiet", "-c", "release"}, writeOn("infra/old.tf"), []string{"push", "--quiet", "origin", "release"})
+	head := f.onRemote("feature",
+		[]string{"fetch", "--quiet", "origin"},
+		[]string{"rebase", "--quiet", "origin/release"},
+		[]string{"push", "--quiet", "--force", "origin", "feature"})
+	f.sendBack(head)
+	var given string
+	f.model.then(func(dir string) error {
+		b, err := os.ReadFile(filepath.Join(dir, ".git", "afk-send-back.md"))
+		given = string(b)
+		if err != nil {
+			return err
+		}
+		return writeOn("infra/main.tf")(dir)
+	})
+
+	if job := f.drive(); job.State != revise.Watching {
+		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
+	}
+	if strings.Contains(given, "infra/old.tf") {
+		t.Errorf("the diff the session was given has release's own infra/old.tf:\n%s", given)
+	}
+	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.pr.Body != want {
+		t.Errorf("the description is\n%s\nwant\n%s", f.tr.pr.Body, want)
+	}
+	if lines, tests := f.size(); lines != 2 || tests != 0 {
+		t.Errorf("the size kept is %d lines and %d of tests, want 2 and 0", lines, tests)
+	}
+}
+
+// A push that cannot be measured - here, the pull request was retargeted onto
+// a branch that is not there - is logged and goes on: the revision is pushed,
+// and the sensitive line is left as it was.
+func TestAPushThatCannotBeMeasuredIsLoggedAndGoesOn(t *testing.T) {
+	f, log := sensitiveFixture(t)
+	f.tr.pr.Body = description("")
+	f.sendBack(f.head)
+	f.model.then(func(dir string) error {
+		f.tr.pr.BaseRef = "gone"
+		return writeOn("infra/main.tf")(dir)
+	})
+
+	if job := f.drive(); job.State != revise.Watching {
+		t.Fatalf("the job is in %q, want %s: a measure that fails costs the revision nothing", job.State, revise.Watching)
+	}
+	if f.handedBack() {
+		t.Error("the revision was handed back")
+	}
+	if at := f.onRemote("feature"); at == f.head {
+		t.Error("the revision was not pushed")
+	}
+	if got := f.tr.writes["edit"]; got != 0 {
+		t.Errorf("the description was edited %d times, want none: what the push touches is not known", got)
+	}
+	said := strings.Join(*log, "\n")
+	if !strings.Contains(said, "was not measured") {
+		t.Errorf("nothing logged says the push was not measured:\n%s", said)
+	}
+}

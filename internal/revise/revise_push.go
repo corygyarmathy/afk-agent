@@ -58,9 +58,16 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 	}
 
 	// Measured here, on the commit the push sends and in the relay, where
-	// nothing the session wrote into its .git is read.
+	// nothing the session wrote into its .git is read. A measure that fails
+	// is logged and the push goes on without it: the size and the sensitive
+	// line are orientation, and never what holds back a revision the gate
+	// and the denylist let through.
 	if err := d.measure(ctx, in.Job.Subject.Number, relayDir, head, &p); err != nil {
-		return transition.Result{}, err
+		if ctx.Err() != nil {
+			return transition.Result{}, err
+		}
+		d.logf("%s: the push of `%s` was not measured, so its size is missing from the reply and the description's sensitive line is left as it is: %v", in.Job.ID, git.Short(head), err)
+		p.Measured, p.Lines, p.Tests, p.Sensitive = false, 0, 0, nil
 	}
 
 	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head)
@@ -116,12 +123,20 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 // it is not taken for one made during the revision. An edit that never lands
 // is logged and costs the revision nothing.
 func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress) (transition.Result, error) {
+	if !p.Measured {
+		// What the push touches is not known, so the line is not changed.
+		return transition.Result{State: Watching, RunAt: in.Now}, nil
+	}
 	pr, err := d.Tracker.PullRequest(ctx, in.Job.Subject.Number)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	logf := func(format string, a ...any) { d.logf("%s: "+format, append([]any{in.Job.ID}, a...)...) }
-	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, pr, p.Branch, p.Head, p.Sensitive, logf)
+	reread := func(ctx context.Context) (string, bool, error) {
+		pr, err := d.Tracker.PullRequest(ctx, in.Job.Subject.Number)
+		return pr.Body, err == nil, err
+	}
+	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, logf)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -133,10 +148,10 @@ func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress) (t
 
 // measure keeps in p the size of the whole pull request at head, and the
 // sensitive paths it touches, both as GitHub shows its diff: from where head
-// meets its base branch's current tip. Never from a base recorded when the
-// work started: the operator may have rebased the pull request onto a newer
-// tip before sending it back, or a point may have asked for that, and the
-// commits between the two are not the pull request's.
+// meets its base branch's current tip. The tip is fetched again for each push
+// rather than taken from the claim: the base branch may have moved on and been
+// merged into the pull request since, which moves where the two meet, and the
+// pull request may have been retargeted.
 //
 // The base branch is read from the pull request, which the operator may have
 // changed, and fetched into the relay, where the token may go.
@@ -173,6 +188,7 @@ func (d *Deps) measure(ctx context.Context, n int, relayDir, head string, p *pro
 		}
 		p.Sensitive = sensitive.Touches(d.Sensitive, paths)
 	}
+	p.Measured = true
 	return nil
 }
 

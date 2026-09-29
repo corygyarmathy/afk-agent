@@ -62,6 +62,11 @@ type progress struct {
 	// far.
 	Reply string `json:"reply,omitempty"`
 
+	// Measured is whether the head last pushed was measured: a measure that
+	// failed is logged, and the push went on without it. Lines, Tests and
+	// Sensitive are empty then, and say nothing.
+	Measured bool `json:"measured"`
+
 	// Lines and Tests are the size of the whole pull request at the head
 	// last pushed (package size), for the reply's size line. Over the size
 	// signal is a note there, never a cut or a hand-back.
@@ -314,15 +319,15 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		return progress{}, "", err
 	}
 
+	pr, err := d.Tracker.PullRequest(ctx, n)
+	if err != nil {
+		return progress{}, "", err
+	}
 	branch := sb.Ref
 	if branch == "" {
 		// A send-back claimed before the claim recorded its branch (#145)
 		// has only its head. The pull request's branch now is the one it
 		// was written on: a pull request's head branch does not change.
-		pr, err := d.Tracker.PullRequest(ctx, n)
-		if err != nil {
-			return progress{}, "", err
-		}
 		branch = pr.HeadRef
 	}
 	nonce := make([]byte, 8)
@@ -355,6 +360,12 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	into, err := work.Clone(ctx, d.Remote, ws)
 	if err != nil {
 		return progress{}, "", err
+	}
+	// The base is the pull request's, which need not be the default branch:
+	// the diff the session is given starts where the pull request meets it,
+	// as each push's measure does.
+	if pr.BaseRef != "" {
+		into = pr.BaseRef
 	}
 	ref := "refs/heads/" + branch
 	if _, err := work.FetchInto(ctx, w.RelayDir(jobID), d.Remote, ref); err != nil {

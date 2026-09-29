@@ -299,7 +299,11 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 // back here, and the job watches CI once the line is right or given up on.
 func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress, pr github.PullRequest) (transition.Result, error) {
 	logf := func(format string, a ...any) { d.logf("%s: "+format, append([]any{in.Job.ID}, a...)...) }
-	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, pr, p.Branch, p.Head, p.Sensitive, logf)
+	reread := func(ctx context.Context) (string, bool, error) {
+		pr, ok, err := d.open(ctx, from(p.Branch))
+		return pr.Body, ok, err
+	}
+	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, logf)
 	if err != nil {
 		return transition.Result{}, err
 	}

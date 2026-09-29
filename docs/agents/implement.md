@@ -141,7 +141,8 @@ Its sections, in this order, each left out when it has nothing to say:
   fix, or a new session that takes one over - is not asked for the file.
 - **The sensitive line is recomputed on every push**, the first and each fix
   after it, so a later push that newly touches a sensitive path adds it. Only
-  that line is edited: the rest of the description stays as it opened, and
+  that line is edited: the description is read again as the edit is made, so
+  the rest of it - an edit the operator made included - is left as it is, and
   the files are counted rather than listed when listing them would take it
   over GitHub's limit. An edit that never lands after `--effect-rounds`, or
   one over the limit even counted, is a log line, and the work goes on.
@@ -151,8 +152,10 @@ Its sections, in this order, each left out when it has nothing to say:
   head meets the base branch's current tip, fetched at the push: a pull
   request the operator rebased onto a newer tip before sending it back does
   not count the commits between the two as its own. The size is measured on
-  the same diff and kept for the revision's reply, where over the signal is a
-  note, never a cut or a hand-back.
+  the same diff and kept for the revision's reply
+  ([#149](https://github.com/corygyarmathy/afk-agent/issues/149)). A measure
+  that fails - the pull request or its base branch could not be read - is a
+  log line: the push goes on, and the sensitive line is left as it is.
 
 ### Sensitive paths
 
