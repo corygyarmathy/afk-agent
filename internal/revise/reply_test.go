@@ -286,6 +286,25 @@ func TestALostReplyRecordAfterTheReplyHandsBackLinkingIt(t *testing.T) {
 	}
 }
 
+// A reply whose record is lost after it is posted, with nobody pushing since,
+// goes on to the review and is handed off with the one reply it has.
+func TestALostReplyRecordWithNoPushHandsOff(t *testing.T) {
+	f := setupReplying(t)
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"))
+
+	f.step(revise.Replying)
+	f.loseOwed()
+	if job := f.finish(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the revision is in %q, want at rest in %s\n%s", job.State, revise.Start, f.handBack())
+	}
+	if _, n := f.reply(); n != 1 {
+		t.Fatalf("%d replies, want one", n)
+	}
+	if !f.tr.labelled() || f.handedBack() {
+		t.Errorf("labels are %v, want handed off", f.tr.pr.Labels)
+	}
+}
+
 // A reply whose record is lost before it is on the pull request is still owed:
 // the watch posts it, once.
 func TestALostReplyRecordBeforeTheReplyStillReplies(t *testing.T) {

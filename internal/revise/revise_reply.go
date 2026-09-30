@@ -35,12 +35,12 @@ func (d *Deps) reply(ctx context.Context, in transition.In, p progress) (transit
 // request.
 //
 // A record lost with the state directory looks for the reply by its marker
-// first. One that is there goes on to the review, which hands back, linking
-// it, if someone else has pushed since: the watch would replay the revision
-// onto their push, and answer the send-back again for a head the marker does
-// not name. One that is not there goes back to the watch, which owes the reply
-// again if CI is still green on the head, and hands the revision back if its
-// progress went too.
+// first. One that is there goes on to the review, as the record would have,
+// and the review hands back linking it if someone else has pushed since: the
+// watch would hand back on their push without the link, saying the reply's
+// points again. One that is not there goes back to the watch, which owes the
+// reply again if CI is still green on the head, and hands the revision back if
+// its progress went too.
 func (d *Deps) replied(ctx context.Context, in transition.In) (transition.Result, error) {
 	res, err := d.book().Settle(ctx, in, transition.Result{State: Watching, RunAt: in.Now})
 	if err != nil || res.State != Watching {
