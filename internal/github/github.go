@@ -160,6 +160,11 @@ type Comment struct {
 	// so on. What counts as enough to issue a command is intake's to decide,
 	// not this package's.
 	Association string
+
+	// CreatedAt is when it was written. A command and a review are put in
+	// the order they were written by it, since a review is not in the
+	// conversation's listing.
+	CreatedAt time.Time
 }
 
 // StatusError is a response that was not a success. It names the request and
@@ -750,16 +755,17 @@ func (w wireIssue) issue() Issue {
 }
 
 type wireComment struct {
-	ID                int64  `json:"id"`
-	Body              string `json:"body"`
-	AuthorAssociation string `json:"author_association"`
+	ID                int64     `json:"id"`
+	Body              string    `json:"body"`
+	AuthorAssociation string    `json:"author_association"`
+	CreatedAt         time.Time `json:"created_at"`
 	User              struct {
 		Login string `json:"login"`
 	} `json:"user"`
 }
 
 func (w wireComment) comment() Comment {
-	return Comment{ID: w.ID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation}
+	return Comment{ID: w.ID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation, CreatedAt: w.CreatedAt}
 }
 
 // all reads a listing page by page, following the Link header to the end.
