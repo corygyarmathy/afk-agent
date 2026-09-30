@@ -53,7 +53,7 @@ An operator's permission for work to continue through one spent budget window, u
 _Avoid_: Override, bypass, failover
 
 **Command**:
-An instruction from a human to the agent, issued as a comment on an issue or a pull request (`/implement`, `/review`, `/revise`). The only way a human asks the agent to _do_ something; a comment the agent wrote is never a command. Every command has the same shape - a verb, a subject, an author with write access, optional instructions - and is claimed with a 👀 on the comment and answered at most once. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which the agent reads.
+An instruction from a human to the agent, issued as a comment on an issue or a pull request (`/implement`, `/review`, `/revise`). The only way a human asks the agent to _do_ something; a comment the agent wrote is never a command. Every command has the same shape - a verb, a subject, an author with write access, optional instructions - and is claimed with a 👀 on the comment and answered at most once. `/revise` may also be issued as a submitted pull request review whose body starts with it, claimed with a 👀 on the review. Labels carry status the agent writes, with one exception - the eligibility label on an issue, which the agent reads.
 _Avoid_: Trigger, directive
 
 **Request**:
@@ -85,7 +85,7 @@ The operator reading a pull request and deciding it: merge, send back, or close.
 _Avoid_: Review (bare), approval
 
 **Send-back**:
-An operator's review that ends with points to address, written in the operator's own words. The only instruction `/revise` acts on. It may cite advisory findings one at a time, but it is never an answer to them: the operator owes no reply to any finding, and a reaction, an approval or a resolved thread decides nothing.
+An operator's review that ends with points to address, written in the operator's own words: a `/revise` comment, or a submitted review whose body starts `/revise`, with its line comments as points. The only instruction `/revise` acts on. It may cite advisory findings one at a time, but it is never an answer to them: the operator owes no reply to any finding, and a reaction, an approval or a resolved thread decides nothing.
 _Avoid_: Change request, triage, feedback
 
 **Revision**:

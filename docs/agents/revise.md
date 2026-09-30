@@ -4,7 +4,8 @@ What `/revise` does, what it needs on the host, and how to run one by hand.
 The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md)
 §2-§5, §10 and §14, as for implement. The spec is
 [#131](https://github.com/corygyarmathy/afk-agent/issues/131) and its
-sub-issues #145, #146, #134, #147, #148 and #149. The transitions are
+sub-issues #145, #146, #134, #147, #148 and #149, and the submitted-review form
+is [#133](https://github.com/corygyarmathy/afk-agent/issues/133). The transitions are
 [`internal/revise`](../../internal/revise). The workspace, the relay, the local
 gate and its retries, the denylist, the leased push, the replay, the CI watch
 and its fixes, and the hand-back on a pull request are
@@ -16,21 +17,32 @@ shared with [`implement.md`](implement.md).
 
 `/revise` on an open pull request, from an account with write access that is
 not the agent's, is a **send-back**: the points after the word, on the same
-line or below it, in the operator's own words. It produces commits on top of
+line or below it, in the operator's own words. It comes in two forms:
+
+- **A comment** starting `/revise`. Its points are its body after the word.
+- **A submitted review** whose body starts `/revise`. Its points are its body
+  after the word, then each of its line comments, in order, with their file
+  and line. What the review says (approve, request changes, comment) decides
+  nothing. A line comment outside that review is never a point.
+
+Both are claimed with a 👀 on the command itself: on the comment, or on the
+review. Each is answered at most once, keyed on its own id. It produces commits on top of
 the head the send-back was written against, one reply answering it, an
 advisory review of the new head that claims the reply, and then the hand-off
 label again, in that order. The agent never merges, and never rewrites what
 the operator read.
 
-Every unanswered `/revise` with points is part of one send-back, in the order
-they were written. What cannot be revised gets one reply saying so, and
+Every unanswered `/revise` with points, in either form, is part of one
+send-back, in the order they were written. The conversation's listing leaves
+reviews out, so a review goes after every comment written no later than it
+was submitted. What cannot be revised gets one reply saying so, and
 nothing else: a pull request whose branch is not in the repository (a fork's),
 a command written while a revision was in flight, and a command with no points.
 A closed pull request's commands are claimed and nothing more.
 
 | transition | from | does |
 | --- | --- | --- |
-| `revise` | `start` | Reacts 👀 to every unanswered `/revise` (the claim), replies to each that cannot be revised, and, when there are points, takes the hand-off label off. |
+| `revise` | `start` | Reacts 👀 to every unanswered `/revise`, comment or review (the claim), replies to each that cannot be revised, and, when there are points, takes the hand-off label off. |
 | `revise-claimed` | `claiming` | Reads the claims, replies and label back, and makes any that are missing again. Once all are there, on to the revision, or rests. |
 | `revise-run` | `revising` | Clones the repository, brings in the send-back's head through the relay, and runs one enrolled model of the implement tier on the points. After a gate or CI failure it continues the session that wrote the commits, with the failure. Hands back if the branch was deleted, or pushed over, since the send-back. |
 | `revise-gate` | `gating` | The agent runs the local gate itself, as implement does. A session that rewrote the head the send-back was written against hands back. |
@@ -61,7 +73,8 @@ code is
   the push ([`implement.md`](implement.md#the-description)); over it is a
   note, never a cut or a hand-back.
 - **The session's part** is `.git/afk-reply.md`, under these headings, in
-  this order, each left out when it is empty: **Points**, each `done` with
+  this order, each left out when it is empty: **Points**, each identified by
+  a short quote or, for a line comment, by its link, and each `done` with
   its commit's full SHA or `not done` with one line why; **Suggested
   follow-ups**, owed no answer; **Not verified**. The agent orders them, and
   posts nothing else the session wrote: no narration, no "tests pass", no
@@ -97,7 +110,14 @@ moves on ([`internal/owed`](../../internal/owed)), for the reason
 What implement needs ([`implement.md`](implement.md#what-it-needs-on-the-host)):
 git, sh, a commit identity, opencode and the implement tier's credentials, the
 GitHub App's permissions, and the heavy-build token, which `revise-run` and
-`revise-gate` hold. It uses no skill of its own: the prompt is
+`revise-gate` hold. A send-back issued as a review adds three requests to the App's: listing a pull
+request's reviews and one review's line comments over REST, and the 👀 on a
+review and reading its reactions over GraphQL, since REST has no reactions for
+a review. By GitHub's documentation these want Pull requests: read and
+Pull requests: write, which the App already has for implement. Not verified
+against the App.
+
+It uses no skill of its own: the prompt is
 [`internal/revise/revise.md`](../../internal/revise/revise.md).
 
 The state directory is the directory holding `--store`. Beside the store, a
