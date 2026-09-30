@@ -87,7 +87,7 @@ func (d *Deps) replyOf(comments []github.Comment, n int, p progress) (github.Com
 // it cheap to check are the point.
 func (d *Deps) replyBody(n int, p progress) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n%s", owed.RevisionReplyMarker(n, p.Pushed), revisionMarkers(p.Points))
+	fmt.Fprintf(&b, "%s\n%s", owed.RevisionReplyMarker(n, p.Pushed), p.markers())
 	fmt.Fprintf(&b, "[Changes since your review](https://github.com/%s/compare/%s...%s): `%s` to `%s`.\n", d.Repo, p.Read, p.Pushed, git.Short(p.Read), git.Short(p.Pushed))
 	if c := (size.Count{Lines: p.Lines, Tests: p.Tests}); p.Measured && c.Over(d.SizeSignal) {
 		fmt.Fprintf(&b, "\nThe pull request is now %d changed lines, and %d changed lines of tests, which is over the size signal of %d.\n", c.Lines, c.Tests, d.SizeSignal)

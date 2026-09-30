@@ -57,6 +57,13 @@ type tracker struct {
 	// whose comments were.
 	asked []int64
 	read  []int
+
+	// reviews is the reviews on each pull request, and reviewEyes the
+	// reactions on each review, by its node id. reviewed is the pull
+	// requests whose reviews were read.
+	reviews    map[int][]github.Review
+	reviewEyes map[string][]github.Reaction
+	reviewed   []int
 }
 
 // since is when every subject in a fixture was opened.
@@ -123,6 +130,15 @@ func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, er
 func (tr *tracker) IssueReactions(_ context.Context, n int) ([]github.Reaction, error) {
 	tr.looked = append(tr.looked, n)
 	return tr.eyes[n], nil
+}
+
+func (tr *tracker) Reviews(_ context.Context, n int) ([]github.Review, error) {
+	tr.reviewed = append(tr.reviewed, n)
+	return tr.reviews[n], nil
+}
+
+func (tr *tracker) ReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
+	return tr.reviewEyes[nodeID], nil
 }
 
 func comment(id int64, login, association, body string) github.Comment {

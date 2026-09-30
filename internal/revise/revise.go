@@ -81,24 +81,29 @@
 // leaves the label where it was: nothing is being revised, so the pull request
 // still waits on the operator's review, not the agent.
 //
-// A send-back's points are the command's body after the word, in the
-// operator's own words. Every unanswered `/revise` with points is part of the
-// one send-back, in the order they were written: nothing was pushed between
-// them, so they were all written against the same head. What cannot be revised
-// is refused with one reply, and nothing else: a branch the agent cannot push
-// to, a command written while a revision was in flight, and a command with no
-// points. A closed pull request's commands are claimed and nothing more.
+// A command is a comment starting `/revise`, or a submitted review whose body
+// does (#133). A send-back's points are the command's body after the word, in
+// the operator's own words, and a review's line comments after its body, each
+// with where it is. What the review says - approve, request changes, comment -
+// decides nothing, and a line comment outside it is never a point. A review is
+// claimed with a 👀 on the review itself, keyed on its own id. Every unanswered
+// `/revise` with points, of either form, is part of the one send-back, in the
+// order they were written: nothing was pushed between them, so they were all
+// written against the same head. What cannot be revised is refused with one
+// reply, and nothing else: a branch the agent cannot push to, a command written
+// while a revision was in flight, and a command with no points. A closed pull
+// request's commands are claimed and nothing more.
 //
-// Whether a command was written while a revision was in flight is read from
-// the tracker, by where the comments are in the conversation. This job's claim
-// cannot run during a flight - intake does not arm a job that is queued or
-// held - so a command written then is read afterwards, and its head has moved
-// on under it. It was written during one if an earlier `/revise`'s answer, the
-// agent's comment carrying owed.RevisionMarker for it, comes after it: the
-// revision's reply and its hand-back carry that marker for every command of
-// the send-back. A refusal carries owed.ReplyMarker instead, so it does not
-// read as a revision. A revision that ended without either, by parking, blocks
-// nothing after it.
+// Whether a command was written while a revision was in flight is read from the
+// tracker, by where the comments are in the conversation, with each review
+// placed among them by the time it was submitted. This job's claim cannot run
+// during a flight - intake does not arm a job that is queued or held - so a
+// command written then is read afterwards, and its head has moved on under it.
+// It was written during one if an earlier `/revise`'s answer, the agent's
+// comment carrying the revision's marker for it, comes after it: the revision's
+// reply and its hand-back carry that marker for every command of the send-back.
+// A refusal carries a reply marker instead, so it does not read as a revision.
+// A revision that ended without either, by parking, blocks nothing after it.
 package revise
 
 import (
@@ -107,6 +112,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -149,6 +155,12 @@ type Tracker interface {
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 	EditPullRequest(ctx context.Context, number int, body string) error
+
+	// Reviews, ReviewComments and owed.ReviewTracker are how a send-back
+	// issued as a submitted review is read and claimed (#133).
+	Reviews(ctx context.Context, number int) ([]github.Review, error)
+	ReviewComments(ctx context.Context, number int, review int64) ([]github.ReviewComment, error)
+	owed.ReviewTracker
 }
 
 // Model runs one model. opencode.Command is one.
@@ -288,12 +300,23 @@ type SendBack struct {
 	Pushed string `json:"pushed,omitempty"`
 }
 
-// Point is one command's points, as the operator wrote them.
+// Point is one of a send-back's points, as the operator wrote it: a comment
+// command's body, a review command's body, or one of that review's line
+// comments.
 type Point struct {
-	// Comment is the command the points are in, which the revision's reply
-	// answers.
-	Comment int64  `json:"comment"`
-	Text    string `json:"text"`
+	// Comment is the comment command the point is in, or Review the review
+	// command: which the revision's reply answers.
+	Comment int64 `json:"comment,omitempty"`
+	Review  int64 `json:"review,omitempty"`
+
+	Text string `json:"text"`
+
+	// Path and Line are where a line comment is, and URL the line comment
+	// itself, which the reply identifies the point by. Line is zero for a
+	// comment on a whole file. All three are empty for a command's body.
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+	URL  string `json:"url,omitempty"`
 }
 
 // claim is `revise`: take every unanswered command, refuse what cannot be
@@ -312,15 +335,25 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	book := d.book()
-	commands, err := book.Unanswered(ctx, comments, Word)
+	reviews, err := d.Tracker.Reviews(ctx, n)
 	if err != nil {
 		return transition.Result{}, err
 	}
+	book := d.book()
+	unansweredComments, err := book.Unanswered(ctx, comments, Word)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	unansweredReviews, err := book.UnansweredReviews(ctx, reviews, Word)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	conversation := timeline(comments, reviews)
+	commands := timeline(unansweredComments, unansweredReviews)
 
 	var items []owed.Item
 	for _, c := range commands {
-		items = append(items, owed.Claim(c))
+		items = append(items, c.claim())
 	}
 	// Whatever an earlier claim handed the work is done with or given up
 	// on, and this is a fresh send-back or none.
@@ -333,22 +366,33 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
 
-	var points []Point
+	var (
+		points []Point
+		first  string
+	)
 	for _, c := range commands {
-		text := Points(c.Body)
-		switch {
-		case !strings.EqualFold(pr.HeadRepo, d.Repo):
-			items = append(items, owed.Reply(fmt.Sprintf("revise-unpushable-comment-%d", c.ID), n, c,
+		if !strings.EqualFold(pr.HeadRepo, d.Repo) {
+			items = append(items, c.refuse("revise-unpushable-"+c.key(), n,
 				fmt.Sprintf("This pull request's branch is not in %s, so the agent cannot push to it. Nothing was done.", d.Repo)))
-		case d.inFlight(comments, c.ID):
-			items = append(items, owed.Reply(fmt.Sprintf("revise-in-flight-comment-%d", c.ID), n, c,
-				fmt.Sprintf("A revision of this pull request was in flight when this was written, so the head it was written against is no longer the pull request's. Nothing was done: read what the revision changed, then `%s` again.", Word)))
-		case text == "":
-			items = append(items, owed.Reply(fmt.Sprintf("revise-no-points-comment-%d", c.ID), n, c,
-				fmt.Sprintf("There is nothing here to revise. Write the points after `%s`, in the same comment. Nothing was done.", Word)))
-		default:
-			points = append(points, Point{Comment: c.ID, Text: text})
+			continue
 		}
+		if d.inFlight(conversation, c) {
+			items = append(items, c.refuse("revise-in-flight-"+c.key(), n,
+				fmt.Sprintf("A revision of this pull request was in flight when this was written, so the head it was written against is no longer the pull request's. Nothing was done: read what the revision changed, then `%s` again.", Word)))
+			continue
+		}
+		pts, err := d.points(ctx, n, c)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		if len(pts) == 0 {
+			items = append(items, c.refuse("revise-no-points-"+c.key(), n, c.noPoints()))
+			continue
+		}
+		if first == "" {
+			first = c.key()
+		}
+		points = append(points, pts...)
 	}
 	if len(points) == 0 {
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
@@ -357,7 +401,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	// Owed even if the label is not there now: the read-back is what catches
 	// one applied after the pull request above was read but before the job
 	// moves on, and taking off a label that is not there is not an error.
-	items = append(items, owed.Unlabel(fmt.Sprintf("revise-unlabel-comment-%d", points[0].Comment), n, d.HandOffLabel))
+	items = append(items, owed.Unlabel("revise-unlabel-"+first, n, d.HandOffLabel))
 	if err := statefile.Save(d.path(in.Job.ID), SendBack{Head: pr.HeadSHA, Ref: pr.HeadRef, Points: points}); err != nil {
 		return transition.Result{}, err
 	}
@@ -374,37 +418,161 @@ func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result
 
 // book is the revise kind's way to what it owes the tracker.
 func (d *Deps) book() *owed.Book {
-	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed")}
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed"), Reviews: d.Tracker}
 }
 
-// inFlight reports whether command id was written while a revision was in
-// flight: an earlier `/revise` was answered as a revision after it.
+// inFlight reports whether command c was written while a revision was in
+// flight: an earlier `/revise` was answered as a revision after it, in the
+// conversation as timeline puts it.
 //
-// The revision's reply and its hand-back both carry owed.RevisionMarker for
-// every command of the send-back, so either one coming after the command means
-// that command was written against a head the revision has since moved. A
-// refusal's reply carries owed.ReplyMarker instead, so a command written
-// between a refusal and its reply landing does not read as in flight: nothing
-// was being revised.
-func (d *Deps) inFlight(comments []github.Comment, id int64) bool {
+// The revision's reply and its hand-back both carry the revision's marker for
+// every command of the send-back, so either one coming after c means c was
+// written against a head the revision has since moved. A refusal's reply
+// carries a reply marker instead, so a command written between a refusal and
+// its reply landing does not read as in flight: nothing was being revised.
+func (d *Deps) inFlight(conversation []command, c command) bool {
 	at := -1
-	for i, c := range comments {
-		if c.ID == id {
+	for i, e := range conversation {
+		if e.same(c) {
 			at = i
 		}
 	}
-	for _, earlier := range comments[:max(at, 0)] {
-		if !intake.IsCommand(earlier, d.Login, Word) {
+	for _, earlier := range conversation[:max(at, 0)] {
+		if !earlier.issues(d.Login) {
 			continue
 		}
-		marker := owed.RevisionMarker(earlier.ID)
-		for i, c := range comments {
-			if i > at && strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
+		marker := earlier.revisionMarker()
+		for _, e := range conversation[at+1:] {
+			if !e.isReview() && strings.EqualFold(e.comment.Login, d.Login) && strings.Contains(e.comment.Body, marker) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// command is one `/revise`: a comment on the pull request's conversation, or a
+// submitted review whose body starts with the word (#133). The two are claimed,
+// refused and answered the same way, each on its own id.
+type command struct {
+	comment github.Comment
+
+	// review is the review, when the command is one. Its ID is zero for a
+	// comment.
+	review github.Review
+}
+
+func (c command) isReview() bool { return c.review.ID != 0 }
+
+// same reports whether c and o are the same comment, or the same review.
+func (c command) same(o command) bool {
+	if c.isReview() {
+		return o.isReview() && o.review.ID == c.review.ID
+	}
+	return !o.isReview() && o.comment.ID == c.comment.ID
+}
+
+// key is what the command's owed items are keyed on.
+func (c command) key() string {
+	if c.isReview() {
+		return fmt.Sprintf("review-%d", c.review.ID)
+	}
+	return fmt.Sprintf("comment-%d", c.comment.ID)
+}
+
+// issues reports whether c is a `/revise` from a writer who is not login.
+func (c command) issues(login string) bool {
+	if c.isReview() {
+		return intake.IsReviewCommand(c.review, login, Word)
+	}
+	return intake.IsCommand(c.comment, login, Word)
+}
+
+// claim is the agent's 👀 on the command: on the comment, or on the review.
+func (c command) claim() owed.Item {
+	if c.isReview() {
+		return owed.ClaimReview(c.review)
+	}
+	return owed.Claim(c.comment)
+}
+
+// refuse is the one reply saying why the command cannot be revised. One to a
+// review links it: the reply is in the conversation, and the review is not.
+func (c command) refuse(stem string, n int, text string) owed.Item {
+	if c.isReview() {
+		return owed.ReplyToReview(stem, n, c.review, fmt.Sprintf("On [your review](%s): %s", c.review.URL, text))
+	}
+	return owed.Reply(stem, n, c.comment, text)
+}
+
+// noPoints is the refusal of a command with no points.
+func (c command) noPoints() string {
+	if c.isReview() {
+		return fmt.Sprintf("There is nothing here to revise. Write the points after `%s` in the review's body, or as line comments in the same review. Nothing was done.", Word)
+	}
+	return fmt.Sprintf("There is nothing here to revise. Write the points after `%s`, in the same comment. Nothing was done.", Word)
+}
+
+// revisionMarker is the hidden line a revision's answer to c carries.
+func (c command) revisionMarker() string {
+	if c.isReview() {
+		return owed.ReviewRevisionMarker(c.review.ID)
+	}
+	return owed.RevisionMarker(c.comment.ID)
+}
+
+// timeline is comments and the submitted reviews among reviews, in the order
+// they were written. The conversation's listing leaves reviews out, so each
+// review goes after every comment written no later than it was submitted,
+// and the comments keep the order the listing gave them. A comment written in
+// the same second as a review, which is the timestamps' resolution, goes
+// before it.
+func timeline(comments []github.Comment, reviews []github.Review) []command {
+	var submitted []github.Review
+	for _, r := range reviews {
+		if r.State != "PENDING" {
+			submitted = append(submitted, r)
+		}
+	}
+	sort.SliceStable(submitted, func(i, j int) bool { return submitted[i].SubmittedAt.Before(submitted[j].SubmittedAt) })
+	out := make([]command, 0, len(comments)+len(submitted))
+	i := 0
+	for _, r := range submitted {
+		for ; i < len(comments) && !comments[i].CreatedAt.After(r.SubmittedAt); i++ {
+			out = append(out, command{comment: comments[i]})
+		}
+		out = append(out, command{review: r})
+	}
+	for ; i < len(comments); i++ {
+		out = append(out, command{comment: comments[i]})
+	}
+	return out
+}
+
+// points is command c's points: a comment's body after the word, or a
+// review's body after the word and then each of its line comments, in order.
+// A line comment outside the review is never one of them.
+func (d *Deps) points(ctx context.Context, n int, c command) ([]Point, error) {
+	if !c.isReview() {
+		if text := Points(c.comment.Body); text != "" {
+			return []Point{{Comment: c.comment.ID, Text: text}}, nil
+		}
+		return nil, nil
+	}
+	var out []Point
+	if text := Points(c.review.Body); text != "" {
+		out = append(out, Point{Review: c.review.ID, Text: text})
+	}
+	lines, err := d.Tracker.ReviewComments(ctx, n, c.review.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range lines {
+		if text := strings.TrimSpace(l.Body); text != "" {
+			out = append(out, Point{Review: c.review.ID, Text: text, Path: l.Path, Line: l.Line, URL: l.URL})
+		}
+	}
+	return out, nil
 }
 
 // Points is a command's points: its body after the word, as written. Empty

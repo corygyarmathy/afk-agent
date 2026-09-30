@@ -1432,7 +1432,15 @@ func (closedTracker) RequiredChecks(context.Context, string) ([]string, error) {
 	return nil, nil
 }
 
-func (closedTracker) EditPullRequest(context.Context, int, string) error { return nil }
+func (closedTracker) EditPullRequest(context.Context, int, string) error    { return nil }
+func (closedTracker) Reviews(context.Context, int) ([]github.Review, error) { return nil, nil }
+func (closedTracker) ReviewComments(context.Context, int, int64) ([]github.ReviewComment, error) {
+	return nil, nil
+}
+func (closedTracker) ReviewReactions(context.Context, string) ([]github.Reaction, error) {
+	return nil, nil
+}
+func (closedTracker) ReactToReview(context.Context, string, string) error { return nil }
 func (closedTracker) CreatePullRequest(context.Context, github.NewPullRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, nil
 }

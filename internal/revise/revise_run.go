@@ -53,9 +53,11 @@ type progress struct {
 	// pushes; Read does not.
 	Read string `json:"read"`
 
-	// Points is the send-back's command ids, in order: the revision's marks
-	// for the commands it answers.
-	Points []int64 `json:"points,omitempty"`
+	// Points is the send-back's comment commands' ids, and Reviews its
+	// review commands' (#133), each in order: the revision's marks for the
+	// commands it answers.
+	Points  []int64 `json:"points,omitempty"`
+	Reviews []int64 `json:"reviews,omitempty"`
 
 	// Reply is the session's part of the reply, as its last run left the
 	// file: posted in the reply once CI is green, and shown by a hand-back
@@ -270,7 +272,7 @@ func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key
 		Number:      n,
 		Key:         key,
 		Marker:      revisionHandBackMarker(n, key),
-		Also:        revisionMarkers(p.Points),
+		Also:        p.markers(),
 		Stopped:     "I stopped the revision. " + reason,
 		Detail:      detail,
 		Output:      output,
@@ -282,21 +284,24 @@ func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key
 
 // revisionHandBackMarker is the hidden line a revision's hand-back carries, so
 // it is read back once. The revision's markers for the send-back's commands go
-// beside it (revisionMarkers), so a later command can tell it was written
+// beside it (progress.markers), so a later command can tell it was written
 // while a revision was in flight.
 func revisionHandBackMarker(n int, key string) string {
 	return fmt.Sprintf("<!-- afk:revision-hand-back pr=%d key=%s -->", n, key)
 }
 
-// revisionMarkers is the hidden line for each command of the send-back, which
-// a revision's hand-back and its reply both carry.
-func revisionMarkers(ids []int64) string {
-	if len(ids) == 0 {
+// markers is the hidden line for each command of the send-back, which a
+// revision's hand-back and its reply both carry.
+func (p progress) markers() string {
+	if len(p.Points) == 0 && len(p.Reviews) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	for _, id := range ids {
+	for _, id := range p.Points {
 		fmt.Fprintf(&b, "%s\n", owed.RevisionMarker(id))
+	}
+	for _, id := range p.Reviews {
+		fmt.Fprintf(&b, "%s\n", owed.ReviewRevisionMarker(id))
 	}
 	return b.String()
 }
@@ -337,7 +342,9 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		// own: handBackLost keys on the head as "lost-<head>", and a later
 		// revision losing its record at this same head would find this
 		// hand-back's marker and take its own for already said.
-		return progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}, Read: sb.Head, Points: pointIDs(sb.Points)},
+		lost := progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}, Read: sb.Head}
+		lost.Points, lost.Reviews = answered(sb.Points)
+		return lost,
 			fmt.Sprintf("The agent lost its record of the revision after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(sb.Pushed)), nil
 	}
 	if err := w.Clear(jobID); err != nil {
@@ -366,9 +373,9 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 			// written against, and is leased on it.
 			Pushed: sb.Head,
 		},
-		Read:   sb.Head,
-		Points: pointIDs(sb.Points),
+		Read: sb.Head,
 	}
+	p.Points, p.Reviews = answered(sb.Points)
 
 	// Read before the fetch, so that a branch that is gone is a hand-back
 	// and a fetch that fails is an error, made again.
@@ -427,13 +434,21 @@ func (p progress) rewrote() string {
 	return fmt.Sprintf("The revision rewrote `%s`, the head the send-back was written against, which a revision never does. Nothing was pushed.", git.Short(p.Read))
 }
 
-// pointIDs is the send-back's command ids, in order.
-func pointIDs(points []Point) []int64 {
-	ids := make([]int64, len(points))
-	for i, p := range points {
-		ids[i] = p.Comment
+// answered is the send-back's comment commands' ids and its review commands',
+// each once and in order. A review is several points: its body and each line
+// comment.
+func answered(points []Point) (comments, reviews []int64) {
+	for _, p := range points {
+		switch {
+		case p.Review != 0:
+			if len(reviews) == 0 || reviews[len(reviews)-1] != p.Review {
+				reviews = append(reviews, p.Review)
+			}
+		case p.Comment != 0:
+			comments = append(comments, p.Comment)
+		}
 	}
-	return ids
+	return comments, reviews
 }
 
 // spec writes the diff, the linked issue and the points where the prompt says
@@ -448,7 +463,7 @@ func (d *Deps) spec(ctx context.Context, ws string, n int, sb SendBack, p progre
 	fmt.Fprintf(&b, "The head this send-back was written against is `%s`.\n\n", sb.Head)
 	fmt.Fprintf(&b, "## The points\n\n")
 	for i, pt := range sb.Points {
-		fmt.Fprintf(&b, "%d. %s\n   (from the command with id %d)\n\n", i+1, pt.Text, pt.Comment)
+		fmt.Fprintf(&b, "%d. %s\n   (%s)\n\n", i+1, pt.Text, pt.from())
 	}
 	fmt.Fprintf(&b, "## The diff at that head\n\n```diff\n%s\n```\n", diff)
 	if issue, ok, err := d.linkedIssue(ctx, n); err != nil {
@@ -462,6 +477,20 @@ func (d *Deps) spec(ctx context.Context, ws string, n int, sb SendBack, p progre
 		}
 	}
 	return os.WriteFile(filepath.Join(ws, ".git", sendBackFile), []byte(b.String()), 0o644)
+}
+
+// from is where a point was written, as the send-back file says it. A line
+// comment's link is how the reply identifies it.
+func (p Point) from() string {
+	switch {
+	case p.URL != "" && p.Line > 0:
+		return fmt.Sprintf("a line comment on `%s` line %d, in the review with id %d: %s", p.Path, p.Line, p.Review, p.URL)
+	case p.URL != "":
+		return fmt.Sprintf("a line comment on the file `%s`, in the review with id %d: %s", p.Path, p.Review, p.URL)
+	case p.Review != 0:
+		return fmt.Sprintf("from the body of the review with id %d", p.Review)
+	}
+	return fmt.Sprintf("from the command with id %d", p.Comment)
 }
 
 // linkedIssue is the issue the pull request is for, if the agent opened it:
