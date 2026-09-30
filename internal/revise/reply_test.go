@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -244,6 +246,68 @@ func TestAPushAfterTheReplyHandsBackLinkingIt(t *testing.T) {
 	}
 	if !f.handedBack() || f.tr.labelled() {
 		t.Errorf("labels are %v, want handed back and not handed off", f.tr.pr.Labels)
+	}
+}
+
+// loseOwed wipes what the revision owes the tracker, as a partial wipe of the
+// state directory does, and leaves its progress.
+func (f *revFixture) loseOwed() {
+	f.t.Helper()
+	if err := os.Remove(filepath.Join(f.deps.StateDir, "owed", jobID()+".json")); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// A reply whose record is lost after it is posted is found by its marker, and
+// not posted again for a head someone else pushed since: the revision hands
+// back linking the reply it has.
+func TestALostReplyRecordAfterTheReplyHandsBackLinkingIt(t *testing.T) {
+	f := setupReplying(t)
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done in deadbee.\n"))
+
+	f.step(revise.Replying)
+	f.loseOwed()
+	if err := pushAs(t.TempDir(), f.remote, "other.txt", "other\n"); err != nil {
+		t.Fatal(err)
+	}
+	if job := f.finish(); job.State != revise.Start {
+		t.Fatalf("the revision is in %q, want %s", job.State, revise.Start)
+	}
+	reply, n := f.reply()
+	if n != 1 {
+		t.Fatalf("%d replies, want one", n)
+	}
+	hb := f.handBack()
+	if !strings.Contains(hb, "Someone else pushed") || !strings.Contains(hb, fmt.Sprintf("#issuecomment-%d", reply.ID)) {
+		t.Errorf("the hand-back does not say someone pushed, and link the reply:\n%s", hb)
+	}
+	if !f.handedBack() || f.tr.labelled() {
+		t.Errorf("labels are %v, want handed back and not handed off", f.tr.pr.Labels)
+	}
+}
+
+// A reply whose record is lost before it is on the pull request is still owed:
+// the watch posts it, once.
+func TestALostReplyRecordBeforeTheReplyStillReplies(t *testing.T) {
+	f := setupReplying(t)
+	f.tr.drop = "<!-- afk:revision-reply "
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"))
+
+	f.step(revise.Replying)
+	f.loseOwed()
+	f.tr.drop = ""
+	if job := f.finish(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the revision is in %q, want at rest in %s\n%s", job.State, revise.Start, f.handBack())
+	}
+	reply, n := f.reply()
+	if n != 1 {
+		t.Fatalf("%d replies, want one", n)
+	}
+	if at := f.remoteHead(); !strings.Contains(reply.Body, owed.RevisionReplyMarker(12, at)) {
+		t.Errorf("the reply is not for the head %s:\n%s", at, reply.Body)
+	}
+	if !f.tr.labelled() || f.handedBack() {
+		t.Errorf("labels are %v, want handed off", f.tr.pr.Labels)
 	}
 }
 
