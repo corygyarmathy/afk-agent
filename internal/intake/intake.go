@@ -1,9 +1,11 @@
 // Package intake is how a command enters the store.
 //
 // A pass reads the open issues and pull requests for command comments nobody
-// has answered, and makes a job due for each (ADR 0001 §14). It keeps nothing of its own about
-// which commands exist: the queue is re-derived from the tracker (ADR 0001
-// §5), and the store only deduplicates.
+// has answered, and makes a job due for each (ADR 0001 §14). A command that
+// may also be issued as a submitted review (`/revise`, #133) is read from the
+// pull request's reviews as well, and answered on the review. It keeps nothing
+// of its own about which commands exist: the queue is re-derived from the
+// tracker (ADR 0001 §5), and the store only deduplicates.
 //
 // Answered is read from the tracker, not from the store. The transition that
 // takes a command claims it with the agent's reaction (ADR 0001 §7), so a wiped
@@ -80,6 +82,11 @@ type Tracker interface {
 	Comments(ctx context.Context, number int) ([]github.Comment, error)
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
 	IssueReactions(ctx context.Context, number int) ([]github.Reaction, error)
+
+	// Reviews and ReviewReactions are read only for a command that may be
+	// issued as a review.
+	Reviews(ctx context.Context, number int) ([]github.Review, error)
+	ReviewReactions(ctx context.Context, nodeID string) ([]github.Reaction, error)
 }
 
 // Command is one entry in the command registry: the word a comment starts
@@ -97,6 +104,11 @@ type Command struct {
 
 	Kind  store.Kind
 	Start string
+
+	// Reviews is whether the command may also be issued as a submitted
+	// review on a pull request whose body starts with the word, as `/revise`
+	// may (#133). The review is claimed and answered as a comment is.
+	Reviews bool
 }
 
 // Unattended is the work an issue is taken for with nobody asking: the
@@ -188,6 +200,12 @@ type reading struct {
 // Key is the idempotency key a command's arming is reserved under.
 func Key(commentID int64) string {
 	return fmt.Sprintf("intake-comment-%d", commentID)
+}
+
+// ReviewKey is the idempotency key a command issued as a review is armed
+// under. A review's id is not a comment's, so the two are kept apart.
+func ReviewKey(reviewID int64) string {
+	return fmt.Sprintf("intake-review-%d", reviewID)
 }
 
 // Pass reads the tracker once and returns the jobs it made due.
@@ -487,7 +505,67 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 			done = false
 		}
 	}
+	if subject.Type != store.SubjectPR || !in.reviews() {
+		return made, done, nil
+	}
+
+	reviews, err := in.Tracker.Reviews(ctx, subject.Number)
+	if err != nil {
+		return made, false, err
+	}
+	for _, r := range reviews {
+		cmd, ok := in.reviewCommand(r)
+		if !ok {
+			continue
+		}
+		key := ReviewKey(r.ID)
+		armed, err := in.Store.Reserved(ctx, key)
+		if err != nil {
+			return made, false, err
+		}
+		if armed {
+			continue
+		}
+		reactions, err := in.Tracker.ReviewReactions(ctx, r.NodeID)
+		if err != nil {
+			return made, false, err
+		}
+		if Claimed(reactions, in.Login) {
+			continue
+		}
+		job, ok, err := in.arm(ctx, cmd, subject, key)
+		if err != nil {
+			return made, false, err
+		}
+		if ok {
+			made = append(made, job)
+		} else {
+			done = false
+		}
+	}
 	return made, done, nil
+}
+
+// reviews reports whether any command this intake answers may be issued as a
+// review, which is whether a pull request's reviews are read at all.
+func (in *Intake) reviews() bool {
+	for _, cmd := range in.Commands {
+		if cmd.Reviews {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewCommand reports whether a review is a command this intake answers, as
+// command does for a comment.
+func (in *Intake) reviewCommand(r github.Review) (Command, bool) {
+	for _, cmd := range in.Commands {
+		if cmd.Reviews && cmd.On == store.SubjectPR && IsReviewCommand(r, in.Login, cmd.Word) {
+			return cmd, true
+		}
+	}
+	return Command{}, false
 }
 
 // command reports whether a comment is a command this intake answers: written
@@ -542,6 +620,8 @@ func (in *Intake) validate() error {
 			return fmt.Errorf("command %s: unknown job kind %q", cmd.Word, cmd.Kind)
 		case cmd.Start == "":
 			return fmt.Errorf("command %s: no start state", cmd.Word)
+		case cmd.Reviews && cmd.On != store.SubjectPR:
+			return fmt.Errorf("command %s: only a pull request has reviews", cmd.Word)
 		}
 	}
 	if u := in.Unattended; u.Label != "" {
@@ -578,11 +658,24 @@ func (in *Intake) now() time.Time {
 // definitions would let intake arm a job for a comment the transition then
 // fails to claim.
 func IsCommand(c github.Comment, login, word string) bool {
+	return issues(c.Login, c.Association, c.Body, login, word)
+}
+
+// IsReviewCommand reports whether a review issues the command word, as
+// IsCommand does for a comment: submitted, by an account with write access
+// that is not login, with word as its body's first word. What the review
+// says - approve, request changes, comment - decides nothing.
+func IsReviewCommand(r github.Review, login, word string) bool {
+	return r.State != "PENDING" && issues(r.Login, r.Association, r.Body, login, word)
+}
+
+// issues is IsCommand and IsReviewCommand's shared rule.
+func issues(author, association, body, login, word string) bool {
 	// Logins are case-insensitive on GitHub, so the agent's own account is too.
-	if strings.EqualFold(c.Login, login) || !writers[c.Association] {
+	if strings.EqualFold(author, login) || !writers[association] {
 		return false
 	}
-	line, _, _ := strings.Cut(strings.TrimSpace(c.Body), "\n")
+	line, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
 	fields := strings.Fields(line)
 	return len(fields) > 0 && fields[0] == word
 }

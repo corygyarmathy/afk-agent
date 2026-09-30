@@ -10,13 +10,14 @@ import (
 
 // commands is the command registry (ADR 0001 §14): the comment commands this
 // build answers, the kind of subject each is issued on, the job kind it asks
-// for, and the state that kind's jobs start in. A variable for the reason
+// for, the state that kind's jobs start in, and whether a submitted review may
+// issue it too. A variable for the reason
 // catalogue is.
 var commands = func() []intake.Command {
 	return []intake.Command{
 		{Word: review.Word, On: store.SubjectPR, Kind: store.KindReview, Start: review.Start},
 		{Word: implement.Word, On: store.SubjectIssue, Kind: store.KindImplement, Start: implement.Start},
-		{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start},
+		{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, Reviews: true},
 	}
 }
 

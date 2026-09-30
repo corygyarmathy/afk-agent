@@ -3,7 +3,9 @@ this directory, on the branch `{{.Branch}}`.
 
 An operator reviewed this pull request and sent it back. The send-back is
 `.git/afk-send-back.md`: the points they wrote, the diff at the head they read,
-and the issue the pull request is for if the agent opened it. Do the points,
+and the issue the pull request is for if the agent opened it. A point may be a
+line comment, which the send-back gives with its file, its line and a link to
+it. Do the points,
 and nothing else.
 
 - Each point is done as written. The operator's wording wins over anything they
@@ -45,7 +47,8 @@ the pull request. Use these headings, and leave out a section with nothing to
 say rather than write "none":
 
 - `## Points` - every point, in the send-back's order, each identified by a
-  short quote of what the operator wrote. Say `done` with the full SHA of the
+  short quote of what the operator wrote, or, for a line comment, by a link to
+  it: the link the send-back gives. Say `done` with the full SHA of the
   commit that did it, or `not done` with one line why. A point left undone is named here; it is
   never dropped silently.
 - `## Suggested follow-ups` - one line each, what you noticed and did not act

@@ -61,6 +61,12 @@ type tracker struct {
 	// reactions landed on each comment.
 	events []string
 	reacts map[int64]int
+
+	// reviews is the reviews on pull request 12, lines each review's line
+	// comments, and reviewEyes the reactions on each review, by node id.
+	reviews    []github.Review
+	lines      map[int64][]github.ReviewComment
+	reviewEyes map[string][]github.Reaction
 }
 
 func newTracker() *tracker {
@@ -69,12 +75,14 @@ func newTracker() *tracker {
 			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main",
 			Login: "alice", Labels: []string{handOff, "bug"},
 		},
-		comments:  map[int][]github.Comment{},
-		reactions: map[int64][]github.Reaction{},
-		issues:    map[int]github.Issue{},
-		nextID:    1000,
-		writes:    map[string]int{},
-		reacts:    map[int64]int{},
+		comments:   map[int][]github.Comment{},
+		reactions:  map[int64][]github.Reaction{},
+		issues:     map[int]github.Issue{},
+		nextID:     1000,
+		writes:     map[string]int{},
+		reacts:     map[int64]int{},
+		lines:      map[int64][]github.ReviewComment{},
+		reviewEyes: map[string][]github.Reaction{},
 	}
 }
 
@@ -166,6 +174,30 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	tr.events = append(tr.events, fmt.Sprintf("react %d", id))
 	if !intake.Claimed(tr.reactions[id], agent) {
 		tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
+	}
+	return nil
+}
+
+func (tr *tracker) Reviews(_ context.Context, n int) ([]github.Review, error) {
+	if n != 12 {
+		return nil, nil
+	}
+	return append([]github.Review(nil), tr.reviews...), nil
+}
+
+func (tr *tracker) ReviewComments(_ context.Context, _ int, review int64) ([]github.ReviewComment, error) {
+	return tr.lines[review], nil
+}
+
+func (tr *tracker) ReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
+	return tr.reviewEyes[nodeID], nil
+}
+
+func (tr *tracker) ReactToReview(_ context.Context, nodeID, content string) error {
+	tr.writes["react-review"]++
+	tr.events = append(tr.events, "react-review "+nodeID)
+	if !intake.Claimed(tr.reviewEyes[nodeID], agent) {
+		tr.reviewEyes[nodeID] = append(tr.reviewEyes[nodeID], github.Reaction{Login: agent, Content: content})
 	}
 	return nil
 }
@@ -268,7 +300,7 @@ func setup(t *testing.T) *fixture {
 		in: &intake.Intake{
 			Tracker: tr, Store: s, Login: agent, Holder: "intake", LeaseTTL: time.Minute, Clock: clock,
 			// The entry #149 adds to the registry `afk work` answers.
-			Commands: []intake.Command{{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start}},
+			Commands: []intake.Command{{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, Reviews: true}},
 		},
 	}
 }
