@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/size"
@@ -31,12 +32,48 @@ func (d *Deps) reply(ctx context.Context, in transition.In, p progress) (transit
 }
 
 // replied is `revise-replied`: on to the review once the reply is on the pull
-// request. A record lost with the state directory goes back to the watch,
-// which owes the reply again if CI is still green on the head, and hands the
-// revision back if its progress went too. The reply is said once either way:
-// it is read back by its marker before it is posted.
+// request.
+//
+// A record lost with the state directory looks for the reply by its marker
+// first. One that is there goes on to the review, as the record would have,
+// and the review hands back linking it if someone else has pushed since: the
+// watch would hand back on their push without the link, saying the reply's
+// points again. One that is not there goes back to the watch, which owes the
+// reply again if CI is still green on the head, and hands the revision back if
+// its progress went too.
 func (d *Deps) replied(ctx context.Context, in transition.In) (transition.Result, error) {
-	return d.book().Settle(ctx, in, transition.Result{State: Watching, RunAt: in.Now})
+	res, err := d.book().Settle(ctx, in, transition.Result{State: Watching, RunAt: in.Now})
+	if err != nil || res.State != Watching {
+		return res, err
+	}
+	p, err := d.load(in.Job.ID)
+	if errors.Is(err, os.ErrNotExist) {
+		return res, nil
+	}
+	if err != nil {
+		return transition.Result{}, err
+	}
+	n := in.Job.Subject.Number
+	comments, err := d.Tracker.Comments(ctx, n)
+	if err != nil {
+		return transition.Result{}, err
+	}
+	if _, ok := d.replyOf(comments, n, p); ok {
+		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
+	}
+	return res, nil
+}
+
+// replyOf is the revision's reply among comments: the agent's, carrying the
+// marker for the head it pushed.
+func (d *Deps) replyOf(comments []github.Comment, n int, p progress) (github.Comment, bool) {
+	marker := owed.RevisionReplyMarker(n, p.Pushed)
+	for _, c := range comments {
+		if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
+			return c, true
+		}
+	}
+	return github.Comment{}, false
 }
 
 // replyBody is the revision's reply: what Go knows, then what the session
@@ -185,12 +222,8 @@ func (d *Deps) handBackReplied(ctx context.Context, in transition.In, p progress
 		return transition.Result{}, err
 	}
 	detail := "What the revision did is in its reply above."
-	marker := owed.RevisionReplyMarker(n, p.Pushed)
-	for _, c := range comments {
-		if strings.EqualFold(c.Login, d.Login) && strings.Contains(c.Body, marker) {
-			detail = fmt.Sprintf("What the revision did is in [its reply](https://github.com/%s/pull/%d#issuecomment-%d).", d.Repo, n, c.ID)
-			break
-		}
+	if c, ok := d.replyOf(comments, n, p); ok {
+		detail = fmt.Sprintf("What the revision did is in [its reply](https://github.com/%s/pull/%d#issuecomment-%d).", d.Repo, n, c.ID)
 	}
 	return d.handBackOn(ctx, in, p, p.Nonce, reason, detail, output)
 }
