@@ -33,11 +33,12 @@ label again, in that order. The agent never merges, and never rewrites what
 the operator read.
 
 Every unanswered `/revise` with points, in either form, is part of one
-send-back, in the order they were written. The conversation's listing leaves
-reviews out, so a review goes after every comment written no later than it
-was submitted. What cannot be revised gets one reply saying so, and
-nothing else: a pull request whose branch is not in the repository (a fork's),
-a command written while a revision was in flight, and a command with no points.
+send-back, in the order they were written: a review goes after every comment
+written no later than it was submitted. What cannot be revised gets one reply
+saying so, and nothing else: a pull request whose branch is not in the
+repository (a fork's), a command written while a revision was in flight, a
+review written on a commit that is no longer the pull request's head, or with a
+line comment written on one, and a command with no points.
 A closed pull request's commands are claimed and nothing more.
 
 | transition | from | does |
@@ -110,12 +111,11 @@ moves on ([`internal/owed`](../../internal/owed)), for the reason
 What implement needs ([`implement.md`](implement.md#what-it-needs-on-the-host)):
 git, sh, a commit identity, opencode and the implement tier's credentials, the
 GitHub App's permissions, and the heavy-build token, which `revise-run` and
-`revise-gate` hold. A send-back issued as a review adds three requests to the App's: listing a pull
-request's reviews and one review's line comments over REST, and the 👀 on a
-review and reading its reactions over GraphQL, since REST has no reactions for
-a review. By GitHub's documentation these want Pull requests: read and
-Pull requests: write, which the App already has for implement. Not verified
-against the App.
+`revise-gate` hold. A send-back issued as a review adds three requests to the
+App's: listing a pull request's reviews and one review's line comments over
+REST, and the 👀 on a review and reading its reactions over GraphQL. By
+GitHub's documentation these want Pull requests: read and Pull requests:
+write, which the App already has for implement. Not verified against the App.
 
 It uses no skill of its own: the prompt is
 [`internal/revise/revise.md`](../../internal/revise/revise.md).
