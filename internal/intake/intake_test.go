@@ -61,7 +61,7 @@ type tracker struct {
 	// reviews is the reviews on each pull request, and reviewEyes the
 	// reactions on each review, by its node id. reviewed is the pull
 	// requests whose reviews were read.
-	reviews    map[int][]github.Review
+	reviews    map[int][]github.PullRequestReview
 	reviewEyes map[string][]github.Reaction
 	reviewed   []int
 }
@@ -132,12 +132,12 @@ func (tr *tracker) IssueReactions(_ context.Context, n int) ([]github.Reaction, 
 	return tr.eyes[n], nil
 }
 
-func (tr *tracker) Reviews(_ context.Context, n int) ([]github.Review, error) {
+func (tr *tracker) PullRequestReviews(_ context.Context, n int) ([]github.PullRequestReview, error) {
 	tr.reviewed = append(tr.reviewed, n)
 	return tr.reviews[n], nil
 }
 
-func (tr *tracker) ReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
+func (tr *tracker) PullRequestReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
 	return tr.reviewEyes[nodeID], nil
 }
 

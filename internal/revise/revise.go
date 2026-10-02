@@ -156,11 +156,12 @@ type Tracker interface {
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
 	EditPullRequest(ctx context.Context, number int, body string) error
 
-	// Reviews, ReviewComments and owed.ReviewTracker are how a send-back
-	// issued as a submitted review is read and claimed (#133).
-	Reviews(ctx context.Context, number int) ([]github.Review, error)
-	ReviewComments(ctx context.Context, number int, review int64) ([]github.ReviewComment, error)
-	owed.ReviewTracker
+	// PullRequestReviews, LineComments and owed.PullRequestReviewTracker are
+	// how a send-back issued as a submitted review is read and claimed
+	// (#133).
+	PullRequestReviews(ctx context.Context, number int) ([]github.PullRequestReview, error)
+	LineComments(ctx context.Context, number int, review int64) ([]github.LineComment, error)
+	owed.PullRequestReviewTracker
 }
 
 // Model runs one model. opencode.Command is one.
@@ -304,10 +305,10 @@ type SendBack struct {
 // command's body, a review command's body, or one of that review's line
 // comments.
 type Point struct {
-	// Comment is the comment command the point is in, or Review the review
-	// command: which the revision's reply answers.
-	Comment int64 `json:"comment,omitempty"`
-	Review  int64 `json:"review,omitempty"`
+	// Comment is the comment command the point is in, or PullRequestReview
+	// the review command: which the revision's reply answers.
+	Comment           int64 `json:"comment,omitempty"`
+	PullRequestReview int64 `json:"pull_request_review,omitempty"`
 
 	Text string `json:"text"`
 
@@ -335,7 +336,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	reviews, err := d.Tracker.Reviews(ctx, n)
+	reviews, err := d.Tracker.PullRequestReviews(ctx, n)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -344,7 +345,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	unansweredReviews, err := book.UnansweredReviews(ctx, reviews, Word)
+	unansweredReviews, err := book.UnansweredPullRequestReviews(ctx, reviews, Word)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -418,7 +419,7 @@ func (d *Deps) claimed(ctx context.Context, in transition.In) (transition.Result
 
 // book is the revise kind's way to what it owes the tracker.
 func (d *Deps) book() *owed.Book {
-	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed"), Reviews: d.Tracker}
+	return &owed.Book{Tracker: d.Tracker, Store: d.Store, Login: d.Login, Rounds: d.Rounds, Dir: filepath.Join(d.StateDir, "owed"), PullRequestReviews: d.Tracker}
 }
 
 // inFlight reports whether command c was written while a revision was in
@@ -459,7 +460,7 @@ type command struct {
 
 	// review is the review, when the command is one. Its ID is zero for a
 	// comment.
-	review github.Review
+	review github.PullRequestReview
 }
 
 func (c command) isReview() bool { return c.review.ID != 0 }
@@ -483,7 +484,7 @@ func (c command) key() string {
 // issues reports whether c is a `/revise` from a writer who is not login.
 func (c command) issues(login string) bool {
 	if c.isReview() {
-		return intake.IsReviewCommand(c.review, login, Word)
+		return intake.IsCommandByReview(c.review, login, Word)
 	}
 	return intake.IsCommand(c.comment, login, Word)
 }
@@ -491,7 +492,7 @@ func (c command) issues(login string) bool {
 // claim is the agent's 👀 on the command: on the comment, or on the review.
 func (c command) claim() owed.Item {
 	if c.isReview() {
-		return owed.ClaimReview(c.review)
+		return owed.ClaimPullRequestReview(c.review)
 	}
 	return owed.Claim(c.comment)
 }
@@ -500,7 +501,7 @@ func (c command) claim() owed.Item {
 // review links it: the reply is in the conversation, and the review is not.
 func (c command) refuse(stem string, n int, text string) owed.Item {
 	if c.isReview() {
-		return owed.ReplyToReview(stem, n, c.review, fmt.Sprintf("On [your review](%s): %s", c.review.URL, text))
+		return owed.ReplyToPullRequestReview(stem, n, c.review, fmt.Sprintf("On [your review](%s): %s", c.review.URL, text))
 	}
 	return owed.Reply(stem, n, c.comment, text)
 }
@@ -516,7 +517,7 @@ func (c command) noPoints() string {
 // revisionMarker is the hidden line a revision's answer to c carries.
 func (c command) revisionMarker() string {
 	if c.isReview() {
-		return owed.ReviewRevisionMarker(c.review.ID)
+		return owed.PullRequestReviewRevisionMarker(c.review.ID)
 	}
 	return owed.RevisionMarker(c.comment.ID)
 }
@@ -527,8 +528,8 @@ func (c command) revisionMarker() string {
 // and the comments keep the order the listing gave them. A comment written in
 // the same second as a review, which is the timestamps' resolution, goes
 // before it.
-func timeline(comments []github.Comment, reviews []github.Review) []command {
-	var submitted []github.Review
+func timeline(comments []github.Comment, reviews []github.PullRequestReview) []command {
+	var submitted []github.PullRequestReview
 	for _, r := range reviews {
 		if r.State != "PENDING" {
 			submitted = append(submitted, r)
@@ -561,15 +562,15 @@ func (d *Deps) points(ctx context.Context, n int, c command) ([]Point, error) {
 	}
 	var out []Point
 	if text := Points(c.review.Body); text != "" {
-		out = append(out, Point{Review: c.review.ID, Text: text})
+		out = append(out, Point{PullRequestReview: c.review.ID, Text: text})
 	}
-	lines, err := d.Tracker.ReviewComments(ctx, n, c.review.ID)
+	lines, err := d.Tracker.LineComments(ctx, n, c.review.ID)
 	if err != nil {
 		return nil, err
 	}
 	for _, l := range lines {
 		if text := strings.TrimSpace(l.Body); text != "" {
-			out = append(out, Point{Review: c.review.ID, Text: text, Path: l.Path, Line: l.Line, URL: l.URL})
+			out = append(out, Point{PullRequestReview: c.review.ID, Text: text, Path: l.Path, Line: l.Line, URL: l.URL})
 		}
 	}
 	return out, nil

@@ -266,7 +266,7 @@ func (f *revFixture) claim() {
 	in := &intake.Intake{
 		Tracker: f.tr, Store: f.store, Login: agent, Holder: "intake", LeaseTTL: time.Minute,
 		Clock:    func() time.Time { return now },
-		Commands: []intake.Command{{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, Reviews: true}},
+		Commands: []intake.Command{{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, ByReview: true}},
 	}
 	if _, err := in.Pass(ctx); err != nil {
 		f.t.Fatal(err)

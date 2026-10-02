@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Review is one review submitted on a pull request: its summary body, and not
-// the line comments that came with it (ReviewComments).
-type Review struct {
+// PullRequestReview is one review submitted on a pull request: its summary body, and not
+// the line comments that came with it (LineComments).
+type PullRequestReview struct {
 	ID int64
 
 	// NodeID is the review's GraphQL id. A reaction to a review is only
@@ -36,8 +36,8 @@ type Review struct {
 	URL string
 }
 
-// ReviewComment is one line comment a review carries.
-type ReviewComment struct {
+// LineComment is one line comment a review carries.
+type LineComment struct {
 	ID   int64
 	Body string
 
@@ -51,51 +51,51 @@ type ReviewComment struct {
 	URL string
 }
 
-// Reviews lists every review on a pull request, oldest first, to the last
+// PullRequestReviews lists every review on a pull request, oldest first, to the last
 // page.
-func (c *Client) Reviews(ctx context.Context, number int) ([]Review, error) {
+func (c *Client) PullRequestReviews(ctx context.Context, number int) ([]PullRequestReview, error) {
 	u, err := c.repoURL("/pulls/%d/reviews?per_page=%d", number, perPage)
 	if err != nil {
 		return nil, err
 	}
-	ws, err := all[wireReview](ctx, c, u)
+	ws, err := all[wirePullRequestReview](ctx, c, u)
 	if err != nil {
 		return nil, err
 	}
-	rs := make([]Review, len(ws))
+	rs := make([]PullRequestReview, len(ws))
 	for i, w := range ws {
-		rs[i] = Review{ID: w.ID, NodeID: w.NodeID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation, State: w.State, SubmittedAt: w.SubmittedAt, URL: w.HTMLURL}
+		rs[i] = PullRequestReview{ID: w.ID, NodeID: w.NodeID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation, State: w.State, SubmittedAt: w.SubmittedAt, URL: w.HTMLURL}
 	}
 	return rs, nil
 }
 
-// ReviewComments lists the line comments one review carries, in the order
+// LineComments lists the line comments one review carries, in the order
 // the API serves them, to the last page. A line comment outside that review is
 // not among them.
-func (c *Client) ReviewComments(ctx context.Context, number int, review int64) ([]ReviewComment, error) {
+func (c *Client) LineComments(ctx context.Context, number int, review int64) ([]LineComment, error) {
 	u, err := c.repoURL("/pulls/%d/reviews/%d/comments?per_page=%d", number, review, perPage)
 	if err != nil {
 		return nil, err
 	}
-	ws, err := all[wireReviewComment](ctx, c, u)
+	ws, err := all[wireLineComment](ctx, c, u)
 	if err != nil {
 		return nil, err
 	}
-	cs := make([]ReviewComment, len(ws))
+	cs := make([]LineComment, len(ws))
 	for i, w := range ws {
 		line := w.Line
 		if line == 0 {
 			line = w.OriginalLine
 		}
-		cs[i] = ReviewComment{ID: w.ID, Body: w.Body, Path: w.Path, Line: line, URL: w.HTMLURL}
+		cs[i] = LineComment{ID: w.ID, Body: w.Body, Path: w.Path, Line: line, URL: w.HTMLURL}
 	}
 	return cs, nil
 }
 
-// ReviewReactions lists every reaction to a review, by its GraphQL id. A
+// PullRequestReviewReactions lists every reaction to a review, by its GraphQL id. A
 // review that is not there is a StatusError with code 404, as a comment that
 // is not there is.
-func (c *Client) ReviewReactions(ctx context.Context, nodeID string) ([]Reaction, error) {
+func (c *Client) PullRequestReviewReactions(ctx context.Context, nodeID string) ([]Reaction, error) {
 	const query = `query($id: ID!, $after: String) {
   node(id: $id) {
     ... on PullRequestReview {
@@ -148,10 +148,10 @@ func (c *Client) ReviewReactions(ctx context.Context, nodeID string) ([]Reaction
 	}
 }
 
-// ReactToReview adds a reaction to a review, by its GraphQL id. Content is
+// ReactToPullRequestReview adds a reaction to a review, by its GraphQL id. Content is
 // REST's spelling, as for React. Reacting twice with the same content is not
 // an error.
-func (c *Client) ReactToReview(ctx context.Context, nodeID, content string) error {
+func (c *Client) ReactToPullRequestReview(ctx context.Context, nodeID, content string) error {
 	const mutation = `mutation($id: ID!, $content: ReactionContent!) {
   addReaction(input: {subjectId: $id, content: $content}) { reaction { content } }
 }`
@@ -214,7 +214,7 @@ func (c *Client) graphqlURL() string {
 	return c.base() + "/graphql"
 }
 
-type wireReview struct {
+type wirePullRequestReview struct {
 	ID                int64     `json:"id"`
 	NodeID            string    `json:"node_id"`
 	Body              string    `json:"body"`
@@ -227,7 +227,7 @@ type wireReview struct {
 	} `json:"user"`
 }
 
-type wireReviewComment struct {
+type wireLineComment struct {
 	ID           int64  `json:"id"`
 	Body         string `json:"body"`
 	Path         string `json:"path"`

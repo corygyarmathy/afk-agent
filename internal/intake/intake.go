@@ -83,10 +83,10 @@ type Tracker interface {
 	Reactions(ctx context.Context, commentID int64) ([]github.Reaction, error)
 	IssueReactions(ctx context.Context, number int) ([]github.Reaction, error)
 
-	// Reviews and ReviewReactions are read only for a command that may be
-	// issued as a review.
-	Reviews(ctx context.Context, number int) ([]github.Review, error)
-	ReviewReactions(ctx context.Context, nodeID string) ([]github.Reaction, error)
+	// PullRequestReviews and PullRequestReviewReactions are read only for a
+	// command that may be issued as a review.
+	PullRequestReviews(ctx context.Context, number int) ([]github.PullRequestReview, error)
+	PullRequestReviewReactions(ctx context.Context, nodeID string) ([]github.Reaction, error)
 }
 
 // Command is one entry in the command registry: the word a comment starts
@@ -105,10 +105,10 @@ type Command struct {
 	Kind  store.Kind
 	Start string
 
-	// Reviews is whether the command may also be issued as a submitted
+	// ByReview is whether the command may also be issued as a submitted
 	// review on a pull request whose body starts with the word, as `/revise`
 	// may (#133). The review is claimed and answered as a comment is.
-	Reviews bool
+	ByReview bool
 }
 
 // Unattended is the work an issue is taken for with nobody asking: the
@@ -202,9 +202,9 @@ func Key(commentID int64) string {
 	return fmt.Sprintf("intake-comment-%d", commentID)
 }
 
-// ReviewKey is the idempotency key a command issued as a review is armed
+// PullRequestReviewKey is the idempotency key a command issued as a review is armed
 // under. A review's id is not a comment's, so the two are kept apart.
-func ReviewKey(reviewID int64) string {
+func PullRequestReviewKey(reviewID int64) string {
 	return fmt.Sprintf("intake-review-%d", reviewID)
 }
 
@@ -505,20 +505,20 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 			done = false
 		}
 	}
-	if subject.Type != store.SubjectPR || !in.reviews() {
+	if subject.Type != store.SubjectPR || !in.byReview() {
 		return made, done, nil
 	}
 
-	reviews, err := in.Tracker.Reviews(ctx, subject.Number)
+	reviews, err := in.Tracker.PullRequestReviews(ctx, subject.Number)
 	if err != nil {
 		return made, false, err
 	}
 	for _, r := range reviews {
-		cmd, ok := in.reviewCommand(r)
+		cmd, ok := in.commandByReview(r)
 		if !ok {
 			continue
 		}
-		key := ReviewKey(r.ID)
+		key := PullRequestReviewKey(r.ID)
 		armed, err := in.Store.Reserved(ctx, key)
 		if err != nil {
 			return made, false, err
@@ -526,7 +526,7 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 		if armed {
 			continue
 		}
-		reactions, err := in.Tracker.ReviewReactions(ctx, r.NodeID)
+		reactions, err := in.Tracker.PullRequestReviewReactions(ctx, r.NodeID)
 		if err != nil {
 			return made, false, err
 		}
@@ -546,22 +546,22 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 	return made, done, nil
 }
 
-// reviews reports whether any command this intake answers may be issued as a
-// review, which is whether a pull request's reviews are read at all.
-func (in *Intake) reviews() bool {
+// byReview reports whether any command this intake answers may be issued as a
+// review, which is whether a pull request's byReview are read at all.
+func (in *Intake) byReview() bool {
 	for _, cmd := range in.Commands {
-		if cmd.Reviews {
+		if cmd.ByReview {
 			return true
 		}
 	}
 	return false
 }
 
-// reviewCommand reports whether a review is a command this intake answers, as
+// commandByReview reports whether a review is a command this intake answers, as
 // command does for a comment.
-func (in *Intake) reviewCommand(r github.Review) (Command, bool) {
+func (in *Intake) commandByReview(r github.PullRequestReview) (Command, bool) {
 	for _, cmd := range in.Commands {
-		if cmd.Reviews && cmd.On == store.SubjectPR && IsReviewCommand(r, in.Login, cmd.Word) {
+		if cmd.ByReview && cmd.On == store.SubjectPR && IsCommandByReview(r, in.Login, cmd.Word) {
 			return cmd, true
 		}
 	}
@@ -620,7 +620,7 @@ func (in *Intake) validate() error {
 			return fmt.Errorf("command %s: unknown job kind %q", cmd.Word, cmd.Kind)
 		case cmd.Start == "":
 			return fmt.Errorf("command %s: no start state", cmd.Word)
-		case cmd.Reviews && cmd.On != store.SubjectPR:
+		case cmd.ByReview && cmd.On != store.SubjectPR:
 			return fmt.Errorf("command %s: only a pull request has reviews", cmd.Word)
 		}
 	}
@@ -661,15 +661,15 @@ func IsCommand(c github.Comment, login, word string) bool {
 	return issues(c.Login, c.Association, c.Body, login, word)
 }
 
-// IsReviewCommand reports whether a review issues the command word, as
+// IsCommandByReview reports whether a review issues the command word, as
 // IsCommand does for a comment: submitted, by an account with write access
 // that is not login, with word as its body's first word. What the review
 // says - approve, request changes, comment - decides nothing.
-func IsReviewCommand(r github.Review, login, word string) bool {
+func IsCommandByReview(r github.PullRequestReview, login, word string) bool {
 	return r.State != "PENDING" && issues(r.Login, r.Association, r.Body, login, word)
 }
 
-// issues is IsCommand and IsReviewCommand's shared rule.
+// issues is IsCommand and IsCommandByReview's shared rule.
 func issues(author, association, body, login, word string) bool {
 	// Logins are case-insensitive on GitHub, so the agent's own account is too.
 	if strings.EqualFold(author, login) || !writers[association] {
