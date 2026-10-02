@@ -12,31 +12,31 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 )
 
-func TestReviewsReadEachReviewsBodyAuthorAndState(t *testing.T) {
+func TestPullRequestReviewsReadEachReviewsBodyAuthorStateAndCommit(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12/reviews", "application/vnd.github+json") {
-			fmt.Fprint(w, `[{"id":5,"node_id":"PRR_5","body":"/revise","state":"APPROVED","author_association":"OWNER","submitted_at":"2026-09-30T10:00:00Z","html_url":"https://github.com/o/n/pull/12#pullrequestreview-5","user":{"login":"alice"}}]`)
+			fmt.Fprint(w, `[{"id":5,"node_id":"PRR_5","body":"/revise","state":"APPROVED","author_association":"OWNER","submitted_at":"2026-09-30T10:00:00Z","commit_id":"abc123","html_url":"https://github.com/o/n/pull/12#pullrequestreview-5","user":{"login":"alice"}}]`)
 		}
 	})
 	got, err := c.PullRequestReviews(context.Background(), 12)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []github.PullRequestReview{{ID: 5, NodeID: "PRR_5", Body: "/revise", Login: "alice", Association: "OWNER", State: "APPROVED", SubmittedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), URL: "https://github.com/o/n/pull/12#pullrequestreview-5"}}
+	want := []github.PullRequestReview{{ID: 5, NodeID: "PRR_5", Body: "/revise", Login: "alice", Association: "OWNER", State: "APPROVED", SubmittedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), CommitID: "abc123", URL: "https://github.com/o/n/pull/12#pullrequestreview-5"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
-// A line comment on code that has since moved keeps the line it was written
-// on, and one on a whole file has none.
-func TestReviewCommentsAreOneReviewsLineComments(t *testing.T) {
+// A line comment's line is the line in the commit it was written on, even
+// when the pull request has since moved on, and one on a whole file has none.
+func TestLineCommentsAreOneReviewsLineCommentsOnTheCommitWrittenOn(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12/reviews/5/comments", "application/vnd.github+json") {
 			fmt.Fprint(w, `[
-				{"id":1,"body":"rename","path":"a.go","line":3,"original_line":2,"html_url":"https://github.com/o/n/pull/12#discussion_r1"},
-				{"id":2,"body":"moved","path":"b.go","line":null,"original_line":9,"html_url":"u2"},
-				{"id":3,"body":"whole file","path":"c.go","line":null,"original_line":null,"html_url":"u3"}]`)
+				{"id":1,"body":"rename","path":"a.go","line":3,"original_line":2,"commit_id":"def456","original_commit_id":"abc123","html_url":"https://github.com/o/n/pull/12#discussion_r1"},
+				{"id":2,"body":"moved","path":"b.go","line":null,"original_line":9,"commit_id":"def456","original_commit_id":"abc123","html_url":"u2"},
+				{"id":3,"body":"whole file","path":"c.go","line":null,"original_line":null,"commit_id":"abc123","original_commit_id":"abc123","html_url":"u3"}]`)
 		}
 	})
 	got, err := c.LineComments(context.Background(), 12, 5)
@@ -44,9 +44,9 @@ func TestReviewCommentsAreOneReviewsLineComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []github.LineComment{
-		{ID: 1, Body: "rename", Path: "a.go", Line: 3, URL: "https://github.com/o/n/pull/12#discussion_r1"},
-		{ID: 2, Body: "moved", Path: "b.go", Line: 9, URL: "u2"},
-		{ID: 3, Body: "whole file", Path: "c.go", URL: "u3"},
+		{ID: 1, Body: "rename", Path: "a.go", Line: 2, CommitID: "abc123", URL: "https://github.com/o/n/pull/12#discussion_r1"},
+		{ID: 2, Body: "moved", Path: "b.go", Line: 9, CommitID: "abc123", URL: "u2"},
+		{ID: 3, Body: "whole file", Path: "c.go", CommitID: "abc123", URL: "u3"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", got, want)
@@ -60,7 +60,8 @@ type graphqlBody struct {
 }
 
 // Reactions to a review are GraphQL's, read to the last page and spelled as
-// REST spells them.
+// REST spells them. An App's reaction carries its REST login under user, as
+// GitHub served it for the agent's 👀 on a comment on 2026-10-02.
 func TestReviewReactionsAreReadToTheLastPage(t *testing.T) {
 	pages := 0
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {

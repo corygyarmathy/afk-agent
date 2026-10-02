@@ -18,12 +18,15 @@
 // A pass reads a subject's comments only when the subject has changed since
 // passes last settled it, going by the listing's updated_at. A comments
 // request per open subject per poll is a rate limit the backlog grows into,
-// and a new comment moves updated_at. It takes two passes in a row reading the
-// same updated_at to settle a subject: one read can miss a comment that does
-// not move updated_at past what the listing showed - posted in the same
-// second, which is updated_at's resolution, or not yet in a comments read
-// that lags the listing - and the next pass, a poll later, does not. What a
-// pass remembers is in memory and nowhere else: a restart reads everything. A
+// and a new comment moves updated_at. So does a submitted review, to when it
+// was submitted, though GitHub took up to half a minute to list it so on
+// 2026-10-02: a pass in that time sees the subject unchanged, and a later one
+// does not. It takes two passes in a row reading the same updated_at to
+// settle a subject: one read can miss a comment that does not move updated_at
+// past what the listing showed - posted in the same second, which is
+// updated_at's resolution, or not yet in a comments read that lags the
+// listing - and the next pass, a poll later, does not. What a pass remembers
+// is in memory and nowhere else: a restart reads everything. A
 // comment that becomes a command without moving updated_at - its author given
 // write access afterwards, say - waits for the subject's next change or a
 // restart.
@@ -480,30 +483,14 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 		if !ok {
 			continue
 		}
-		key := Key(c.ID)
-		armed, err := in.Store.Reserved(ctx, key)
+		job, settled, err := in.armUnanswered(ctx, cmd, subject, Key(c.ID), func(ctx context.Context) (bool, error) {
+			return in.answered(ctx, c.ID)
+		})
 		if err != nil {
 			return made, false, err
 		}
-		if armed {
-			continue
-		}
-		answered, err := in.answered(ctx, c.ID)
-		if err != nil {
-			return made, false, err
-		}
-		if answered {
-			continue
-		}
-		job, ok, err := in.arm(ctx, cmd, subject, key)
-		if err != nil {
-			return made, false, err
-		}
-		if ok {
-			made = append(made, job)
-		} else {
-			done = false
-		}
+		made = append(made, job...)
+		done = done && settled
 	}
 	if subject.Type != store.SubjectPR || !in.byReview() {
 		return made, done, nil
@@ -518,32 +505,37 @@ func (in *Intake) subject(ctx context.Context, subject store.Subject) ([]store.J
 		if !ok {
 			continue
 		}
-		key := PullRequestReviewKey(r.ID)
-		armed, err := in.Store.Reserved(ctx, key)
+		job, settled, err := in.armUnanswered(ctx, cmd, subject, PullRequestReviewKey(r.ID), func(ctx context.Context) (bool, error) {
+			reactions, err := in.Tracker.PullRequestReviewReactions(ctx, r.NodeID)
+			return Claimed(reactions, in.Login), err
+		})
 		if err != nil {
 			return made, false, err
 		}
-		if armed {
-			continue
-		}
-		reactions, err := in.Tracker.PullRequestReviewReactions(ctx, r.NodeID)
-		if err != nil {
-			return made, false, err
-		}
-		if Claimed(reactions, in.Login) {
-			continue
-		}
-		job, ok, err := in.arm(ctx, cmd, subject, key)
-		if err != nil {
-			return made, false, err
-		}
-		if ok {
-			made = append(made, job)
-		} else {
-			done = false
-		}
+		made = append(made, job...)
+		done = done && settled
 	}
 	return made, done, nil
+}
+
+// armUnanswered arms command cmd under key, unless a pass has armed it
+// already or answered reports it answered: the job it made, if it made one,
+// and settled unless it found the command neither armed nor answered and could
+// not arm it either, because its job was queued or held.
+func (in *Intake) armUnanswered(ctx context.Context, cmd Command, subject store.Subject, key string, answered func(context.Context) (bool, error)) ([]store.Job, bool, error) {
+	armed, err := in.Store.Reserved(ctx, key)
+	if err != nil || armed {
+		return nil, err == nil, err
+	}
+	yes, err := answered(ctx)
+	if err != nil || yes {
+		return nil, err == nil, err
+	}
+	job, ok, err := in.arm(ctx, cmd, subject, key)
+	if err != nil || !ok {
+		return nil, err == nil && ok, err
+	}
+	return []store.Job{job}, true, nil
 }
 
 // byReview reports whether any command this intake answers may be issued as a

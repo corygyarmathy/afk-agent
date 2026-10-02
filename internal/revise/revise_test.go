@@ -178,15 +178,35 @@ func (tr *tracker) React(_ context.Context, id int64, content string) error {
 	return nil
 }
 
-func (tr *tracker) PullRequestReviews(_ context.Context, n int) ([]github.PullRequestReview, error) {
+// PullRequestReviews is the reviews on pull request 12. One a test gave no
+// commit was written on the pull request's head, as its line comments were.
+func (tr *tracker) PullRequestReviews(ctx context.Context, n int) ([]github.PullRequestReview, error) {
 	if n != 12 {
 		return nil, nil
 	}
-	return append([]github.PullRequestReview(nil), tr.reviews...), nil
+	out := append([]github.PullRequestReview(nil), tr.reviews...)
+	for i := range out {
+		if out[i].CommitID == "" {
+			out[i].CommitID = tr.head(ctx)
+		}
+	}
+	return out, nil
 }
 
-func (tr *tracker) LineComments(_ context.Context, _ int, review int64) ([]github.LineComment, error) {
-	return tr.lines[review], nil
+func (tr *tracker) LineComments(ctx context.Context, _ int, review int64) ([]github.LineComment, error) {
+	out := append([]github.LineComment(nil), tr.lines[review]...)
+	for i := range out {
+		if out[i].CommitID == "" {
+			out[i].CommitID = tr.head(ctx)
+		}
+	}
+	return out, nil
+}
+
+// head is pull request 12's head, as PullRequest reads it.
+func (tr *tracker) head(ctx context.Context) string {
+	pr, _ := tr.PullRequest(ctx, 12)
+	return pr.HeadSHA
 }
 
 func (tr *tracker) PullRequestReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
