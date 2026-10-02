@@ -61,7 +61,7 @@ type graphqlBody struct {
 
 // Reactions to a review are GraphQL's, read to the last page and spelled as
 // REST spells them. An App's reaction carries its REST login under user, as
-// GitHub served it for the agent's 👀 on a comment on 2026-10-02.
+// GitHub served it for the agent's 👀 on a review on 2026-10-02.
 func TestReviewReactionsAreReadToTheLastPage(t *testing.T) {
 	pages := 0
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
