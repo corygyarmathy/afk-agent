@@ -107,12 +107,6 @@ func Claim(c github.Comment) Item {
 	return Item{What: claimComment, Stem: fmt.Sprintf("claim-comment-%d", c.ID), Comment: c.ID}
 }
 
-// ClaimPullRequestReview is the agent's 👀 on a command issued as a submitted
-// pull request review (#133).
-func ClaimPullRequestReview(r github.PullRequestReview) Item {
-	return Item{What: claimPullRequestReview, Stem: fmt.Sprintf("claim-pull-request-review-%d", r.ID), PullRequestReview: r.NodeID}
-}
-
 // ClaimPullRequest is the agent's 👀 on pull request n's description: the
 // claim on a request the pull request itself made.
 func ClaimPullRequest(n int) Item {
@@ -131,12 +125,6 @@ func ClaimIssue(n int) Item {
 // not read as a revision still being in flight.
 func Reply(stem string, n int, c github.Comment, text string) Item {
 	marker := ReplyMarker(c.ID)
-	return Comment(stem, n, marker, marker+"\n"+text)
-}
-
-// ReplyToPullRequestReview is Reply, answering a command issued as review r.
-func ReplyToPullRequestReview(stem string, n int, r github.PullRequestReview, text string) Item {
-	marker := PullRequestReviewReplyMarker(r.ID)
 	return Comment(stem, n, marker, marker+"\n"+text)
 }
 
@@ -173,6 +161,65 @@ func PullRequestReviewRevisionMarker(id int64) string {
 // the commands it answers. A hand-back does not carry it: only a reply asks.
 func RevisionReplyMarker(n int, head string) string {
 	return fmt.Sprintf("<!-- afk:revision-reply pr=%d head=%s -->", n, head)
+}
+
+// Command is one command, in either form it may be issued: a comment, or a
+// submitted pull request review whose body starts with the word (#133).
+// Exactly one of the two is set. Both forms are claimed with the agent's 👀 on
+// the command itself, refused and answered the same way, and keyed on their
+// own ids, which are not drawn from the same numbers.
+type Command struct {
+	Comment           *github.Comment
+	PullRequestReview *github.PullRequestReview
+}
+
+// Key is what c's owed items are keyed on.
+func (c Command) Key() string {
+	if r := c.PullRequestReview; r != nil {
+		return fmt.Sprintf("pull-request-review-%d", r.ID)
+	}
+	return fmt.Sprintf("comment-%d", c.Comment.ID)
+}
+
+// Same reports whether c and o are the same comment, or the same review.
+func (c Command) Same(o Command) bool {
+	return c.Key() == o.Key()
+}
+
+// Issues reports whether c issues the command word, by an account with write
+// access that is not login (intake.IsCommand, intake.IsCommandByReview).
+func (c Command) Issues(login, word string) bool {
+	if r := c.PullRequestReview; r != nil {
+		return intake.IsCommandByReview(*r, login, word)
+	}
+	return intake.IsCommand(*c.Comment, login, word)
+}
+
+// Claim is the agent's 👀 on c: on the comment, or on the review.
+func (c Command) Claim() Item {
+	if r := c.PullRequestReview; r != nil {
+		return Item{What: claimPullRequestReview, Stem: "claim-" + c.Key(), PullRequestReview: r.NodeID}
+	}
+	return Claim(*c.Comment)
+}
+
+// Reply is Reply, answering c. One to a review links it: the reply is in the
+// conversation, and the review is not.
+func (c Command) Reply(stem string, n int, text string) Item {
+	if r := c.PullRequestReview; r != nil {
+		marker := PullRequestReviewReplyMarker(r.ID)
+		return Comment(stem, n, marker, fmt.Sprintf("%s\nOn [your review](%s): %s", marker, r.URL, text))
+	}
+	return Reply(stem, n, *c.Comment, text)
+}
+
+// RevisionMarker is the hidden line a revision's answer to c carries
+// (RevisionMarker, PullRequestReviewRevisionMarker).
+func (c Command) RevisionMarker() string {
+	if r := c.PullRequestReview; r != nil {
+		return PullRequestReviewRevisionMarker(r.ID)
+	}
+	return RevisionMarker(c.Comment.ID)
 }
 
 // Comment is a comment on issue or pull request n, read back by marker, which
@@ -253,12 +300,30 @@ type Book struct {
 // Unanswered is the commands for word among comments that the agent has not
 // claimed.
 func (b *Book) Unanswered(ctx context.Context, comments []github.Comment, word string) ([]github.Comment, error) {
-	var out []github.Comment
-	for _, c := range comments {
-		if !intake.IsCommand(c, b.Login, word) {
+	cmds := make([]Command, len(comments))
+	for i := range comments {
+		cmds[i] = Command{Comment: &comments[i]}
+	}
+	unanswered, err := b.UnansweredCommands(ctx, cmds, word)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]github.Comment, len(unanswered))
+	for i, c := range unanswered {
+		out[i] = *c.Comment
+	}
+	return out, nil
+}
+
+// UnansweredCommands is the commands for word among cmds, of either form,
+// that the agent has not claimed, in cmds' order.
+func (b *Book) UnansweredCommands(ctx context.Context, cmds []Command, word string) ([]Command, error) {
+	var out []Command
+	for _, c := range cmds {
+		if !c.Issues(b.Login, word) {
 			continue
 		}
-		reactions, err := b.Tracker.Reactions(ctx, c.ID)
+		reactions, err := b.reactions(ctx, c)
 		if err != nil {
 			return nil, err
 		}
@@ -269,26 +334,16 @@ func (b *Book) Unanswered(ctx context.Context, comments []github.Comment, word s
 	return out, nil
 }
 
-// UnansweredPullRequestReviews is the reviews that issue word and that the
-// agent has not claimed.
-func (b *Book) UnansweredPullRequestReviews(ctx context.Context, reviews []github.PullRequestReview, word string) ([]github.PullRequestReview, error) {
-	var out []github.PullRequestReview
-	for _, r := range reviews {
-		if !intake.IsCommandByReview(r, b.Login, word) {
-			continue
-		}
-		if b.PullRequestReviews == nil {
-			return nil, errors.New("owed has no tracker for reviews")
-		}
-		reactions, err := b.PullRequestReviews.PullRequestReviewReactions(ctx, r.NodeID)
-		if err != nil {
-			return nil, err
-		}
-		if !intake.Claimed(reactions, b.Login) {
-			out = append(out, r)
-		}
+// reactions is the reactions on command c.
+func (b *Book) reactions(ctx context.Context, c Command) ([]github.Reaction, error) {
+	r := c.PullRequestReview
+	if r == nil {
+		return b.Tracker.Reactions(ctx, c.Comment.ID)
 	}
-	return out, nil
+	if b.PullRequestReviews == nil {
+		return nil, errors.New("owed has no tracker for reviews")
+	}
+	return b.PullRequestReviews.PullRequestReviewReactions(ctx, r.NodeID)
 }
 
 // Owe is the result of a decision that owes the tracker r: the job moves to

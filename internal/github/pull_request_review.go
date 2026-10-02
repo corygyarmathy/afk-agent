@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// PullRequestReview is one review submitted on a pull request: its summary body, and not
-// the line comments that came with it (LineComments).
+// PullRequestReview is one review submitted on a pull request: its summary
+// body, and not the line comments that came with it (LineComments).
 type PullRequestReview struct {
 	ID int64
 
@@ -32,6 +32,10 @@ type PullRequestReview struct {
 	// SubmittedAt is when it was submitted. Zero for a pending review.
 	SubmittedAt time.Time
 
+	// CommitID is the commit the review was written on: the head its author
+	// read. Empty when GitHub no longer has that commit.
+	CommitID string
+
 	// URL is the review on the pull request's page.
 	URL string
 }
@@ -41,18 +45,19 @@ type LineComment struct {
 	ID   int64
 	Body string
 
-	// Path is the file it is on, and Line the line: in the pull request's
-	// latest version, or the one it was written on when the code has since
-	// moved on. Zero is a comment on the whole file.
-	Path string
-	Line int
+	// Path is the file it is on, and Line its line in CommitID, the commit it
+	// was written on: the last line, for one on several. Zero is a comment on
+	// the whole file.
+	Path     string
+	Line     int
+	CommitID string
 
 	// URL is the comment on the pull request's page.
 	URL string
 }
 
-// PullRequestReviews lists every review on a pull request, oldest first, to the last
-// page.
+// PullRequestReviews lists every review on a pull request, oldest first, to
+// the last page.
 func (c *Client) PullRequestReviews(ctx context.Context, number int) ([]PullRequestReview, error) {
 	u, err := c.repoURL("/pulls/%d/reviews?per_page=%d", number, perPage)
 	if err != nil {
@@ -64,7 +69,7 @@ func (c *Client) PullRequestReviews(ctx context.Context, number int) ([]PullRequ
 	}
 	rs := make([]PullRequestReview, len(ws))
 	for i, w := range ws {
-		rs[i] = PullRequestReview{ID: w.ID, NodeID: w.NodeID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation, State: w.State, SubmittedAt: w.SubmittedAt, URL: w.HTMLURL}
+		rs[i] = PullRequestReview{ID: w.ID, NodeID: w.NodeID, Body: w.Body, Login: w.User.Login, Association: w.AuthorAssociation, State: w.State, SubmittedAt: w.SubmittedAt, CommitID: w.CommitID, URL: w.HTMLURL}
 	}
 	return rs, nil
 }
@@ -83,18 +88,18 @@ func (c *Client) LineComments(ctx context.Context, number int, review int64) ([]
 	}
 	cs := make([]LineComment, len(ws))
 	for i, w := range ws {
-		line := w.Line
-		if line == 0 {
-			line = w.OriginalLine
-		}
-		cs[i] = LineComment{ID: w.ID, Body: w.Body, Path: w.Path, Line: line, URL: w.HTMLURL}
+		cs[i] = LineComment{ID: w.ID, Body: w.Body, Path: w.Path, Line: w.OriginalLine, CommitID: w.OriginalCommitID, URL: w.HTMLURL}
 	}
 	return cs, nil
 }
 
-// PullRequestReviewReactions lists every reaction to a review, by its GraphQL id. A
-// review that is not there is a StatusError with code 404, as a comment that
-// is not there is.
+// PullRequestReviewReactions lists every reaction to a review, by its GraphQL
+// id. A review that is not there is a StatusError with code 404, as a comment
+// that is not there is.
+//
+// Reaction.user is typed User, but an App's reaction is served there too,
+// with the login REST gives it, `<slug>[bot]`: so GitHub answered for the
+// agent's 👀 on a comment on 2026-10-02. That is what intake.Claimed compares.
 func (c *Client) PullRequestReviewReactions(ctx context.Context, nodeID string) ([]Reaction, error) {
 	const query = `query($id: ID!, $after: String) {
   node(id: $id) {
@@ -148,9 +153,9 @@ func (c *Client) PullRequestReviewReactions(ctx context.Context, nodeID string) 
 	}
 }
 
-// ReactToPullRequestReview adds a reaction to a review, by its GraphQL id. Content is
-// REST's spelling, as for React. Reacting twice with the same content is not
-// an error.
+// ReactToPullRequestReview adds a reaction to a review, by its GraphQL id.
+// Content is REST's spelling, as for React. Reacting twice with the same
+// content is not an error.
 func (c *Client) ReactToPullRequestReview(ctx context.Context, nodeID, content string) error {
 	const mutation = `mutation($id: ID!, $content: ReactionContent!) {
   addReaction(input: {subjectId: $id, content: $content}) { reaction { content } }
@@ -221,6 +226,7 @@ type wirePullRequestReview struct {
 	State             string    `json:"state"`
 	AuthorAssociation string    `json:"author_association"`
 	SubmittedAt       time.Time `json:"submitted_at"`
+	CommitID          string    `json:"commit_id"`
 	HTMLURL           string    `json:"html_url"`
 	User              struct {
 		Login string `json:"login"`
@@ -228,10 +234,10 @@ type wirePullRequestReview struct {
 }
 
 type wireLineComment struct {
-	ID           int64  `json:"id"`
-	Body         string `json:"body"`
-	Path         string `json:"path"`
-	Line         int    `json:"line"`
-	OriginalLine int    `json:"original_line"`
-	HTMLURL      string `json:"html_url"`
+	ID               int64  `json:"id"`
+	Body             string `json:"body"`
+	Path             string `json:"path"`
+	OriginalLine     int    `json:"original_line"`
+	OriginalCommitID string `json:"original_commit_id"`
+	HTMLURL          string `json:"html_url"`
 }

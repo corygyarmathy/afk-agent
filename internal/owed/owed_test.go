@@ -497,14 +497,15 @@ func TestAMalformedItemIsRefused(t *testing.T) {
 }
 
 // commandByReview is a /revise issued as a submitted review.
-func commandByReview(id int64, node string) github.PullRequestReview {
-	return github.PullRequestReview{ID: id, NodeID: node, Login: "alice", Association: "OWNER", State: "APPROVED", Body: "/revise"}
+func commandByReview(id int64, node string) owed.Command {
+	return owed.Command{PullRequestReview: &github.PullRequestReview{ID: id, NodeID: node, Login: "alice", Association: "OWNER", State: "APPROVED", Body: "/revise"}}
 }
 
 // A claim on a review is made on the review, read back from it, and made again
 // when it was lost (#133).
 func TestAClaimOnAReviewIsReadBackFromTheReview(t *testing.T) {
-	f := setup(t, 3, owed.ClaimPullRequestReview(commandByReview(5, "PRR_5")), owed.ReplyToPullRequestReview("no-points-review-5", 12, commandByReview(5, "PRR_5"), "Nothing to revise."))
+	c := commandByReview(5, "PRR_5")
+	f := setup(t, 3, c.Claim(), c.Reply("no-points-"+c.Key(), 12, "Nothing to revise."))
 	f.tr.lose["react-review"] = 1
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatal(errs)
@@ -521,7 +522,7 @@ func TestAClaimOnAReviewIsReadBackFromTheReview(t *testing.T) {
 }
 
 func TestAReviewGitHubNoLongerServesIsNotWaitedFor(t *testing.T) {
-	f := setup(t, 3, owed.ClaimPullRequestReview(commandByReview(5, "gone")))
+	f := setup(t, 3, commandByReview(5, "gone").Claim())
 	f.tr.lose["react-review"] = 1
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatal(errs)
@@ -531,27 +532,46 @@ func TestAReviewGitHubNoLongerServesIsNotWaitedFor(t *testing.T) {
 	}
 }
 
-func TestUnansweredReviewsAreTheAgentsUnclaimedReviewCommands(t *testing.T) {
+// A comment and a review are keyed apart, though their ids are the same
+// number, and each is answered on its own.
+func TestACommentAndAReviewWithTheSameIDAreKeyedApart(t *testing.T) {
+	comment := owed.Command{Comment: &github.Comment{ID: 5, Login: "alice", Association: "OWNER", Body: "/revise"}}
+	review := commandByReview(5, "PRR_5")
+	if comment.Same(review) || comment.Key() == review.Key() {
+		t.Errorf("keys %q and %q, want them apart", comment.Key(), review.Key())
+	}
+	if comment.RevisionMarker() == review.RevisionMarker() {
+		t.Errorf("revision markers are both %q", comment.RevisionMarker())
+	}
+	if a, b := comment.Claim(), review.Claim(); a.Stem == b.Stem {
+		t.Errorf("claims are both keyed %q", a.Stem)
+	}
+}
+
+// The unanswered commands are the agent's unclaimed ones of either form, in
+// the order they were given.
+func TestUnansweredCommandsAreTheAgentsUnclaimedCommandsOfEitherForm(t *testing.T) {
 	tr := newTracker()
 	tr.revEyes["PRR_3"] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 	b := &owed.Book{Tracker: tr, Login: agent, PullRequestReviews: tr}
 	pending := commandByReview(4, "PRR_4")
-	pending.State = "PENDING"
-	got, err := b.UnansweredPullRequestReviews(context.Background(), []github.PullRequestReview{
+	pending.PullRequestReview.State = "PENDING"
+	got, err := b.UnansweredCommands(context.Background(), []owed.Command{
 		commandByReview(1, "PRR_1"),
-		{ID: 2, NodeID: "PRR_2", Login: "mallory", Association: "NONE", State: "COMMENTED", Body: "/revise"},
+		{Comment: &github.Comment{ID: 7, Login: "alice", Association: "OWNER", Body: "/revise"}},
+		{PullRequestReview: &github.PullRequestReview{ID: 2, NodeID: "PRR_2", Login: "mallory", Association: "NONE", State: "COMMENTED", Body: "/revise"}},
 		commandByReview(3, "PRR_3"),
 		pending,
-		{ID: 5, NodeID: "PRR_5", Login: "alice", Association: "OWNER", State: "COMMENTED", Body: "fine"},
+		{PullRequestReview: &github.PullRequestReview{ID: 5, NodeID: "PRR_5", Login: "alice", Association: "OWNER", State: "COMMENTED", Body: "fine"}},
 	}, "/revise")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids []int64
-	for _, r := range got {
-		ids = append(ids, r.ID)
+	var keys []string
+	for _, c := range got {
+		keys = append(keys, c.Key())
 	}
-	if fmt.Sprint(ids) != "[1]" {
-		t.Errorf("unanswered = %v, want [1]", ids)
+	if fmt.Sprint(keys) != "[pull-request-review-1 comment-7]" {
+		t.Errorf("unanswered = %v, want [pull-request-review-1 comment-7]", keys)
 	}
 }

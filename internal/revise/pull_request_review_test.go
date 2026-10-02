@@ -274,3 +274,51 @@ func TestTheReplyToAReviewLinksEachLineCommentPoint(t *testing.T) {
 		t.Errorf("the reply marks comment 5, which is not a command:\n%s", reply.Body)
 	}
 }
+
+// A review names the commit it was written on. One written on a head the pull
+// request has since left is refused, even when it was submitted after the
+// revision that moved the head had answered: begun on the old head, its line
+// comments' lines are lines there, not in the head the revision would start
+// from. So is a review on the head whose line comment was written on another.
+func TestAReviewWrittenOnAnotherHeadIsRefused(t *testing.T) {
+	t.Run("a review begun before a revision and submitted after its answer", func(t *testing.T) {
+		f := setup(t)
+		f.tr.say(12, sendAt(1, "/revise Earlier.", 1))
+		f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+		reply := answer(2, 1)
+		reply.CreatedAt = at(2)
+		f.tr.say(12, reply)
+		r := sendReview(5, "COMMENTED", "/revise", 3)
+		r.CommitID = "0ld0000"
+		f.tr.reviews = []github.PullRequestReview{r}
+		f.tr.lines[5] = []github.LineComment{{ID: 51, Path: "a.go", Line: 3, Body: "Rename this.", CommitID: "0ld0000"}}
+		f.pass()
+
+		if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+			t.Fatalf("the job is in %q, want at rest in start", job.State)
+		}
+		if !f.tr.reviewClaimed(5) {
+			t.Error("the review is not claimed")
+		}
+		answers := f.tr.reviewAnswers(5)
+		if len(answers) != 1 || !strings.Contains(answers[0], "written against `0ld0000`") || !strings.Contains(answers[0], r.URL) {
+			t.Errorf("answers = %q, want one refusal naming the commit and linking the review", answers)
+		}
+		if !f.tr.labelled() {
+			t.Error("the hand-off label came off for a refusal")
+		}
+	})
+	t.Run("a line comment written on another commit", func(t *testing.T) {
+		f := setup(t)
+		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Keep the test.", 1)}
+		f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), {ID: 52, Path: "b.go", Line: 9, Body: "Split this.", CommitID: "0ld0000"}}
+		f.pass()
+
+		if job := f.drive(); job.State != revise.Start {
+			t.Fatalf("the job is in %q, want at rest", job.State)
+		}
+		if answers := f.tr.reviewAnswers(5); len(answers) != 1 || !strings.Contains(answers[0], "written against `0ld0000`") {
+			t.Errorf("answers = %q, want one refusal naming the commit", answers)
+		}
+	})
+}
