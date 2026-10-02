@@ -99,7 +99,7 @@ func (c *Client) LineComments(ctx context.Context, number int, review int64) ([]
 //
 // Reaction.user is typed User, but an App's reaction is served there too,
 // with the login REST gives it, `<slug>[bot]`: so GitHub answered for the
-// agent's 👀 on a comment on 2026-10-02. That is what intake.Claimed compares.
+// agent's 👀 on a review on 2026-10-02. That is what intake.Claimed compares.
 func (c *Client) PullRequestReviewReactions(ctx context.Context, nodeID string) ([]Reaction, error) {
 	const query = `query($id: ID!, $after: String) {
   node(id: $id) {

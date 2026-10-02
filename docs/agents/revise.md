@@ -113,9 +113,17 @@ git, sh, a commit identity, opencode and the implement tier's credentials, the
 GitHub App's permissions, and the heavy-build token, which `revise-run` and
 `revise-gate` hold. A send-back issued as a review adds three requests to the
 App's: listing a pull request's reviews and one review's line comments over
-REST, and the 👀 on a review and reading its reactions over GraphQL. By
-GitHub's documentation these want Pull requests: read and Pull requests:
-write, which the App already has for implement. Not verified against the App.
+REST, and the 👀 on a review and reading its reactions over GraphQL. They
+need Pull requests: write, which the App already has for implement. Observed
+on this repository on 2026-10-02, with tokens minted below the installation's
+grants:
+
+| request | accepts | observed |
+| --- | --- | --- |
+| listing a pull request's reviews | Pull requests: read | served with Metadata only (a public repository) |
+| listing one review's line comments | Pull requests: read | served with Metadata only (a public repository) |
+| reading a review's reactions (GraphQL) | no header | served with Metadata only (a public repository) |
+| the 👀 on a review (GraphQL `addReaction`) | no header | refused (`FORBIDDEN`) with Metadata, Pull requests: read, or Issues: write; accepted with Pull requests: write |
 
 It uses no skill of its own: the prompt is
 [`internal/revise/revise.md`](../../internal/revise/revise.md).
