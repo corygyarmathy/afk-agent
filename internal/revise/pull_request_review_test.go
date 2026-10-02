@@ -22,16 +22,16 @@ var written = time.Date(2026, 9, 28, 9, 0, 0, 0, time.UTC)
 func at(minutes int) time.Time { return written.Add(time.Duration(minutes) * time.Minute) }
 
 // sendReview is a /revise issued as a submitted review, from the operator.
-func sendReview(id int64, state, body string, minutes int) github.Review {
-	return github.Review{
+func sendReview(id int64, state, body string, minutes int) github.PullRequestReview {
+	return github.PullRequestReview{
 		ID: id, NodeID: fmt.Sprintf("PRR_%d", id), Login: "cory", Association: "OWNER", State: state, Body: body,
 		SubmittedAt: at(minutes), URL: fmt.Sprintf("https://github.com/%s/pull/12#pullrequestreview-%d", repo, id),
 	}
 }
 
 // line is a line comment in a review.
-func line(id int64, path string, n int, body string) github.ReviewComment {
-	return github.ReviewComment{ID: id, Path: path, Line: n, Body: body, URL: fmt.Sprintf("https://github.com/%s/pull/12#discussion_r%d", repo, id)}
+func line(id int64, path string, n int, body string) github.LineComment {
+	return github.LineComment{ID: id, Path: path, Line: n, Body: body, URL: fmt.Sprintf("https://github.com/%s/pull/12#discussion_r%d", repo, id)}
 }
 
 // sendAt is send, written minutes into the conversation.
@@ -49,7 +49,7 @@ func (tr *tracker) reviewClaimed(id int64) bool {
 func (tr *tracker) reviewAnswers(id int64) []string {
 	var out []string
 	for _, c := range tr.comments[12] {
-		if c.Login == agent && strings.Contains(c.Body, owed.ReviewReplyMarker(id)) {
+		if c.Login == agent && strings.Contains(c.Body, owed.PullRequestReviewReplyMarker(id)) {
 			out = append(out, c.Body)
 		}
 	}
@@ -64,12 +64,12 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 	for _, state := range []string{"CHANGES_REQUESTED", "COMMENTED", "APPROVED"} {
 		t.Run(state, func(t *testing.T) {
 			f := setup(t)
-			f.tr.reviews = []github.Review{
+			f.tr.reviews = []github.PullRequestReview{
 				sendReview(4, "COMMENTED", "Looks fine so far.", 1),
 				sendReview(5, state, "/revise\nKeep the test.", 2),
 			}
-			f.tr.lines[4] = []github.ReviewComment{line(41, "a.go", 1, "Not a point: another review's.")}
-			f.tr.lines[5] = []github.ReviewComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 0, "Split this file.")}
+			f.tr.lines[4] = []github.LineComment{line(41, "a.go", 1, "Not a point: another review's.")}
+			f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 0, "Split this file.")}
 
 			made := f.pass()
 			if len(made) != 1 || made[0].ID != "revise-pr-12" {
@@ -90,9 +90,9 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []revise.Point{
-				{Review: 5, Text: "Keep the test."},
-				{Review: 5, Text: "Rename this.", Path: "a.go", Line: 3, URL: line(51, "", 0, "").URL},
-				{Review: 5, Text: "Split this file.", Path: "b.go", URL: line(52, "", 0, "").URL},
+				{PullRequestReview: 5, Text: "Keep the test."},
+				{PullRequestReview: 5, Text: "Rename this.", Path: "a.go", Line: 3, URL: line(51, "", 0, "").URL},
+				{PullRequestReview: 5, Text: "Split this file.", Path: "b.go", URL: line(52, "", 0, "").URL},
 			}
 			if fmt.Sprint(sb.Points) != fmt.Sprint(want) {
 				t.Errorf("points = %+v, want %+v", sb.Points, want)
@@ -114,7 +114,7 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 // reply, linking it, and nothing else.
 func TestAReviewWithNoPointsIsRefused(t *testing.T) {
 	f := setup(t)
-	f.tr.reviews = []github.Review{sendReview(5, "APPROVED", "/revise", 1)}
+	f.tr.reviews = []github.PullRequestReview{sendReview(5, "APPROVED", "/revise", 1)}
 	f.pass()
 
 	job := f.drive()
@@ -136,8 +136,8 @@ func TestAReviewWithNoPointsIsRefused(t *testing.T) {
 // A review with only line comments has them as its points.
 func TestAReviewsLineCommentsAloneArePoints(t *testing.T) {
 	f := setup(t)
-	f.tr.reviews = []github.Review{sendReview(5, "COMMENTED", "/revise", 1)}
-	f.tr.lines[5] = []github.ReviewComment{line(51, "a.go", 3, "Rename this.")}
+	f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise", 1)}
+	f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this.")}
 	f.pass()
 
 	job := f.drive()
@@ -156,7 +156,7 @@ func TestCommentsAndReviewsAreOneSendBackInTheOrderWritten(t *testing.T) {
 	f := setup(t)
 	f.tr.say(12, sendAt(1, "/revise First.", 1))
 	f.tr.say(12, sendAt(3, "/revise Third.", 3))
-	f.tr.reviews = []github.Review{sendReview(5, "COMMENTED", "/revise Second.", 2)}
+	f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Second.", 2)}
 	f.pass()
 
 	job := f.drive()
@@ -164,7 +164,7 @@ func TestCommentsAndReviewsAreOneSendBackInTheOrderWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the job is in %q: %v", job.State, err)
 	}
-	want := []revise.Point{{Comment: 1, Text: "First."}, {Review: 5, Text: "Second."}, {Comment: 3, Text: "Third."}}
+	want := []revise.Point{{Comment: 1, Text: "First."}, {PullRequestReview: 5, Text: "Second."}, {Comment: 3, Text: "Third."}}
 	if fmt.Sprint(sb.Points) != fmt.Sprint(want) {
 		t.Errorf("points = %+v, want %+v", sb.Points, want)
 	}
@@ -181,7 +181,7 @@ func TestAReviewWrittenWhileARevisionWasInFlightIsRefused(t *testing.T) {
 		f := setup(t)
 		f.tr.say(12, sendAt(1, "/revise Earlier.", 1))
 		f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-		f.tr.reviews = []github.Review{sendReview(5, "COMMENTED", "/revise During.", 2)}
+		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise During.", 2)}
 		reply := answer(2, 1)
 		reply.CreatedAt = at(3)
 		f.tr.say(12, reply)
@@ -196,10 +196,10 @@ func TestAReviewWrittenWhileARevisionWasInFlightIsRefused(t *testing.T) {
 	})
 	t.Run("a comment during a review's revision", func(t *testing.T) {
 		f := setup(t)
-		f.tr.reviews = []github.Review{sendReview(5, "COMMENTED", "/revise Earlier.", 1)}
+		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Earlier.", 1)}
 		f.tr.reviewEyes["PRR_5"] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 		f.tr.say(12, sendAt(1, "/revise During.", 2))
-		f.tr.say(12, github.Comment{ID: 2, Login: agent, Body: owed.ReviewRevisionMarker(5) + "\nDone.", CreatedAt: at(3)})
+		f.tr.say(12, github.Comment{ID: 2, Login: agent, Body: owed.PullRequestReviewRevisionMarker(5) + "\nDone.", CreatedAt: at(3)})
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Start {
@@ -216,7 +216,7 @@ func TestAReviewWrittenWhileARevisionWasInFlightIsRefused(t *testing.T) {
 		reply := answer(2, 1)
 		reply.CreatedAt = at(2)
 		f.tr.say(12, reply)
-		f.tr.reviews = []github.Review{sendReview(5, "COMMENTED", "/revise After.", 3)}
+		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise After.", 3)}
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Revising {
@@ -235,8 +235,8 @@ func TestTheReplyToAReviewLinksEachLineCommentPoint(t *testing.T) {
 	f := revisionFixture(t)
 	f.tr.live = f.remote
 	f.deps.SizeSignal = 1000
-	f.tr.reviews = []github.Review{sendReview(5, "CHANGES_REQUESTED", "/revise\nKeep the test.", 1)}
-	f.tr.lines[5] = []github.ReviewComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 7, "Split this.")}
+	f.tr.reviews = []github.PullRequestReview{sendReview(5, "CHANGES_REQUESTED", "/revise\nKeep the test.", 1)}
+	f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 7, "Split this.")}
 	var spec string
 	f.model.then(func(dir string) error {
 		b, err := os.ReadFile(filepath.Join(dir, ".git", "afk-send-back.md"))
@@ -265,7 +265,7 @@ func TestTheReplyToAReviewLinksEachLineCommentPoint(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("%d replies, want one", n)
 	}
-	for _, want := range []string{owed.ReviewRevisionMarker(5), line(51, "", 0, "").URL, line(52, "", 0, "").URL} {
+	for _, want := range []string{owed.PullRequestReviewRevisionMarker(5), line(51, "", 0, "").URL, line(52, "", 0, "").URL} {
 		if !strings.Contains(reply.Body, want) {
 			t.Errorf("the reply does not carry %q:\n%s", want, reply.Body)
 		}

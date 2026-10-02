@@ -16,12 +16,12 @@ import (
 func reviseIntake(t *testing.T, s store.Store, tr *tracker) *intake.Intake {
 	t.Helper()
 	in := intakeFor(t, s, tr)
-	in.Commands = append(in.Commands, intake.Command{Word: "/revise", On: store.SubjectPR, Kind: store.KindRevise, Start: "start", Reviews: true})
+	in.Commands = append(in.Commands, intake.Command{Word: "/revise", On: store.SubjectPR, Kind: store.KindRevise, Start: "start", ByReview: true})
 	return in
 }
 
-func review(id int64, state, body string) github.Review {
-	return github.Review{ID: id, NodeID: fmt.Sprintf("PRR_%d", id), Login: "alice", Association: "OWNER", State: state, Body: body}
+func review(id int64, state, body string) github.PullRequestReview {
+	return github.PullRequestReview{ID: id, NodeID: fmt.Sprintf("PRR_%d", id), Login: "alice", Association: "OWNER", State: state, Body: body}
 }
 
 // A submitted review whose body starts /revise is the command, whatever the
@@ -40,7 +40,7 @@ func TestASubmittedReviewStartingTheWordIsTheCommand(t *testing.T) {
 	} {
 		t.Run(tc.state, func(t *testing.T) {
 			s := storetest.Open(t)
-			tr := &tracker{prs: []int{12}, reviews: map[int][]github.Review{12: {review(5, tc.state, "/revise\nrename it")}}}
+			tr := &tracker{prs: []int{12}, reviews: map[int][]github.PullRequestReview{12: {review(5, tc.state, "/revise\nrename it")}}}
 			made := pass(t, reviseIntake(t, s, tr))
 			if got := len(made) == 1 && made[0].ID == "revise-pr-12"; got != tc.want {
 				t.Errorf("made due %v, want revise-pr-12: %v", ids(made), tc.want)
@@ -53,7 +53,7 @@ func TestASubmittedReviewStartingTheWordIsTheCommand(t *testing.T) {
 // answered.
 func TestAReviewCommandIsArmedOnceAndAClaimedOneNever(t *testing.T) {
 	s := storetest.Open(t)
-	tr := &tracker{prs: []int{12, 13}, reviews: map[int][]github.Review{
+	tr := &tracker{prs: []int{12, 13}, reviews: map[int][]github.PullRequestReview{
 		12: {review(5, "COMMENTED", "/revise")},
 		13: {review(6, "COMMENTED", "/revise")},
 	}, reviewEyes: map[string][]github.Reaction{"PRR_6": {{Login: agent, Content: intake.Claim}}}}
@@ -63,7 +63,7 @@ func TestAReviewCommandIsArmedOnceAndAClaimedOneNever(t *testing.T) {
 	if got := ids(made); len(got) != 1 || got[0] != "revise-pr-12" {
 		t.Fatalf("made due %v, want [revise-pr-12]: 13's review is claimed", got)
 	}
-	armed, err := s.Reserved(context.Background(), intake.ReviewKey(5))
+	armed, err := s.Reserved(context.Background(), intake.PullRequestReviewKey(5))
 	if err != nil || !armed {
 		t.Errorf("review 5's key reserved = %v, %v; want true", armed, err)
 	}
@@ -75,7 +75,7 @@ func TestAReviewCommandIsArmedOnceAndAClaimedOneNever(t *testing.T) {
 // Only a writer who is not the agent issues a command by review, as by
 // comment, and a review that does not start with the word is none.
 func TestOnlyAWritersReviewStartingTheWordIsACommand(t *testing.T) {
-	for name, r := range map[string]github.Review{
+	for name, r := range map[string]github.PullRequestReview{
 		"a contributor":   {ID: 5, NodeID: "PRR_5", Login: "dave", Association: "CONTRIBUTOR", State: "COMMENTED", Body: "/revise"},
 		"the agent":       {ID: 5, NodeID: "PRR_5", Login: agent, Association: "OWNER", State: "COMMENTED", Body: "/revise"},
 		"another word":    {ID: 5, NodeID: "PRR_5", Login: "alice", Association: "OWNER", State: "COMMENTED", Body: "looks fine /revise"},
@@ -83,7 +83,7 @@ func TestOnlyAWritersReviewStartingTheWordIsACommand(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := storetest.Open(t)
-			tr := &tracker{prs: []int{12}, reviews: map[int][]github.Review{12: {r}}}
+			tr := &tracker{prs: []int{12}, reviews: map[int][]github.PullRequestReview{12: {r}}}
 			if made := pass(t, reviseIntake(t, s, tr)); len(made) != 0 {
 				t.Errorf("made due %v, want nothing", ids(made))
 			}
@@ -91,7 +91,7 @@ func TestOnlyAWritersReviewStartingTheWordIsACommand(t *testing.T) {
 	}
 }
 
-// Reviews are a request per pull request, so they are read only when a
+// A pull request's reviews are a request per pull request, so they are read only when a
 // command may be issued as one, and never on an issue.
 func TestReviewsAreReadOnlyWhenACommandTakesThem(t *testing.T) {
 	s := storetest.Open(t)
@@ -108,7 +108,7 @@ func TestReviewsAreReadOnlyWhenACommandTakesThem(t *testing.T) {
 
 func TestOnlyAPullRequestCommandTakesReviews(t *testing.T) {
 	in := intakeFor(t, storetest.Open(t), &tracker{})
-	in.Commands = append(in.Commands, intake.Command{Word: "/implement", On: store.SubjectIssue, Kind: store.KindImplement, Start: "start", Reviews: true})
+	in.Commands = append(in.Commands, intake.Command{Word: "/implement", On: store.SubjectIssue, Kind: store.KindImplement, Start: "start", ByReview: true})
 	if _, err := in.Pass(context.Background()); err == nil {
 		t.Error("no error for an issue command that takes reviews")
 	}

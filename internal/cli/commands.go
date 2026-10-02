@@ -17,7 +17,7 @@ var commands = func() []intake.Command {
 	return []intake.Command{
 		{Word: review.Word, On: store.SubjectPR, Kind: store.KindReview, Start: review.Start},
 		{Word: implement.Word, On: store.SubjectIssue, Kind: store.KindImplement, Start: implement.Start},
-		{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, Reviews: true},
+		{Word: revise.Word, On: store.SubjectPR, Kind: store.KindRevise, Start: revise.Start, ByReview: true},
 	}
 }
 

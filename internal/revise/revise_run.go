@@ -53,11 +53,11 @@ type progress struct {
 	// pushes; Read does not.
 	Read string `json:"read"`
 
-	// Points is the send-back's comment commands' ids, and Reviews its
-	// review commands' (#133), each in order: the revision's marks for the
-	// commands it answers.
-	Points  []int64 `json:"points,omitempty"`
-	Reviews []int64 `json:"reviews,omitempty"`
+	// Points is the send-back's comment commands' ids, and
+	// PullRequestReviews its review commands' (#133), each in order: the
+	// revision's marks for the commands it answers.
+	Points             []int64 `json:"points,omitempty"`
+	PullRequestReviews []int64 `json:"pull_request_reviews,omitempty"`
 
 	// Reply is the session's part of the reply, as its last run left the
 	// file: posted in the reply once CI is green, and shown by a hand-back
@@ -293,15 +293,15 @@ func revisionHandBackMarker(n int, key string) string {
 // markers is the hidden line for each command of the send-back, which a
 // revision's hand-back and its reply both carry.
 func (p progress) markers() string {
-	if len(p.Points) == 0 && len(p.Reviews) == 0 {
+	if len(p.Points) == 0 && len(p.PullRequestReviews) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	for _, id := range p.Points {
 		fmt.Fprintf(&b, "%s\n", owed.RevisionMarker(id))
 	}
-	for _, id := range p.Reviews {
-		fmt.Fprintf(&b, "%s\n", owed.ReviewRevisionMarker(id))
+	for _, id := range p.PullRequestReviews {
+		fmt.Fprintf(&b, "%s\n", owed.PullRequestReviewRevisionMarker(id))
 	}
 	return b.String()
 }
@@ -343,7 +343,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		// revision losing its record at this same head would find this
 		// hand-back's marker and take its own for already said.
 		lost := progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}, Read: sb.Head}
-		lost.Points, lost.Reviews = answered(sb.Points)
+		lost.Points, lost.PullRequestReviews = answered(sb.Points)
 		return lost,
 			fmt.Sprintf("The agent lost its record of the revision after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(sb.Pushed)), nil
 	}
@@ -375,7 +375,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		},
 		Read: sb.Head,
 	}
-	p.Points, p.Reviews = answered(sb.Points)
+	p.Points, p.PullRequestReviews = answered(sb.Points)
 
 	// Read before the fetch, so that a branch that is gone is a hand-back
 	// and a fetch that fails is an error, made again.
@@ -440,9 +440,9 @@ func (p progress) rewrote() string {
 func answered(points []Point) (comments, reviews []int64) {
 	for _, p := range points {
 		switch {
-		case p.Review != 0:
-			if len(reviews) == 0 || reviews[len(reviews)-1] != p.Review {
-				reviews = append(reviews, p.Review)
+		case p.PullRequestReview != 0:
+			if len(reviews) == 0 || reviews[len(reviews)-1] != p.PullRequestReview {
+				reviews = append(reviews, p.PullRequestReview)
 			}
 		case p.Comment != 0:
 			comments = append(comments, p.Comment)
@@ -484,11 +484,11 @@ func (d *Deps) spec(ctx context.Context, ws string, n int, sb SendBack, p progre
 func (p Point) from() string {
 	switch {
 	case p.URL != "" && p.Line > 0:
-		return fmt.Sprintf("a line comment on `%s` line %d, in the review with id %d: %s", p.Path, p.Line, p.Review, p.URL)
+		return fmt.Sprintf("a line comment on `%s` line %d, in the review with id %d: %s", p.Path, p.Line, p.PullRequestReview, p.URL)
 	case p.URL != "":
-		return fmt.Sprintf("a line comment on the file `%s`, in the review with id %d: %s", p.Path, p.Review, p.URL)
-	case p.Review != 0:
-		return fmt.Sprintf("from the body of the review with id %d", p.Review)
+		return fmt.Sprintf("a line comment on the file `%s`, in the review with id %d: %s", p.Path, p.PullRequestReview, p.URL)
+	case p.PullRequestReview != 0:
+		return fmt.Sprintf("from the body of the review with id %d", p.PullRequestReview)
 	}
 	return fmt.Sprintf("from the command with id %d", p.Comment)
 }

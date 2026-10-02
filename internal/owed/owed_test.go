@@ -115,14 +115,14 @@ func (tr *tracker) ReactToIssue(_ context.Context, n int, content string) error 
 	return err
 }
 
-func (tr *tracker) ReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
+func (tr *tracker) PullRequestReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
 	if nodeID == "gone" {
 		return nil, &github.StatusError{Method: "POST", Code: 404, Status: "not found"}
 	}
 	return tr.revEyes[nodeID], nil
 }
 
-func (tr *tracker) ReactToReview(_ context.Context, nodeID, content string) error {
+func (tr *tracker) ReactToPullRequestReview(_ context.Context, nodeID, content string) error {
 	lands, err := tr.write("react-review")
 	if lands && !intake.Claimed(tr.revEyes[nodeID], agent) {
 		tr.revEyes[nodeID] = append(tr.revEyes[nodeID], github.Reaction{Login: agent, Content: content})
@@ -195,7 +195,7 @@ func setup(t *testing.T, bound int, items ...owed.Item) *fixture {
 	t.Helper()
 	tr := newTracker()
 	s := storetest.Open(t)
-	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Rounds: bound, Dir: t.TempDir(), Reviews: tr}
+	b := &owed.Book{Tracker: tr, Store: s, Login: agent, Rounds: bound, Dir: t.TempDir(), PullRequestReviews: tr}
 	reg := transition.MustRegistry(
 		transition.Transition{Name: "decide", Kind: store.KindReview, From: "start", Run: func(ctx context.Context, in transition.In) (transition.Result, error) {
 			return b.Owe(ctx, in, "owing", owed.Record{Next: "next", Due: true, Items: items})
@@ -496,15 +496,15 @@ func TestAMalformedItemIsRefused(t *testing.T) {
 	}
 }
 
-// reviewCommand is a /revise issued as a submitted review.
-func reviewCommand(id int64, node string) github.Review {
-	return github.Review{ID: id, NodeID: node, Login: "alice", Association: "OWNER", State: "APPROVED", Body: "/revise"}
+// commandByReview is a /revise issued as a submitted review.
+func commandByReview(id int64, node string) github.PullRequestReview {
+	return github.PullRequestReview{ID: id, NodeID: node, Login: "alice", Association: "OWNER", State: "APPROVED", Body: "/revise"}
 }
 
 // A claim on a review is made on the review, read back from it, and made again
 // when it was lost (#133).
 func TestAClaimOnAReviewIsReadBackFromTheReview(t *testing.T) {
-	f := setup(t, 3, owed.ClaimReview(reviewCommand(5, "PRR_5")), owed.ReplyToReview("no-points-review-5", 12, reviewCommand(5, "PRR_5"), "Nothing to revise."))
+	f := setup(t, 3, owed.ClaimPullRequestReview(commandByReview(5, "PRR_5")), owed.ReplyToPullRequestReview("no-points-review-5", 12, commandByReview(5, "PRR_5"), "Nothing to revise."))
 	f.tr.lose["react-review"] = 1
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatal(errs)
@@ -512,7 +512,7 @@ func TestAClaimOnAReviewIsReadBackFromTheReview(t *testing.T) {
 	if eyes := f.tr.revEyes["PRR_5"]; !intake.Claimed(eyes, agent) || len(eyes) != 1 {
 		t.Errorf("the review's reactions are %v, want the one claim", eyes)
 	}
-	if n := f.tr.said(12, "afk:reply review=5"); n != 1 {
+	if n := f.tr.said(12, "afk:reply pull-request-review=5"); n != 1 {
 		t.Errorf("%d replies to the review, want 1", n)
 	}
 	if f.state() != "next" {
@@ -521,7 +521,7 @@ func TestAClaimOnAReviewIsReadBackFromTheReview(t *testing.T) {
 }
 
 func TestAReviewGitHubNoLongerServesIsNotWaitedFor(t *testing.T) {
-	f := setup(t, 3, owed.ClaimReview(reviewCommand(5, "gone")))
+	f := setup(t, 3, owed.ClaimPullRequestReview(commandByReview(5, "gone")))
 	f.tr.lose["react-review"] = 1
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatal(errs)
@@ -534,13 +534,13 @@ func TestAReviewGitHubNoLongerServesIsNotWaitedFor(t *testing.T) {
 func TestUnansweredReviewsAreTheAgentsUnclaimedReviewCommands(t *testing.T) {
 	tr := newTracker()
 	tr.revEyes["PRR_3"] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-	b := &owed.Book{Tracker: tr, Login: agent, Reviews: tr}
-	pending := reviewCommand(4, "PRR_4")
+	b := &owed.Book{Tracker: tr, Login: agent, PullRequestReviews: tr}
+	pending := commandByReview(4, "PRR_4")
 	pending.State = "PENDING"
-	got, err := b.UnansweredReviews(context.Background(), []github.Review{
-		reviewCommand(1, "PRR_1"),
+	got, err := b.UnansweredPullRequestReviews(context.Background(), []github.PullRequestReview{
+		commandByReview(1, "PRR_1"),
 		{ID: 2, NodeID: "PRR_2", Login: "mallory", Association: "NONE", State: "COMMENTED", Body: "/revise"},
-		reviewCommand(3, "PRR_3"),
+		commandByReview(3, "PRR_3"),
 		pending,
 		{ID: 5, NodeID: "PRR_5", Login: "alice", Association: "OWNER", State: "COMMENTED", Body: "fine"},
 	}, "/revise")

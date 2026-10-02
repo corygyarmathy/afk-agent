@@ -50,25 +50,25 @@ type Tracker interface {
 	Unlabel(ctx context.Context, number int, label string) error
 }
 
-// ReviewTracker is what a claim on a review is made on and read back from: a
-// reaction to a review is only reachable by its GraphQL id. *github.Client is
-// one.
-type ReviewTracker interface {
-	ReviewReactions(ctx context.Context, nodeID string) ([]github.Reaction, error)
-	ReactToReview(ctx context.Context, nodeID, content string) error
+// PullRequestReviewTracker is what a claim on a submitted pull request review
+// is made on and read back from: a reaction to a review is only reachable by
+// its GraphQL id. *github.Client is one.
+type PullRequestReviewTracker interface {
+	PullRequestReviewReactions(ctx context.Context, nodeID string) ([]github.Reaction, error)
+	ReactToPullRequestReview(ctx context.Context, nodeID, content string) error
 }
 
 // What an item is.
 type what string
 
 const (
-	claimComment what = "claim-comment" // the agent's 👀 on a comment
-	claimReview  what = "claim-review"  // the agent's 👀 on a submitted review
-	claimPR      what = "claim-pr"      // the agent's 👀 on a pull request's description
-	claimIssue   what = "claim-issue"   // the agent's 👀 on an issue itself
-	comment      what = "comment"       // a comment of the agent's, carrying a marker
-	label        what = "label"         // a label
-	unlabel      what = "unlabel"       // a label taken off
+	claimComment           what = "claim-comment"             // the agent's 👀 on a comment
+	claimPullRequestReview what = "claim-pull-request-review" // the agent's 👀 on a submitted pull request review
+	claimPR                what = "claim-pr"                  // the agent's 👀 on a pull request's description
+	claimIssue             what = "claim-issue"               // the agent's 👀 on an issue itself
+	comment                what = "comment"                   // a comment of the agent's, carrying a marker
+	label                  what = "label"                     // a label
+	unlabel                what = "unlabel"                   // a label taken off
 )
 
 // Item is one thing owed to the tracker. Made by the constructors below, and
@@ -89,10 +89,10 @@ type Item struct {
 	// On is the issue or pull request the item is on.
 	On int `json:"on,omitempty"`
 
-	// Comment is the comment a claim is on, and Review the review, by its
-	// GraphQL id.
-	Comment int64  `json:"comment,omitempty"`
-	Review  string `json:"review,omitempty"`
+	// Comment is the comment a claim is on, and PullRequestReview the
+	// review, by its GraphQL id.
+	Comment           int64  `json:"comment,omitempty"`
+	PullRequestReview string `json:"pull_request_review,omitempty"`
 
 	// Marker is the hidden line a comment is read back by, and Body the
 	// whole comment, marker included.
@@ -107,10 +107,10 @@ func Claim(c github.Comment) Item {
 	return Item{What: claimComment, Stem: fmt.Sprintf("claim-comment-%d", c.ID), Comment: c.ID}
 }
 
-// ClaimReview is the agent's 👀 on a command issued as a submitted review
-// (#133).
-func ClaimReview(r github.Review) Item {
-	return Item{What: claimReview, Stem: fmt.Sprintf("claim-review-%d", r.ID), Review: r.NodeID}
+// ClaimPullRequestReview is the agent's 👀 on a command issued as a submitted
+// pull request review (#133).
+func ClaimPullRequestReview(r github.PullRequestReview) Item {
+	return Item{What: claimPullRequestReview, Stem: fmt.Sprintf("claim-pull-request-review-%d", r.ID), PullRequestReview: r.NodeID}
 }
 
 // ClaimPullRequest is the agent's 👀 on pull request n's description: the
@@ -134,9 +134,9 @@ func Reply(stem string, n int, c github.Comment, text string) Item {
 	return Comment(stem, n, marker, marker+"\n"+text)
 }
 
-// ReplyToReview is Reply, answering a command issued as review r.
-func ReplyToReview(stem string, n int, r github.Review, text string) Item {
-	marker := ReviewReplyMarker(r.ID)
+// ReplyToPullRequestReview is Reply, answering a command issued as review r.
+func ReplyToPullRequestReview(stem string, n int, r github.PullRequestReview, text string) Item {
+	marker := PullRequestReviewReplyMarker(r.ID)
 	return Comment(stem, n, marker, marker+"\n"+text)
 }
 
@@ -146,10 +146,11 @@ func ReplyMarker(id int64) string {
 	return fmt.Sprintf("<!-- afk:reply comment=%d -->", id)
 }
 
-// ReviewReplyMarker is ReplyMarker for a command issued as the review with id.
-// A review's id is not a comment's, so the two are spelled apart.
-func ReviewReplyMarker(id int64) string {
-	return fmt.Sprintf("<!-- afk:reply review=%d -->", id)
+// PullRequestReviewReplyMarker is ReplyMarker for a command issued as the
+// submitted pull request review with id. A review's id is not a comment's, so
+// the two are spelled apart.
+func PullRequestReviewReplyMarker(id int64) string {
+	return fmt.Sprintf("<!-- afk:reply pull-request-review=%d -->", id)
 }
 
 // RevisionMarker is the hidden line a revision's answer to the command with id
@@ -160,10 +161,10 @@ func RevisionMarker(id int64) string {
 	return fmt.Sprintf("<!-- afk:revision comment=%d -->", id)
 }
 
-// ReviewRevisionMarker is RevisionMarker for a command issued as the review
-// with id.
-func ReviewRevisionMarker(id int64) string {
-	return fmt.Sprintf("<!-- afk:revision review=%d -->", id)
+// PullRequestReviewRevisionMarker is RevisionMarker for a command issued as
+// the submitted pull request review with id.
+func PullRequestReviewRevisionMarker(id int64) string {
+	return fmt.Sprintf("<!-- afk:revision pull-request-review=%d -->", id)
 }
 
 // RevisionReplyMarker is the hidden line a revision's reply carries: the
@@ -196,7 +197,7 @@ func (it Item) valid() error {
 	case it.Stem == "":
 		return errors.New("owed item has no key stem")
 	case it.What == claimComment && it.Comment != 0:
-	case it.What == claimReview && it.Review != "":
+	case it.What == claimPullRequestReview && it.PullRequestReview != "":
 	case (it.What == claimPR || it.What == claimIssue) && it.On > 0:
 	case it.What == comment && it.On > 0 && it.Marker != "" && strings.Contains(it.Body, it.Marker):
 	case (it.What == label || it.What == unlabel) && it.On > 0 && it.Label != "":
@@ -243,10 +244,10 @@ type Book struct {
 	// directory, beside the store and never in it (ADR 0001 §5).
 	Dir string
 
-	// Reviews is where a claim on a review is made and read back. Nil for a
-	// kind whose commands are never reviews: a claim on one is then an
-	// error.
-	Reviews ReviewTracker
+	// PullRequestReviews is where a claim on a review is made and read back.
+	// Nil for a kind whose commands are never reviews: a claim on one is then
+	// an error.
+	PullRequestReviews PullRequestReviewTracker
 }
 
 // Unanswered is the commands for word among comments that the agent has not
@@ -268,18 +269,18 @@ func (b *Book) Unanswered(ctx context.Context, comments []github.Comment, word s
 	return out, nil
 }
 
-// UnansweredReviews is the reviews that issue word and that the agent has not
-// claimed.
-func (b *Book) UnansweredReviews(ctx context.Context, reviews []github.Review, word string) ([]github.Review, error) {
-	var out []github.Review
+// UnansweredPullRequestReviews is the reviews that issue word and that the
+// agent has not claimed.
+func (b *Book) UnansweredPullRequestReviews(ctx context.Context, reviews []github.PullRequestReview, word string) ([]github.PullRequestReview, error) {
+	var out []github.PullRequestReview
 	for _, r := range reviews {
-		if !intake.IsReviewCommand(r, b.Login, word) {
+		if !intake.IsCommandByReview(r, b.Login, word) {
 			continue
 		}
-		if b.Reviews == nil {
+		if b.PullRequestReviews == nil {
 			return nil, errors.New("owed has no tracker for reviews")
 		}
-		reactions, err := b.Reviews.ReviewReactions(ctx, r.NodeID)
+		reactions, err := b.PullRequestReviews.PullRequestReviewReactions(ctx, r.NodeID)
 		if err != nil {
 			return nil, err
 		}
@@ -400,12 +401,12 @@ func (b *Book) do(it Item) func(context.Context) error {
 	switch it.What {
 	case claimComment:
 		return func(ctx context.Context) error { return b.Tracker.React(ctx, it.Comment, intake.Claim) }
-	case claimReview:
+	case claimPullRequestReview:
 		return func(ctx context.Context) error {
-			if b.Reviews == nil {
+			if b.PullRequestReviews == nil {
 				return errors.New("owed has no tracker for reviews")
 			}
-			return b.Reviews.ReactToReview(ctx, it.Review, intake.Claim)
+			return b.PullRequestReviews.ReactToPullRequestReview(ctx, it.PullRequestReview, intake.Claim)
 		}
 	case claimPR, claimIssue:
 		return func(ctx context.Context) error { return b.Tracker.ReactToIssue(ctx, it.On, intake.Claim) }
@@ -461,11 +462,11 @@ func (b *Book) there(ctx context.Context, it Item, comments map[int][]github.Com
 			return false, err
 		}
 		return intake.Claimed(reactions, b.Login), nil
-	case claimReview:
-		if b.Reviews == nil {
+	case claimPullRequestReview:
+		if b.PullRequestReviews == nil {
 			return false, errors.New("owed has no tracker for reviews")
 		}
-		reactions, err := b.Reviews.ReviewReactions(ctx, it.Review)
+		reactions, err := b.PullRequestReviews.PullRequestReviewReactions(ctx, it.PullRequestReview)
 		if gone(err) {
 			// A submitted review cannot be deleted, but a review GitHub no
 			// longer serves has nothing left to claim, as a comment does.

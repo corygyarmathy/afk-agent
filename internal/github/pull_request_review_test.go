@@ -18,11 +18,11 @@ func TestReviewsReadEachReviewsBodyAuthorAndState(t *testing.T) {
 			fmt.Fprint(w, `[{"id":5,"node_id":"PRR_5","body":"/revise","state":"APPROVED","author_association":"OWNER","submitted_at":"2026-09-30T10:00:00Z","html_url":"https://github.com/o/n/pull/12#pullrequestreview-5","user":{"login":"alice"}}]`)
 		}
 	})
-	got, err := c.Reviews(context.Background(), 12)
+	got, err := c.PullRequestReviews(context.Background(), 12)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []github.Review{{ID: 5, NodeID: "PRR_5", Body: "/revise", Login: "alice", Association: "OWNER", State: "APPROVED", SubmittedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), URL: "https://github.com/o/n/pull/12#pullrequestreview-5"}}
+	want := []github.PullRequestReview{{ID: 5, NodeID: "PRR_5", Body: "/revise", Login: "alice", Association: "OWNER", State: "APPROVED", SubmittedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), URL: "https://github.com/o/n/pull/12#pullrequestreview-5"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -39,11 +39,11 @@ func TestReviewCommentsAreOneReviewsLineComments(t *testing.T) {
 				{"id":3,"body":"whole file","path":"c.go","line":null,"original_line":null,"html_url":"u3"}]`)
 		}
 	})
-	got, err := c.ReviewComments(context.Background(), 12, 5)
+	got, err := c.LineComments(context.Background(), 12, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []github.ReviewComment{
+	want := []github.LineComment{
 		{ID: 1, Body: "rename", Path: "a.go", Line: 3, URL: "https://github.com/o/n/pull/12#discussion_r1"},
 		{ID: 2, Body: "moved", Path: "b.go", Line: 9, URL: "u2"},
 		{ID: 3, Body: "whole file", Path: "c.go", URL: "u3"},
@@ -81,7 +81,7 @@ func TestReviewReactionsAreReadToTheLastPage(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"data":{"node":{"reactions":{"nodes":[{"content":"EYES","user":{"login":"afk-agent[bot]"}}],"pageInfo":{"hasNextPage":false,"endCursor":"c2"}}}}}`)
 	})
-	got, err := c.ReviewReactions(context.Background(), "PRR_5")
+	got, err := c.PullRequestReviewReactions(context.Background(), "PRR_5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestAReviewThatIsNotThereIsNotFound(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
-			_, err := c.ReviewReactions(context.Background(), "PRR_5")
+			_, err := c.PullRequestReviewReactions(context.Background(), "PRR_5")
 			var se *github.StatusError
 			if !errors.As(err, &se) || se.Code != http.StatusNotFound {
 				t.Errorf("error %v, want a StatusError with code 404", err)
@@ -113,7 +113,7 @@ func TestAGraphQLErrorIsAnError(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}`)
 	})
-	if err := c.ReactToReview(context.Background(), "PRR_5", "eyes"); err == nil {
+	if err := c.ReactToPullRequestReview(context.Background(), "PRR_5", "eyes"); err == nil {
 		t.Error("no error for a GraphQL error")
 	}
 }
@@ -129,7 +129,7 @@ func TestReactToReviewSendsGraphQLsSpelling(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"data":{"addReaction":{"reaction":{"content":"EYES"}}}}`)
 	})
-	if err := c.ReactToReview(context.Background(), "PRR_5", "eyes"); err != nil {
+	if err := c.ReactToPullRequestReview(context.Background(), "PRR_5", "eyes"); err != nil {
 		t.Fatal(err)
 	}
 }

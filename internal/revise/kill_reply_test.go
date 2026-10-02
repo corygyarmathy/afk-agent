@@ -368,17 +368,19 @@ func (dt *diskTracker) React(ctx context.Context, id int64, content string) erro
 }
 
 // A review is never a send-back here.
-func (dt *diskTracker) Reviews(context.Context, int) ([]github.Review, error) { return nil, nil }
-
-func (dt *diskTracker) ReviewComments(context.Context, int, int64) ([]github.ReviewComment, error) {
+func (dt *diskTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
 	return nil, nil
 }
 
-func (dt *diskTracker) ReviewReactions(context.Context, string) ([]github.Reaction, error) {
+func (dt *diskTracker) LineComments(context.Context, int, int64) ([]github.LineComment, error) {
 	return nil, nil
 }
 
-func (dt *diskTracker) ReactToReview(context.Context, string, string) error {
+func (dt *diskTracker) PullRequestReviewReactions(context.Context, string) ([]github.Reaction, error) {
+	return nil, nil
+}
+
+func (dt *diskTracker) ReactToPullRequestReview(context.Context, string, string) error {
 	return errors.New("nothing here claims a review")
 }
 

@@ -286,17 +286,19 @@ func (ft *fileTracker) Comment(context.Context, int, string) (github.Comment, er
 	return github.Comment{}, errors.New("a send-back with points is not answered at its claim")
 }
 
-func (ft *fileTracker) Reviews(context.Context, int) ([]github.Review, error) { return nil, nil }
-
-func (ft *fileTracker) ReviewComments(context.Context, int, int64) ([]github.ReviewComment, error) {
+func (ft *fileTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
 	return nil, nil
 }
 
-func (ft *fileTracker) ReviewReactions(context.Context, string) ([]github.Reaction, error) {
+func (ft *fileTracker) LineComments(context.Context, int, int64) ([]github.LineComment, error) {
 	return nil, nil
 }
 
-func (ft *fileTracker) ReactToReview(context.Context, string, string) error { return nil }
+func (ft *fileTracker) PullRequestReviewReactions(context.Context, string) ([]github.Reaction, error) {
+	return nil, nil
+}
+
+func (ft *fileTracker) ReactToPullRequestReview(context.Context, string, string) error { return nil }
 
 func (ft *fileTracker) ReactToIssue(context.Context, int, string) error {
 	return errors.New("the revise kind never claims a pull request's description")
