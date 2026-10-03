@@ -529,6 +529,7 @@ func TestTheSpecLeavesOutTheSensitiveLineAndTheSpend(t *testing.T) {
 	var spent spend.Spent
 	spent.Add(context.Background(), first, nil, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 1}})
 	tr.desc = top + "**Sensitive:** job store schema (`store/schema.sql`)\n\n" + rest + "\n" + spent.Footer() + "\n"
+	tr.author = agent
 	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}}
 	f := setup(t, tr, &reviewer{})
 
@@ -544,6 +545,26 @@ func TestTheSpecLeavesOutTheSensitiveLineAndTheSpend(t *testing.T) {
 	}
 	if !strings.Contains(spec, top+rest) {
 		t.Errorf("the spec does not carry the rest of the description as it was:\n%s", spec)
+	}
+}
+
+// A description a human wrote is theirs, and is reviewed as they wrote it:
+// one that quotes the agent's sensitive line and spend footer, as a pull
+// request about them would, keeps both.
+func TestTheSpecKeepsAHumansDescriptionWhole(t *testing.T) {
+	tr := newTracker(command(1))
+	var spent spend.Spent
+	spent.Add(context.Background(), first, nil, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 1}})
+	tr.desc = "<!-- afk:implement issue=7 -->\nCloses #7\n\n**Sensitive:** job store schema (`store/schema.sql`)\n\n> **Your review** (x): read #7 first.\n\nThe footer looks like this:\n\n" + spent.Footer() + "\n\nand that is all.\n"
+	tr.author = "alice"
+	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if spec := f.model.specs[0]; !strings.Contains(spec, tr.desc) {
+		t.Errorf("the spec does not carry the human's description as they wrote it:\n%s", spec)
 	}
 }
 
