@@ -28,12 +28,13 @@ Two **category** roles:
 - `bug`: something is broken
 - `enhancement`: new feature or improvement
 
-Five **state** roles:
+Six **state** roles:
 
 - `needs-triage`: maintainer needs to evaluate
 - `needs-info`: waiting on reporter for more information
 - `ready-for-agent`: fully specified, ready for an AFK agent
 - `ready-for-human`: needs human implementation
+- `recipe-ticket`: fully specified but deliberately large, so an agent implements it only when the maintainer runs `/implement` asking for one PR
 - `wontfix`: will not be actioned
 
 For a PR, the same states read against the attached code: `ready-for-agent` means a brief is attached and an agent should take the next step on the diff; `ready-for-human` means it's ready for a human to merge.
@@ -42,7 +43,7 @@ Every triaged issue should carry exactly one category role and one state role. I
 
 These are canonical role names. The actual label strings used in the issue tracker may differ. The mapping should have been provided to you. If not, tell the user to run `/setup-cory-gyarmathy-skills`.
 
-State transitions: an unlabeled issue normally goes to `needs-triage` first; from there it moves to `needs-info`, `ready-for-agent`, `ready-for-human`, or `wontfix`. `needs-info` returns to `needs-triage` once the reporter replies. The maintainer can override at any time; flag transitions that look unusual and ask before proceeding.
+State transitions: an unlabeled issue normally goes to `needs-triage` first; from there it moves to `needs-info`, `ready-for-agent`, `ready-for-human`, `recipe-ticket`, or `wontfix`. `needs-info` returns to `needs-triage` once the reporter replies. The maintainer can override at any time; flag transitions that look unusual and ask before proceeding.
 
 ## Invocation
 
@@ -78,6 +79,7 @@ Show counts and a one-line summary per item. Let the maintainer pick.
 5. **Apply the outcome:**
     - `ready-for-agent`: post an agent brief comment ([AGENT-BRIEF.md](AGENT-BRIEF.md)).
     - `ready-for-human`: same structure as an agent brief, but note why it can't be delegated (judgment calls, external access, design decisions, manual testing).
+    - `recipe-ticket`: same structure as an agent brief, but name the recipe (the command that reproduces the change, or the transformation rule) and note that it needs an explicit `/implement` as one PR.
     - `needs-info`: post triage notes (template below).
     - For `wontfix`, close the issue, with the comment depending on _why_:
         - **Already implemented**: the change already exists in the codebase. Point to where it lives; do **not** write to `.out-of-scope/` (that KB is for _rejected_ requests, not built ones).

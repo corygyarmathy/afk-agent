@@ -36,6 +36,8 @@ Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so th
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside four parallel sub-agents.
 
+A caller whose checkout has no base may give a diff file instead of a fixed point. The file is then the diff wherever a step uses the diff command, and there is no commit list.
+
 ### 2. Identify the spec source
 
 Look for the originating spec, in this order:
@@ -61,16 +63,18 @@ Two folds, each decided by an input. Nothing else adds a sub-agent: not a large 
 
 ### 5. Spawn the sub-agents in parallel
 
+Where the harness runs no sub-agents, work each axis in turn from the same inputs, and say beside the scope notes that the axes were not reviewed independently.
+
 Every sub-agent prompt carries the same inputs and nothing else:
 
-- The diff command and commit list.
+- The diff command and commit list, or the diff file's path.
 - The spec, pasted verbatim or as a path to it, never as your summary of it.
 - The severity floor, with the severity definitions above.
 - The inputs specific to its axis, below.
 
 Leave out any explanation of why the change was made the way it was. Each reviewer judges the code cold; the reasons it needs are in the spec and the code. Tell each one that commit messages are the author's claims, to be checked against the code rather than taken as reasons.
 
-Every brief ends with the same output rules: "The floor is `<floor>`: report nothing below it. Rank findings most severe first. Each finding is at most about 3 lines: its severity, `file:line`, what's wrong, and a one-line fix, with a short code suggestion when one fits. Read beyond the diff wherever judging a hunk needs it. Under 400 words; if the cap bites, drop the least severe findings."
+Every brief ends with the same output rules: "The floor is `<floor>`: report nothing below it. Rank findings most severe first. Each finding is at most about 3 lines: its severity, `path:line` (or `path:first-last`, the path from the repository root), what's wrong, and a one-line fix, with a short code suggestion when one fits. Read beyond the diff wherever judging a hunk needs it. Under 400 words; if the cap bites, drop the least severe findings."
 
 A folded sub-agent writes two headings, and the ranking and the cap apply to each one alone, so no axis is ranked against the other: its brief says "Rank findings most severe first within each heading" and "Under 400 words per heading; if the cap bites, drop that heading's least severe findings."
 
@@ -101,7 +105,7 @@ Number the findings `1…n` continuously across the whole report, so any one can
 
 A review with nothing at or above the floor still reports, and says so, naming the floor.
 
-The review is advisory.
+The review is advisory: it carries no verdict and changes nothing.
 
 ## Why separate axes
 
