@@ -22,6 +22,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/review"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/store/storetest"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -222,9 +223,13 @@ type reviewer struct {
 	// subAgents is how many sub-agents' sessions every reply's run started,
 	// and unread how many of those it could not read.
 	subAgents, unread int
-	asked             []opencode.Request
-	diffs             []string
-	specs             []string
+	// failed is what a run that fails spent, and silent a run that
+	// succeeds and reports no spend at all.
+	failed opencode.Reply
+	silent bool
+	asked  []opencode.Request
+	diffs  []string
+	specs  []string
 }
 
 func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
@@ -238,13 +243,16 @@ func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 		err = m.answers[i]
 	}
 	if err != nil {
-		return opencode.Reply{}, err
+		return m.failed, err
 	}
 	text := "The change is sound. One nit: Reserve has no test."
 	if i := len(m.asked) - 1; i < len(m.replies) {
 		text = m.replies[i]
 	}
-	return opencode.Reply{Text: text, Cost: 0.0123, SubAgents: m.subAgents, Unread: m.unread}, nil
+	if m.silent {
+		return opencode.Reply{Text: text}, nil
+	}
+	return opencode.Reply{Text: text, Cost: 0.0123, Tokens: opencode.Tokens{Input: 2000, Output: 300}, SubAgents: m.subAgents, Unread: m.unread}, nil
 }
 
 func transient(ref model.Ref) error {
@@ -511,13 +519,16 @@ func TestPartOfReadsTheImplementLinkLine(t *testing.T) {
 	}
 }
 
-// The advisory review is unaware of the sensitive line: the spec it reads is
-// the description without it, and otherwise as it was.
-func TestTheSpecLeavesOutTheSensitiveLine(t *testing.T) {
+// The advisory review is unaware of the sensitive line and of what the work
+// cost: the spec it reads is the description without either, and otherwise
+// as it was.
+func TestTheSpecLeavesOutTheSensitiveLineAndTheSpend(t *testing.T) {
 	tr := newTracker(command(1))
 	top := "<!-- afk:implement issue=7 -->\nCloses #7\n\n"
 	rest := "> **Your review** (x): read #7 first.\n\n## Start here\n\nok:1\n"
-	tr.desc = top + "**Sensitive:** job store schema (`store/schema.sql`)\n\n" + rest
+	var spent spend.Spent
+	spent.Add(first, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 1}})
+	tr.desc = top + "**Sensitive:** job store schema (`store/schema.sql`)\n\n" + rest + "\n" + spent.Footer() + "\n"
 	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}}
 	f := setup(t, tr, &reviewer{})
 
@@ -527,6 +538,9 @@ func TestTheSpecLeavesOutTheSensitiveLine(t *testing.T) {
 	spec := f.model.specs[0]
 	if strings.Contains(spec, "Sensitive") || strings.Contains(spec, "store/schema.sql") {
 		t.Errorf("the spec carries the sensitive line:\n%s", spec)
+	}
+	if strings.Contains(spec, "afk:spend") || strings.Contains(spec, "$0.5000") {
+		t.Errorf("the spec carries the spend footer:\n%s", spec)
 	}
 	if !strings.Contains(spec, top+rest) {
 		t.Errorf("the spec does not carry the rest of the description as it was:\n%s", spec)
@@ -1207,10 +1221,10 @@ func TestAReviewSaysWhatItCostAndWhetherThatIsAllOfIt(t *testing.T) {
 		subAgents, unread int
 		want, not         string
 	}{
-		{0, 0, "<sub>opencode-go/first · $0.0123</sub>", "≥"},
-		{2, 0, "<sub>opencode-go/first and its sub-agents · $0.0123</sub>", "≥"},
-		{2, 1, "<sub>opencode-go/first and its sub-agents · ≥ $0.0123, with 1 sub-agent's cost unread</sub>", ""},
-		{2, 2, "<sub>opencode-go/first and its sub-agents · ≥ $0.0123, with 2 sub-agents' cost unread</sub>", ""},
+		{0, 0, "<br>\nopencode-go/first · 2k in · 300 out · $0.0123</sub>", "≥"},
+		{2, 0, "<br>\nopencode-go/first and its sub-agents · 2k in · 300 out · $0.0123</sub>", "≥"},
+		{2, 1, "<br>\nopencode-go/first and its sub-agents · 2k in · 300 out · ≥ $0.0123, with 1 sub-agent's cost unread</sub>", ""},
+		{2, 2, "<br>\nopencode-go/first and its sub-agents · 2k in · 300 out · ≥ $0.0123, with 2 sub-agents' cost unread</sub>", ""},
 	} {
 		m := &reviewer{subAgents: tc.subAgents, unread: tc.unread}
 		f := setup(t, newTracker(command(1)), m)
@@ -1227,6 +1241,45 @@ func TestAReviewSaysWhatItCostAndWhetherThatIsAllOfIt(t *testing.T) {
 		if tc.not != "" && strings.Contains(b, tc.not) {
 			t.Errorf("with %d sub-agents and %d unread, the review contains %q:\n%s", tc.subAgents, tc.unread, tc.not, b)
 		}
+	}
+}
+
+// A run that failed on one model was paid for, and the review written on the
+// next says so: a line for each model, each named as enrolled (#22). What
+// was spent changes nothing about which candidate ran next.
+func TestAReviewCountsTheRunsThatFailedBeforeIt(t *testing.T) {
+	m := &reviewer{answers: []error{transient(first)}, failed: opencode.Reply{Cost: 0.002, Tokens: opencode.Tokens{Input: 900, Output: 10}}}
+	f := setup(t, newTracker(command(1)), m)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if got := fmt.Sprint(refs(m.asked)); got != fmt.Sprint([]model.Ref{first, second}) {
+		t.Errorf("asked %s, want the first candidate then the second", got)
+	}
+	b := f.tr.byAgent()[0].Body
+	for _, want := range []string{
+		"<br>\nopencode-go/first · 900 in · 10 out · $0.0020<br>",
+		"<br>\nopencode-go/second · 2k in · 300 out · $0.0123</sub>",
+		"not the account's spend",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the review does not contain %q:\n%s", want, b)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.deps.StateDir, "spent")); len(entries) != 0 {
+		t.Errorf("the review at rest kept what it spent: %v", entries)
+	}
+}
+
+// A review whose runs reported no spend has no footer, rather than a zero
+// one: missing data reads as missing.
+func TestAReviewWithNoSpendReportedHasNoFooter(t *testing.T) {
+	f := setup(t, newTracker(command(1)), &reviewer{silent: true})
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if b := f.tr.byAgent()[0].Body; strings.Contains(b, "<sub>") || strings.Contains(b, "$") {
+		t.Errorf("a review with no spend reported has a footer:\n%s", b)
 	}
 }
 

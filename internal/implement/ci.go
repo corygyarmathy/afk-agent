@@ -86,6 +86,7 @@ func (d *Deps) handBackPR(ctx context.Context, in transition.In, p progress, pr 
 		Stopped:     "I stopped before handing this pull request off. " + reason,
 		Next:        fmt.Sprintf("The pull request stays open: finish the branch by hand, or close it and `%s` again on #%d.", Word, in.Job.Subject.Number),
 		Output:      output,
+		Spent:       p.Spent,
 		HandingBack: HandingBack,
 		Rest:        Start,
 	})

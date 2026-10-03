@@ -38,6 +38,10 @@ type reviser struct {
 	mu    sync.Mutex
 	turns []func(dir string) error
 	asked []opencode.Request
+
+	// cost is what each run reports it spent, with a thousand tokens in
+	// and a hundred out. Zero reports nothing.
+	cost float64
 }
 
 func (m *reviser) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
@@ -51,7 +55,11 @@ func (m *reviser) Run(_ context.Context, req opencode.Request) (opencode.Reply, 
 			return opencode.Reply{}, err
 		}
 	}
-	return opencode.Reply{Text: "Done.", Session: "ses_1"}, nil
+	reply := opencode.Reply{Text: "Done.", Session: "ses_1"}
+	if m.cost != 0 {
+		reply.Cost, reply.Tokens = m.cost, opencode.Tokens{Input: 1000, Output: 100}
+	}
+	return reply, nil
 }
 
 func (m *reviser) then(turns ...func(dir string) error) { m.turns = append(m.turns, turns...) }

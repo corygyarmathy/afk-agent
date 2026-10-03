@@ -199,7 +199,7 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if pr, ok, err := d.open(ctx, from(p.Branch)); err != nil {
 		return transition.Result{}, err
 	} else if ok {
-		return d.resensitize(ctx, in, p, pr)
+		return d.redescribe(ctx, in, p, pr)
 	}
 
 	// Over the size signal, the pushed branch is the work's to keep, and a
@@ -271,14 +271,14 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	// them again. Cutting the session's part would drop what the operator
 	// needed, so if it is still over, that part goes whole, as a missing one
 	// does.
-	body := description(n, link, d.ReviewProcedure, sensitive.Line(p.Sensitive), session)
+	body := description(n, link, d.ReviewProcedure, sensitive.Line(p.Sensitive), session, p.Spent.Held())
 	if work.OverLimit(body) && len(p.Sensitive) > 0 {
 		d.logf("%s: the description is over GitHub's %d characters, so its sensitive paths are counted rather than listed", in.Job.ID, github.BodyLimit)
-		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), session)
+		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), session, p.Spent.Held())
 	}
 	if work.OverLimit(body) {
 		d.logf("%s: the description is over GitHub's %d characters, so the pull request opens with the agent's parts only", in.Job.ID, github.BodyLimit)
-		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), "")
+		body = description(n, link, d.ReviewProcedure, sensitive.Counted(p.Sensitive), "", p.Spent.Held())
 	}
 	req := github.NewPullRequest{Title: title, Head: p.Branch, Base: p.Into, Body: body}
 	effect := transition.Effect{Key: key, Do: transition.Noting(d.notePath(in.Job.ID), stem, func(ctx context.Context) error {
@@ -293,17 +293,18 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	return transition.Result{State: Opening, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 }
 
-// resensitize brings the open pull request's sensitive line to what the push
-// just seen on the remote touches, and leaves the rest of its description as
-// it was (work.Resensitize). Once the edit is made, the pull request is read
-// back here, and the job watches CI once the line is right or given up on.
-func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress, pr github.PullRequest) (transition.Result, error) {
+// redescribe brings the open pull request's sensitive line to what the push
+// just seen on the remote touches, and its spend footer to what the job has
+// spent, and leaves the rest of its description as it was (work.Redescribe).
+// Once the edit is made, the pull request is read back here, and the job
+// watches CI once both are right or given up on.
+func (d *Deps) redescribe(ctx context.Context, in transition.In, p progress, pr github.PullRequest) (transition.Result, error) {
 	logf := func(format string, a ...any) { d.logf("%s: "+format, append([]any{in.Job.ID}, a...)...) }
 	reread := func(ctx context.Context) (string, bool, error) {
 		pr, ok, err := d.open(ctx, from(p.Branch))
 		return pr.Body, ok, err
 	}
-	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, logf)
+	effect, ok, err := work.Redescribe(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, &p.Spent, logf)
 	if err != nil {
 		return transition.Result{}, err
 	}

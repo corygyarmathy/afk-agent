@@ -142,7 +142,8 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		}
 	}
 
-	req := opencode.Request{Model: ref, Dir: ws, Session: p.Session}
+	// Cost, so the footer counts what the session's sub-agents spent too.
+	req := opencode.Request{Model: ref, Dir: ws, Session: p.Session, Cost: true}
 	switch {
 	case p.Session == "" || (p.Failure == "" && !p.Cutting):
 		// Only a failure or a cut is worth continuing a session for. The
@@ -168,8 +169,18 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		}
 		return d.render(prompt, n, p, whole)
 	}, Implementing, Deferred, d.logf)
-	if err != nil || !ok {
+	if err != nil {
 		return res, err
+	}
+	p.Spent.Add(ref, reply)
+	if !ok {
+		// A failed run was paid for too. Kept for the footer, and only
+		// logged if it cannot be: the stay is the decision, and the spend
+		// is no part of it (#22).
+		if err := d.save(in.Job.ID, p); err != nil {
+			d.logf("%s: what the failed run spent could not be kept, so the footer will not count it: %v", in.Job.ID, err)
+		}
+		return res, nil
 	}
 
 	p.Session = reply.Session
@@ -289,7 +300,7 @@ func (d *Deps) handBackIssue(ctx context.Context, in transition.In, p progress, 
 		// and the work it was cut from was, before it went back.
 		next = fmt.Sprintf("The cut was not pushed. `%s` is on the remote at `%s`, the work as it was before it went back to be cut, with no pull request. Open one from it by hand, or `%s` again to start over on a new branch.", wholeBranch(p.Branch), git.Short(p.Uncut), Word)
 	}
-	body := work.HandBackBody(marker, "", "I stopped without opening a pull request. "+reason, "", output, next)
+	body := work.HandBackBody(marker, "", "I stopped without opening a pull request. "+reason, "", output, next, p.Spent)
 
 	// The workspace and the relay go before the commit rather than after
 	// it. Before the push, a commit that then fails leaves the job where it
