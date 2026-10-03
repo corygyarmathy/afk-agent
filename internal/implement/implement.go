@@ -73,6 +73,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -136,6 +137,10 @@ type Deps struct {
 	// Resolve is the ordered candidate list for the implement tier, as of
 	// now (ADR 0001 §9). A *model.LimitedError defers the job to the reset.
 	Resolve func(ctx context.Context) (model.Candidates, error)
+
+	// Price is the catalogue's price for a model, for the spend footer of a
+	// run opencode reported no cost for (#22). Nil prices none of them.
+	Price spend.Prices
 
 	// Bound is how many candidates a run tries before the tier counts as
 	// exhausted, and TierWait how long an exhausted tier defers. Parameters.

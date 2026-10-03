@@ -102,8 +102,8 @@ func TestRedescribeDoesNotEditAPullRequestThatIsGone(t *testing.T) {
 func TestRedescribeBringsTheFooterUpToDate(t *testing.T) {
 	var was, now spend.Spent
 	ref := model.Ref{Provider: "opencode-go", Model: "first"}
-	was.Add(ref, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
-	now.Add(ref, opencode.Reply{Cost: 0.03, Tokens: opencode.Tokens{Input: 3}})
+	was.Add(context.Background(), ref, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
+	now.Add(context.Background(), ref, nil, opencode.Reply{Cost: 0.03, Tokens: opencode.Tokens{Input: 3}})
 	opened := described("", "The widget is renamed.") + "\n" + was.Held() + "\n"
 
 	for _, c := range []struct {

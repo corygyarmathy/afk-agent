@@ -126,6 +126,10 @@ type Deps struct {
 	// (ADR 0001 §9). A *model.LimitedError defers the job to the reset.
 	Resolve func(ctx context.Context) (model.Candidates, error)
 
+	// Price is the catalogue's price for a model, for the spend footer of a
+	// run opencode reported no cost for (#22). Nil prices none of them.
+	Price spend.Prices
+
 	// Bound is the attempt bound: how many candidates a review tries before
 	// the tier counts as exhausted. A parameter.
 	Bound int
@@ -340,7 +344,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 			d.Log(fmt.Sprintf("%s: %v", in.Job.ID, transient))
 		}
 		// Paid for, as far as it got: the review that follows says so.
-		d.spend(in.Job.ID, ref, reply)
+		d.spend(ctx, in.Job.ID, ref, reply)
 		// A tier with no candidate left defers from here, with the failure
 		// that ran it out (#98).
 		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
@@ -365,7 +369,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
-	spent := d.spend(in.Job.ID, ref, reply)
+	spent := d.spend(ctx, in.Job.ID, ref, reply)
 	// Posts of a head's review are counted from here, so a review written
 	// again for a head whose posts ran out before has an allowance of its
 	// own.
@@ -634,13 +638,13 @@ func (d *Deps) body(n int, head string, reply opencode.Reply, a request, spent s
 // A record that cannot be read or written is logged and costs the review
 // nothing but a footer short of some runs: the review is worth having
 // without it.
-func (d *Deps) spend(jobID string, ref model.Ref, reply opencode.Reply) spend.Spent {
+func (d *Deps) spend(ctx context.Context, jobID string, ref model.Ref, reply opencode.Reply) spend.Spent {
 	var s spend.Spent
 	if err := statefile.Load(d.spentPath(jobID), &s); err != nil && !errors.Is(err, os.ErrNotExist) {
 		d.logf("%s: what the review spent before this run could not be read, so its footer counts from this run: %v", jobID, err)
 		s = spend.Spent{}
 	}
-	s.Add(ref, reply)
+	s.Add(ctx, ref, d.Price, reply)
 	if err := statefile.Save(d.spentPath(jobID), s); err != nil {
 		d.logf("%s: what the review spent could not be kept, so a later run's footer will not count it: %v", jobID, err)
 	}

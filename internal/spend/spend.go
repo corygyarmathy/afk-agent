@@ -9,12 +9,19 @@
 //
 // What it counts is what opencode reports for each run: the run's cost at the
 // models' list prices and its tokens, with its sub-agents' when they were read.
+// opencode's figure is preferred to the catalogue's: it knows which price band
+// a request landed in and what was read from cache, where the catalogue's
+// Price is the dearest band. A run opencode reported no cost for is priced
+// from the catalogue instead, at that dearest band, so the figure is an upper
+// bound and the footer says which part of it is.
+//
 // A run that failed transiently is counted as far as it got, because it was
 // paid for. A record lost with the state directory is a footer missing, which
 // reads as missing rather than as zero.
 package spend
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -51,6 +58,13 @@ type Line struct {
 	// Cost is in dollars, at list price, as opencode reports it.
 	Cost float64 `json:"cost,omitempty"`
 
+	// Listed is in dollars too: the runs opencode reported no cost for,
+	// priced from the catalogue's dearest band. Priced is whether any run
+	// had a price from either, so a model listed as free shows $0 and one
+	// with no price anywhere shows none.
+	Listed float64 `json:"listed,omitempty"`
+	Priced bool    `json:"priced,omitempty"`
+
 	// SubAgents is how many sub-agents' sessions the runs started, and
 	// Unread how many of those could not be read: Cost is a floor when it is
 	// not zero.
@@ -58,10 +72,15 @@ type Line struct {
 	Unread    int `json:"unread,omitempty"`
 }
 
-// Add counts one run of ref, whether it succeeded or failed. A run that
-// reported nothing - no tokens, no cost, no sub-agent - adds no line: missing
-// data reads as missing.
-func (s *Spent) Add(ref model.Ref, r opencode.Reply) {
+// Prices is the catalogue's price for a ref, as of now: unknown, Price.Known
+// false, when the catalogue cannot be read or does not list it.
+type Prices func(ctx context.Context, ref model.Ref) model.Price
+
+// Add counts one run of ref, whether it succeeded or failed. A run opencode
+// reported no cost for is priced from prices, which may be nil: no catalogue.
+// A run that reported nothing - no tokens, no cost, no sub-agent - adds no
+// line: missing data reads as missing.
+func (s *Spent) Add(ctx context.Context, ref model.Ref, prices Prices, r opencode.Reply) {
 	t := r.Tokens
 	if t == (opencode.Tokens{}) && r.Cost == 0 && r.SubAgents == 0 {
 		return
@@ -72,9 +91,31 @@ func (s *Spent) Add(ref model.Ref, r opencode.Reply) {
 	l.Reasoning += t.Reasoning
 	l.CacheRead += t.CacheRead
 	l.CacheWrite += t.CacheWrite
-	l.Cost += r.Cost
+	switch {
+	case r.Cost > 0:
+		l.Cost += r.Cost
+		l.Priced = true
+	case prices != nil && t != (opencode.Tokens{}):
+		if price := prices(ctx, ref); price.Known {
+			l.Listed += listed(price, t)
+			l.Priced = true
+		}
+	}
 	l.SubAgents += r.SubAgents
 	l.Unread += r.Unread
+}
+
+// listed is what t costs at price, per million tokens. A model that lists no
+// cache-write price has its cache writes priced as input.
+func listed(price model.Price, t opencode.Tokens) float64 {
+	write := price.CacheWrite
+	if write == 0 {
+		write = price.Input
+	}
+	return (float64(t.Input)*price.Input +
+		float64(t.Output+t.Reasoning)*price.Output +
+		float64(t.CacheRead)*price.CacheRead +
+		float64(t.CacheWrite)*write) / 1e6
 }
 
 func (s *Spent) line(ref string) *Line {
@@ -91,14 +132,15 @@ func (s *Spent) line(ref string) *Line {
 // Close, or nothing when no run reported any.
 //
 // It says what it is - an estimate at list price of this job's own spend - so
-// that it cannot be read as a bill, or as the account's spend. A model opencode
-// has no price for shows its tokens and no figure rather than a zero.
+// that it cannot be read as a bill, or as the account's spend. A model with no
+// price from opencode or the catalogue shows its tokens and no figure rather
+// than a zero.
 func (s Spent) Footer() string {
 	if len(s.Lines) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n<sub>What this job's own model runs cost, estimated at list price as opencode reports it: not a bill, and not the account's spend.", Open)
+	fmt.Fprintf(&b, "%s\n<sub>What this job's own model runs cost, estimated at list price: not a bill, and not the account's spend.", Open)
 	for _, l := range s.Lines {
 		fmt.Fprintf(&b, "<br>\n%s", l)
 	}
@@ -131,11 +173,17 @@ func (l Line) String() string {
 	out := fmt.Sprintf("%s out", count(l.Output+l.Reasoning))
 
 	cost := "no listed price"
+	if total := l.Cost + l.Listed; l.Priced || total > 0 {
+		cost = fmt.Sprintf("$%.4f", total)
+		if l.Unread > 0 {
+			cost = "≥ " + cost
+		}
+	}
 	switch {
-	case l.Cost > 0 && l.Unread > 0:
-		cost = fmt.Sprintf("≥ $%.4f", l.Cost)
-	case l.Cost > 0:
-		cost = fmt.Sprintf("$%.4f", l.Cost)
+	case l.Listed > 0 && l.Cost == 0:
+		cost += " at the catalogue's dearest price"
+	case l.Listed > 0:
+		cost += fmt.Sprintf(", $%.4f of it at the catalogue's dearest price", l.Listed)
 	}
 	switch l.Unread {
 	case 0:

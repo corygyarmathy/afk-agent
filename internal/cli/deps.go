@@ -13,6 +13,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
@@ -39,7 +40,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
-	stateDir, resolve, err := resolver(p, m)
+	stateDir, resolve, price, err := resolver(p, m)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +54,7 @@ var reviewDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Store:         st,
 		Checkout:      review.Git{Remote: remote(tr, stateDir), Relays: work.Workspace{StateDir: stateDir}.Relays()}.Checkout,
 		Resolve:       resolve,
+		Price:         price,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
 		Rounds:        ep.rounds,
@@ -85,7 +87,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 	if err != nil {
 		return nil, err
 	}
-	stateDir, resolve, err := resolver(p, m)
+	stateDir, resolve, price, err := resolver(p, m)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +106,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		BranchPrefix:    ip.branchPrefix,
 		Remote:          remote(tr, stateDir),
 		Resolve:         resolve,
+		Price:           price,
 		Bound:           m.attempts,
 		TierWait:        m.tierWait,
 		Rounds:          ep.rounds,
@@ -158,7 +161,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
-	stateDir, resolve, err := resolver(p, m)
+	stateDir, resolve, price, err := resolver(p, m)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +181,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Repo:          tr.client.Repo,
 		Remote:        remote(tr, stateDir),
 		Resolve:       resolve,
+		Price:         price,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
 		Rounds:        ep.rounds,
@@ -211,16 +215,17 @@ func remote(tr *tracker, stateDir string) git.Remote {
 	}
 }
 
-// resolver is the state directory, and the candidate list for one job kind's
-// model choice as of each call to it.
-func resolver(p params, m modelParams) (string, func(context.Context) (model.Candidates, error), error) {
+// resolver is the state directory, the candidate list for one job kind's
+// model choice as of each call to it, and the catalogue's price for a model
+// as of each call to that, for the spend footer.
+func resolver(p params, m modelParams) (string, func(context.Context) (model.Candidates, error), spend.Prices, error) {
 	observer, err := p.budget()
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	path, err := p.storePath()
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	// Beside the store and not in it (ADR 0001 §5): the catalogue is
@@ -252,7 +257,17 @@ func resolver(p params, m modelParams) (string, func(context.Context) (model.Can
 		}
 		return model.Resolve(reqs, cat, enrol, budget)
 	}
-	return stateDir, resolve, nil
+	// A catalogue that cannot be read prices nothing: the footer is a report,
+	// and a run is never failed over it.
+	price := func(ctx context.Context, ref model.Ref) model.Price {
+		cat, _, err := source.Load(ctx)
+		if err != nil {
+			return model.Price{}
+		}
+		m, _ := cat.Lookup(ref)
+		return m.Price
+	}
+	return stateDir, resolve, price, nil
 }
 
 // kindDeps builds the dependencies of one job kind, and leaves the rest nil:

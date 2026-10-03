@@ -61,9 +61,10 @@ type wireCost struct {
 }
 
 type wireBand struct {
-	Input     float64 `json:"input"`
-	Output    float64 `json:"output"`
-	CacheRead float64 `json:"cache_read"`
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
 }
 
 // price reduces the bands to the dearest per field.
@@ -71,18 +72,20 @@ func (c *wireCost) price() Price {
 	if c == nil {
 		return Price{}
 	}
-	headline := Band{Input: c.Input, Output: c.Output, CacheRead: c.CacheRead}
+	headline := Band{Input: c.Input, Output: c.Output, CacheRead: c.CacheRead, CacheWrite: c.CacheWrite}
 	p := Price{
-		Input:     c.Input,
-		Output:    c.Output,
-		CacheRead: c.CacheRead,
-		Known:     true,
-		Headline:  headline,
+		Input:      c.Input,
+		Output:     c.Output,
+		CacheRead:  c.CacheRead,
+		CacheWrite: c.CacheWrite,
+		Known:      true,
+		Headline:   headline,
 	}
 	worst := func(b wireBand) {
 		p.Input = max(p.Input, b.Input)
 		p.Output = max(p.Output, b.Output)
 		p.CacheRead = max(p.CacheRead, b.CacheRead)
+		p.CacheWrite = max(p.CacheWrite, b.CacheWrite)
 	}
 	for _, t := range c.Tiers {
 		worst(t.wireBand)

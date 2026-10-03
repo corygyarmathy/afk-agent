@@ -110,6 +110,19 @@ func TestDecodeCatalogue(t *testing.T) {
 	}
 }
 
+// A cache-write price is read where the catalogue lists one. It prices the
+// spend footer and no ceiling, so it is not in the table above.
+func TestDecodeCatalogueReadsTheCacheWritePrice(t *testing.T) {
+	cat := fixture(t)
+	m, ok := cat.Lookup(ref(t, "anthropic/claude-opus-5"))
+	if !ok {
+		t.Fatal("anthropic/claude-opus-5 is not in the fixture")
+	}
+	if m.Price.CacheWrite != 6.25 {
+		t.Errorf("cache write %v, want 6.25: the base band's, not the fast mode's", m.Price.CacheWrite)
+	}
+}
+
 // An empty document parses cleanly as JSON and would leave the resolver with
 // nothing to choose among while nothing looked wrong. It is refused so that
 // Source falls back to the last good copy instead.

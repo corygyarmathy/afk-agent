@@ -163,7 +163,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return res, err
 	}
-	p.Spent.Add(ref, reply)
+	p.Spent.Add(ctx, ref, d.Price, reply)
 	if !ok {
 		// A failed run was paid for too. Kept for the footer, and only
 		// logged if it cannot be: the stay is the decision, and the spend
