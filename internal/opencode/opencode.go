@@ -83,13 +83,14 @@ type Request struct {
 	Session string
 
 	// Cost asks for what the run cost with its sub-agents', which reads each
-	// of their sessions once the run is done (#99). Without it, a reply's Cost
-	// and Tokens are its own session's alone, and a caller that does not read
-	// them does not wait on the reads.
+	// of their sessions once the run is done (#99), for the footer every
+	// model-running job writes (#22). Without it, a reply's Cost and Tokens
+	// are its own session's alone, and the run does not wait on the reads.
 	Cost bool
 }
 
-// Reply is what a run that succeeded wrote, and what it cost.
+// Reply is what a run that succeeded wrote, and what it cost - or, beside a
+// TransientError, what a run that failed cost and nothing more.
 type Reply struct {
 	// Text is the text of the run's final step. Text written in earlier steps
 	// is narration between tool calls ("let me look at..."), and the answer is
@@ -168,6 +169,10 @@ func (e *FatalError) Unwrap() error { return e.Err }
 // killed the same way, and that is a failure: the run did not finish. Either
 // arriving once the run has finished, while its sub-agents' sessions are read
 // for Request.Cost, leaves those unread rather than discarding the reply.
+//
+// A TransientError comes with a reply that holds what the run spent before it
+// failed - Cost, Tokens, and with Request.Cost its sub-agents' - and nothing
+// else. Every other error comes with no reply at all.
 func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	if err := c.check(req); err != nil {
 		return Reply{}, &FatalError{err}
@@ -235,6 +240,15 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		}
 	}
 
+	// A run that failed was still paid for, as far as it got (#22): what it
+	// spent comes back with the failure, and nothing else of the reply does.
+	failed := func(err *TransientError) (Reply, error) {
+		spent := Reply{Cost: reply.Cost, Tokens: reply.Tokens}
+		if req.Cost {
+			c.subAgents(bounded, req.Dir, &spent, children)
+		}
+		return spent, err
+	}
 	switch {
 	case ctx.Err() != nil:
 		return Reply{}, ctx.Err()
@@ -245,17 +259,17 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 		// one.
 		err := c.transient(req, fmt.Errorf("the run was still going after %s, and was killed", c.Timeout), &stderr)
 		err.Bound = c.Timeout
-		return Reply{}, err
+		return failed(err)
 	case decodeErr != nil:
 		return Reply{}, &FatalError{fmt.Errorf("%s did not write an event stream: %w", c.Path, decodeErr)}
 	case reported != nil:
-		return Reply{}, c.transient(req, reported, &stderr)
+		return failed(c.transient(req, reported, &stderr))
 	case waitErr != nil && req.Session != "" && reply.Session == "" && strings.Contains(stderr.String(), sessionGone):
 		return Reply{}, &SessionGoneError{Session: req.Session}
 	case waitErr != nil:
-		return Reply{}, c.transient(req, waitErr, &stderr)
+		return failed(c.transient(req, waitErr, &stderr))
 	case strings.TrimSpace(reply.Text) == "":
-		return Reply{}, c.transient(req, errors.New("the run finished without writing a reply"), &stderr)
+		return failed(c.transient(req, errors.New("the run finished without writing a reply"), &stderr))
 	}
 	if req.Cost {
 		c.subAgents(bounded, req.Dir, &reply, children)
