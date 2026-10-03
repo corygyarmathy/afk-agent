@@ -58,10 +58,11 @@ after its marker (#127): the spec then holds #7, headed as only partly done by
 the piece, and #9, the issue filed for the rest, headed as out of scope, so
 that what the piece leaves for later is not reported as missing. `Part of`
 anywhere else in a description links nothing.
-The description goes without its sensitive line
+A description the agent wrote goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
 touches a sensitive path is reviewed as any other, and without its spend
-footer ([`spend.md`](spend.md)). An issue it cannot find is noted there as a gap, not a failure. The prompt,
+footer ([`spend.md`](spend.md)). A description anyone else wrote goes as they
+wrote it. An issue it cannot find is noted there as a gap, not a failure. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue, and is no issue's first
 piece, is reviewed against its description, and the report says so.
