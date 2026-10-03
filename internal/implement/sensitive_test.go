@@ -53,7 +53,8 @@ func TestAPullRequestTouchingASensitivePathSaysSo(t *testing.T) {
 	want := implement.PRMarker(7) + "\n" +
 		"Closes #7\n\n" +
 		"**Sensitive:** job store schema (`store/b/x.go`, `store/schema.sql`), CI (`ci/build.yml`)\n\n" +
-		"> **Your review** ([procedure](" + procedure + ")): read #7 first, then this, then the diff. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n"
+		"> **Your review** ([procedure](" + procedure + ")): read #7 first, then this, then the diff. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n" +
+		held
 	if body != want {
 		t.Errorf("description:\n%s\nwant:\n%s", body, want)
 	}
@@ -97,7 +98,7 @@ func TestALaterPushThatTouchesASensitivePathAddsIt(t *testing.T) {
 	if got := f.tr.prs[0].Body; got != want {
 		t.Errorf("description after the fix:\n%s\nwant:\n%s", got, want)
 	}
-	if !strings.HasSuffix(f.tr.prs[0].Body, "## Start here\n\nok:1\n") {
+	if !strings.HasSuffix(f.tr.prs[0].Body, "## Start here\n\nok:1\n"+held) {
 		t.Errorf("the session's part changed:\n%s", f.tr.prs[0].Body)
 	}
 }
@@ -176,7 +177,7 @@ func TestSensitiveFilesOverGitHubsLimitAreCounted(t *testing.T) {
 	if !strings.Contains(body, "Closes #7\n\n**Sensitive:** job store schema (300 files), CI (1 file)\n\n> **Your review**") {
 		t.Errorf("description:\n%.600s\nwant the sensitive paths counted", body)
 	}
-	if !strings.HasSuffix(body, "## Start here\n\nok:1\n") {
+	if !strings.HasSuffix(body, "## Start here\n\nok:1\n"+held) {
 		t.Errorf("the session's part was set aside:\n%.600s", body)
 	}
 	var logged []string

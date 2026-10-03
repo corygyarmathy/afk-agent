@@ -9,7 +9,11 @@
 // moves between.
 package work
 
-import "time"
+import (
+	"time"
+
+	"github.com/corygyarmathy/afk-agent/internal/spend"
+)
 
 // Progress is the state of one job's workspace that outlives a transition:
 // where the checkout is, what it has pushed, and how the gate has fared. A kind
@@ -56,6 +60,11 @@ type Progress struct {
 	// and FixedHead the head the last of them was counted for.
 	Fixes     int    `json:"fixes,omitempty"`
 	FixedHead string `json:"fixed_head,omitempty"`
+
+	// Spent is what this workspace's sessions have cost, failed runs
+	// included, for the footer on what the job writes (#22). It informs and
+	// decides nothing.
+	Spent spend.Spent `json:"spent,omitzero"`
 }
 
 // Complete reports whether p describes a workspace: the fields a checkout is

@@ -131,13 +131,14 @@ func empty(body []string) bool {
 
 // description is the pull request's body: the marker, the link line, the
 // sensitive line and the reminder, which are Go's, then the session's part,
-// already linked. The link line is linkLine's.
+// already linked, and last the spend footer, Go's again. The link line is
+// linkLine's, and the footer spend.Spent.Held's.
 //
 // It is written once, when the pull request opens. Nothing rewrites the
 // session's part: a revision changing what the operator already read would
-// defeat the reading. The sensitive line is Go's to recompute on every push
-// (sensitive.With).
-func description(n int, link, procedure, line, session string) string {
+// defeat the reading. The sensitive line and the footer are Go's to recompute
+// on every push (work.Redescribe).
+func description(n int, link, procedure, line, session, footer string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n%s\n\n", PRMarker(n), link)
 	if line != "" {
@@ -153,5 +154,6 @@ func description(n int, link, procedure, line, session string) string {
 	}
 	fmt.Fprintf(&b, "%s (%s): read #%d first, then this, then the diff%s. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n", sensitive.Reminder, to, n, from)
 	b.WriteString(session)
+	fmt.Fprintf(&b, "\n%s\n", footer)
 	return b.String()
 }

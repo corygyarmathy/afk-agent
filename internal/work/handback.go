@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
@@ -42,6 +43,10 @@ type HandBack struct {
 	Detail  string
 	Output  string
 
+	// Spent is what the job's runs cost, for the comment's footer: a job
+	// that could not finish still spent it (#22).
+	Spent spend.Spent
+
 	// HandingBack is the state the job moves to while the hand-back is read
 	// back, and Rest the state it comes to rest in.
 	HandingBack string
@@ -57,7 +62,7 @@ type HandBack struct {
 // Keyed by what is said once, which is the kind's to choose. Read back like
 // the hand-back on an issue.
 func (w Workspace) HandBackPR(ctx context.Context, in transition.In, jobID string, hb HandBack) (transition.Result, error) {
-	body := HandBackBody(hb.Marker, hb.Also, hb.Stopped, hb.Detail, hb.Output, hb.Next)
+	body := HandBackBody(hb.Marker, hb.Also, hb.Stopped, hb.Detail, hb.Output, hb.Next, hb.Spent)
 	if err := w.Clear(jobID); err != nil {
 		return transition.Result{}, err
 	}
@@ -68,8 +73,9 @@ func (w Workspace) HandBackPR(ctx context.Context, in transition.In, jobID strin
 }
 
 // HandBackBody is a hand-back comment: what stopped, what a session said, the
-// end of the output that said so, and what a human can do next.
-func HandBackBody(marker, also, stopped, detail, output, next string) string {
+// end of the output that said so, what a human can do next, and what the job
+// spent, when its runs said.
+func HandBackBody(marker, also, stopped, detail, output, next string, spent spend.Spent) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", marker)
 	if also != "" {
@@ -83,5 +89,8 @@ func HandBackBody(marker, also, stopped, detail, output, next string) string {
 		fmt.Fprintf(&b, "\nThe end of the last output:\n\n````\n%s\n````\n", output)
 	}
 	fmt.Fprintf(&b, "\n%s\n", next)
+	if footer := spent.Footer(); footer != "" {
+		fmt.Fprintf(&b, "\n%s\n", footer)
+	}
 	return b.String()
 }

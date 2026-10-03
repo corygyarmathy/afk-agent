@@ -67,6 +67,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/permalink"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -338,6 +339,8 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		if d.Log != nil {
 			d.Log(fmt.Sprintf("%s: %v", in.Job.ID, transient))
 		}
+		// Paid for, as far as it got: the review that follows says so.
+		d.spend(in.Job.ID, ref, reply)
 		// A tier with no candidate left defers from here, with the failure
 		// that ran it out (#98).
 		if wait := model.Failed(ctx, d.Resolve, in.Job.Stays, d.Bound, in.Now, d.TierWait, transient); !wait.Until.IsZero() {
@@ -362,6 +365,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
+	spent := d.spend(in.Job.ID, ref, reply)
 	// Posts of a head's review are counted from here, so a review written
 	// again for a head whose posts ran out before has an allowance of its
 	// own.
@@ -369,7 +373,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if err := d.save(in.Job.ID, pending{Head: head, Body: d.body(n, head, ref, reply, asked), From: from}); err != nil {
+	if err := d.save(in.Job.ID, pending{Head: head, Body: d.body(n, head, reply, asked, spent), From: from, Spent: spent}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
@@ -430,6 +434,9 @@ func (d *Deps) handBack(ctx context.Context, in transition.In, p pending, rounds
 		fmt.Fprintf(&b, "\nThe last error:\n\n````\n%s\n````\n", noted)
 	}
 	fmt.Fprintf(&b, "\nPush a new commit and `%s` again for another review.\n", Word)
+	if footer := p.Spent.Footer(); footer != "" {
+		fmt.Fprintf(&b, "\n%s\n", footer)
+	}
 	return d.book().Owe(ctx, in, HandingBack, owed.Record{Next: Start, Items: []owed.Item{
 		owed.Comment(fmt.Sprintf("review-hand-back-pr-%d-%s", n, p.Head), n, marker, b.String()),
 		owed.Label(fmt.Sprintf("review-hand-back-label-pr-%d-%s", n, p.Head), n, d.HandBackLabel),
@@ -492,9 +499,10 @@ func (d *Deps) verify(ctx context.Context, in transition.In) (transition.Result,
 }
 
 // forget removes what a review kept while it was on its way to the pull
-// request: the reply, the request, and the note of its last failed post.
+// request: the reply, the request, what it spent, and the note of its last
+// failed post.
 func (d *Deps) forget(jobID string) error {
-	for _, path := range []string{d.pendingPath(jobID), d.askedPath(jobID), d.notePath(jobID)} {
+	for _, path := range []string{d.pendingPath(jobID), d.askedPath(jobID), d.spentPath(jobID), d.notePath(jobID)} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -601,7 +609,7 @@ func already(n int, c github.Comment, head string) owed.Item {
 // It is posted once and never edited or deleted: a send-back cites a finding
 // by its number in the latest review before it (#123), so a review of a new
 // head is a new comment.
-func (d *Deps) body(n int, head string, ref model.Ref, reply opencode.Reply, a request) string {
+func (d *Deps) body(n int, head string, reply opencode.Reply, a request, spent spend.Spent) string {
 	asked := ""
 	switch {
 	case a.Reply != 0 && d.Repo != "":
@@ -611,27 +619,42 @@ func (d *Deps) body(n int, head string, ref model.Ref, reply opencode.Reply, a r
 	case a.Issue != 0:
 		asked = fmt.Sprintf(" Asked for by the implement job for #%d, once CI was green.", a.Issue)
 	}
-	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s\n\n<sub>%s</sub>\n\n</details>\n",
-		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), cost(ref, reply))
+	footer := ""
+	if f := spent.Footer(); f != "" {
+		footer = "\n\n" + f
+	}
+	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
+		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), footer)
 }
 
-// cost is who ran the review and what it cost, sub-agents and all (#99). A
-// sub-agent runs on ref unless its agent is configured with a model of its
-// own (opencode 1.18.31), so a run that started any is named as the total it
-// is rather than as ref's alone. One whose sub-agents' cost was not all read
-// is marked as the floor it is, rather than passed off as the whole.
-func cost(ref model.Ref, reply opencode.Reply) string {
-	who := ref.String()
-	if reply.SubAgents > 0 {
-		who += " and its sub-agents"
+// spend counts a run of ref, failed or not, into what the review has spent
+// since it was claimed, and returns the total (#22). Kept until the review is
+// at rest, so the runs that failed before one wrote it are in its footer.
+//
+// A record that cannot be read or written is logged and costs the review
+// nothing but a footer short of some runs: the review is worth having
+// without it.
+func (d *Deps) spend(jobID string, ref model.Ref, reply opencode.Reply) spend.Spent {
+	var s spend.Spent
+	if err := statefile.Load(d.spentPath(jobID), &s); err != nil && !errors.Is(err, os.ErrNotExist) {
+		d.logf("%s: what the review spent before this run could not be read, so its footer counts from this run: %v", jobID, err)
+		s = spend.Spent{}
 	}
-	switch reply.Unread {
-	case 0:
-		return fmt.Sprintf("%s · $%.4f", who, reply.Cost)
-	case 1:
-		return fmt.Sprintf("%s · ≥ $%.4f, with 1 sub-agent's cost unread", who, reply.Cost)
+	s.Add(ref, reply)
+	if err := statefile.Save(d.spentPath(jobID), s); err != nil {
+		d.logf("%s: what the review spent could not be kept, so a later run's footer will not count it: %v", jobID, err)
 	}
-	return fmt.Sprintf("%s · ≥ $%.4f, with %d sub-agents' cost unread", who, reply.Cost, reply.Unread)
+	return s
+}
+
+func (d *Deps) logf(format string, a ...any) {
+	if d.Log != nil {
+		d.Log(fmt.Sprintf(format, a...))
+	}
+}
+
+func (d *Deps) spentPath(jobID string) string {
+	return filepath.Join(d.StateDir, "spent", jobID+".json")
 }
 
 // pending is a reply written and not yet seen on the tracker. From is the
@@ -640,6 +663,10 @@ type pending struct {
 	Head string `json:"head"`
 	Body string `json:"body"`
 	From int    `json:"from,omitempty"`
+
+	// Spent is what writing it cost, for the hand-back of a review that
+	// never appeared.
+	Spent spend.Spent `json:"spent,omitzero"`
 }
 
 func (d *Deps) pendingPath(jobID string) string {

@@ -7,9 +7,14 @@ import (
 	"testing"
 
 	"github.com/corygyarmathy/afk-agent/internal/implement"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 )
 
 const procedure = "https://github.com/o/skills/blob/main/docs/operators-review.md"
+
+// held is the end of a description opened by sessions that reported no
+// spend: the footer's hidden lines, with nothing between them.
+const held = "\n" + spend.Open + "\n" + spend.Close + "\n"
 
 // describe is a turn that writes the description file and commits the work.
 func describe(text string) func(dir string) error {
@@ -79,7 +84,8 @@ func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T
 		"## Where the ticket didn't decide\n\n" +
 		"- Took the skill's default.\n\n" +
 		"## Not verified\n\n" +
-		"- Needs a host run.\n"
+		"- Needs a host run.\n" +
+		held
 	if body != want {
 		t.Errorf("description:\n%s\nwant:\n%s", body, want)
 	}
@@ -137,7 +143,8 @@ func TestADescriptionWithNoStartHereIsGosPartsOnly(t *testing.T) {
 			body := f.opened()
 			want := implement.PRMarker(7) + "\n" +
 				"Closes #7\n\n" +
-				"> **Your review** ([procedure](" + procedure + ")): read #7 first, then this, then the diff. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n"
+				"> **Your review** ([procedure](" + procedure + ")): read #7 first, then this, then the diff. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n" +
+				held
 			if body != want {
 				t.Errorf("description:\n%s\nwant:\n%s", body, want)
 			}

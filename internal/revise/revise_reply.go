@@ -77,7 +77,7 @@ func (d *Deps) replyOf(comments []github.Comment, n int, p progress) (github.Com
 }
 
 // replyBody is the revision's reply: what Go knows, then what the session
-// said.
+// said, then what the revision spent.
 //
 // Go's part is a compare link from the head the operator read to the head the
 // revision left, and a line when the pull request is now over the size signal.
@@ -94,6 +94,9 @@ func (d *Deps) replyBody(n int, p progress) string {
 	}
 	if s := Sections(p.Reply); s != "" {
 		fmt.Fprintf(&b, "\n%s\n", s)
+	}
+	if footer := p.Spent.Footer(); footer != "" {
+		fmt.Fprintf(&b, "\n%s\n", footer)
 	}
 	return b.String()
 }

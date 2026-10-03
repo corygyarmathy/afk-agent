@@ -41,6 +41,18 @@ type coder struct {
 	// sessions is the sessions opencode has. A run that names one it does
 	// not have fails as opencode does.
 	sessions map[string]bool
+
+	// cost is what each run reports it spent, with a thousand tokens in
+	// and a hundred out, whether its turn failed or not. Zero reports
+	// nothing.
+	cost float64
+}
+
+func (m *coder) spent() opencode.Reply {
+	if m.cost == 0 {
+		return opencode.Reply{}
+	}
+	return opencode.Reply{Cost: m.cost, Tokens: opencode.Tokens{Input: 1000, Output: 100}}
 }
 
 func (m *coder) Run(_ context.Context, req opencode.Request) (opencode.Reply, error) {
@@ -67,10 +79,12 @@ func (m *coder) Run(_ context.Context, req opencode.Request) (opencode.Reply, er
 		turn := m.turns[0]
 		m.turns = m.turns[1:]
 		if err := turn(req.Dir); err != nil {
-			return opencode.Reply{}, err
+			return m.spent(), err
 		}
 	}
-	return opencode.Reply{Text: "Done.", Session: session}, nil
+	reply := m.spent()
+	reply.Text, reply.Session = "Done.", session
+	return reply, nil
 }
 
 func (m *coder) then(turns ...func(dir string) error) { m.turns = append(m.turns, turns...) }

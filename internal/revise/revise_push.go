@@ -146,7 +146,8 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 
 // resensitize brings the pull request's sensitive line to what the push just
 // seen on the remote touches, and leaves the rest of its description as it was
-// (work.Resensitize). The edit is read back here, in pushed: the push has
+// (work.Redescribe), the implement job's spend footer included: the
+// revision's own spend is in its reply. The edit is read back here, in pushed: the push has
 // landed, so it is not read back again, and a push someone else makes after
 // it is not taken for one made during the revision. An edit that never lands
 // is logged and costs the revision nothing.
@@ -164,7 +165,7 @@ func (d *Deps) resensitize(ctx context.Context, in transition.In, p progress) (t
 		pr, err := d.Tracker.PullRequest(ctx, in.Job.Subject.Number)
 		return pr.Body, err == nil, err
 	}
-	effect, ok, err := work.Resensitize(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, logf)
+	effect, ok, err := work.Redescribe(ctx, d.Store, d.Rounds, d.Tracker, reread, pr, p.Branch, p.Head, p.Sensitive, nil, logf)
 	if err != nil {
 		return transition.Result{}, err
 	}

@@ -136,7 +136,8 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		}
 	}
 
-	req := opencode.Request{Model: ref, Dir: ws}
+	// Cost, so the footer counts what the session's sub-agents spent too.
+	req := opencode.Request{Model: ref, Dir: ws, Cost: true}
 	switch {
 	case p.Session == "" || p.Failure == "":
 		// The first run is a fresh session, as the fresh diff deserves; a
@@ -159,8 +160,18 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		}
 		return d.render(prompt, n, p)
 	}, Revising, Deferred, d.logf)
-	if err != nil || !ok {
+	if err != nil {
 		return res, err
+	}
+	p.Spent.Add(ref, reply)
+	if !ok {
+		// A failed run was paid for too. Kept for the footer, and only
+		// logged if it cannot be: the stay is the decision, and the spend
+		// is no part of it (#22).
+		if err := d.save(in.Job.ID, p); err != nil {
+			d.logf("%s: what the failed run spent could not be kept, so the footer will not count it: %v", in.Job.ID, err)
+		}
+		return res, nil
 	}
 
 	p.Session = reply.Session
@@ -276,6 +287,7 @@ func (d *Deps) handBackOn(ctx context.Context, in transition.In, p progress, key
 		Stopped:     "I stopped the revision. " + reason,
 		Detail:      detail,
 		Output:      output,
+		Spent:       p.Spent,
 		Next:        fmt.Sprintf("The pull request stays open: finish the branch by hand, or send it back again with `%s`.", Word),
 		HandingBack: HandingBack,
 		Rest:        Start,

@@ -14,6 +14,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 )
 
@@ -167,6 +168,28 @@ func TestTheReplyIsTheCompareLinkAndTheSessionsSections(t *testing.T) {
 		if strings.Contains(reply.Body, not) {
 			t.Errorf("the reply says %q:\n%s", not, reply.Body)
 		}
+	}
+}
+
+// The reply ends with what the revision spent (#22): a revision is a job of
+// its own, and its spend is not the implement job's.
+func TestTheReplySaysWhatTheRevisionSpent(t *testing.T) {
+	f := setupReplying(t)
+	f.model.cost = 0.01
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"))
+
+	f.finish()
+	for _, r := range f.model.asked {
+		if !r.Cost {
+			t.Errorf("a run on %s did not ask for its sub-agents' cost", r.Model)
+		}
+	}
+	reply, _ := f.reply()
+	if want := "opencode-go/first · 1k in · 100 out · $0.0100</sub>"; !strings.Contains(reply.Body, want) {
+		t.Errorf("the reply does not say %q:\n%s", want, reply.Body)
+	}
+	if !strings.HasSuffix(reply.Body, spend.Close+"\n") {
+		t.Errorf("the footer is not the end of the reply:\n%s", reply.Body)
 	}
 }
 

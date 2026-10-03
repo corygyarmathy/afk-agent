@@ -11,6 +11,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
+	"github.com/corygyarmathy/afk-agent/internal/spend"
 )
 
 // closing is GitHub's closing keywords: the words that link a pull request to
@@ -58,6 +59,7 @@ func closes(desc string, partOf int) []int {
 // description, and the issues it closes, verbatim. The description's sensitive
 // line is left out: the advisory review is unaware of it (#112), so that it
 // reviews a pull request that touches a sensitive path as it does any other.
+// Its spend footer goes too: the review is of the work, not of its price.
 //
 // A first piece is reviewed against the issue it is part of, which is headed
 // as only partly done by it, and beside the issue filed for the rest, headed
@@ -70,7 +72,7 @@ func closes(desc string, partOf int) []int {
 func (d *Deps) spec(ctx context.Context, pr github.PullRequest) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Pull request #%d: %s\n\n", pr.Number, pr.Title)
-	if desc := sensitive.Strip(pr.Body); strings.TrimSpace(desc) == "" {
+	if desc := spend.Strip(sensitive.Strip(pr.Body)); strings.TrimSpace(desc) == "" {
 		b.WriteString("(no description)\n")
 	} else {
 		fmt.Fprintf(&b, "%s\n", desc)
