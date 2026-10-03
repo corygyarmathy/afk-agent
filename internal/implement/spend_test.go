@@ -1,6 +1,7 @@
 package implement_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -74,5 +75,35 @@ func TestAHandBackSaysWhatTheJobSpent(t *testing.T) {
 	}
 	if want := "opencode-go/first · 1k in · 100 out · $0.0100</sub>"; !strings.Contains(posted[0].Body, want) {
 		t.Errorf("the hand-back does not say %q:\n%s", want, posted[0].Body)
+	}
+}
+
+// What a run spent decides nothing (ADR 0001 §11): a tier run out by
+// transient failures stays, moves to the next candidate and defers exactly as
+// it does when no run reports any spend.
+func TestWhatTheJobSpentDecidesNothing(t *testing.T) {
+	trace := func(cost float64) []string {
+		f := setup(t, newTracker())
+		f.model.cost = cost
+		f.model.then(fail(first), fail(second))
+		var steps []string
+		for range 30 {
+			job := f.now()
+			next, ok := f.reg.Next(job.Kind, job.State)
+			if !ok || job.NextRunAt.IsZero() || job.State == implement.Deferred {
+				break
+			}
+			out, err := f.run.Run(context.Background(), next.Name, job.ID)
+			job = f.now()
+			steps = append(steps, fmt.Sprintf("%s -> %s stays=%d attempts=%d at=%s exhausted=%v err=%v", next.Name, job.State, job.Stays, job.Attempts, job.NextRunAt, out.Exhausted, err))
+		}
+		return steps
+	}
+	without, with := trace(0), trace(0.01)
+	if strings.Join(with, "\n") != strings.Join(without, "\n") {
+		t.Errorf("with spend reported, the job went\n%s\nand without\n%s", strings.Join(with, "\n"), strings.Join(without, "\n"))
+	}
+	if !strings.Contains(strings.Join(without, "\n"), "-> "+implement.Deferred) {
+		t.Errorf("the job never deferred:\n%s", strings.Join(without, "\n"))
 	}
 }

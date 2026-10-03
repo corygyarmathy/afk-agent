@@ -209,9 +209,11 @@ func TestStrip(t *testing.T) {
 	}
 }
 
-// Nothing computed here is an input to a decision (ADR 0001 §11): none of the
-// packages that decide whether, where or when work runs - admission, the
-// resolver, the dispatcher, the transition runner - imports this one.
+// Nothing computed here is an input to a decision (ADR 0001 §11), and the
+// packages that decide whether, where or when any job runs - admission, the
+// resolver, the dispatcher, the transition runner - do not import this one.
+// The kinds do, and each has a test that its stays and deferrals are the same
+// with spend reported as without.
 func TestNothingThatDecidesReadsTheSpend(t *testing.T) {
 	const self = "github.com/corygyarmathy/afk-agent/internal/spend"
 	for _, pkg := range []string{"budget", "model", "dispatch", "transition"} {

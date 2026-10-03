@@ -1316,6 +1316,35 @@ func TestAReviewDoesNotCountAnEarlierReviewsRuns(t *testing.T) {
 	}
 }
 
+// What a run spent decides nothing (ADR 0001 §11): a tier run out by
+// transient failures stays, moves to the next candidate and defers exactly as
+// it does when no run reports any spend.
+func TestWhatTheReviewSpentDecidesNothing(t *testing.T) {
+	trace := func(failed opencode.Reply) []string {
+		m := &reviewer{answers: []error{transient(first), transient(second)}, failed: failed}
+		f := setup(t, newTracker(command(1)), m)
+		var steps []string
+		for range 30 {
+			job := f.now()
+			next, ok := f.reg.Next(job.Kind, job.State)
+			if !ok || job.NextRunAt.IsZero() || job.State == review.Deferred {
+				break
+			}
+			out, err := f.run.Run(context.Background(), next.Name, job.ID)
+			job = f.now()
+			steps = append(steps, fmt.Sprintf("%s -> %s stays=%d attempts=%d at=%s exhausted=%v err=%v", next.Name, job.State, job.Stays, job.Attempts, job.NextRunAt, out.Exhausted, err))
+		}
+		return steps
+	}
+	without, with := trace(opencode.Reply{}), trace(opencode.Reply{Cost: 0.002, Tokens: opencode.Tokens{Input: 900, Output: 10}})
+	if strings.Join(with, "\n") != strings.Join(without, "\n") {
+		t.Errorf("with spend reported, the review went\n%s\nand without\n%s", strings.Join(with, "\n"), strings.Join(without, "\n"))
+	}
+	if !strings.Contains(strings.Join(without, "\n"), "-> "+review.Deferred) {
+		t.Errorf("the review never deferred:\n%s", strings.Join(without, "\n"))
+	}
+}
+
 // A review whose runs reported no spend has no footer, rather than a zero
 // one: missing data reads as missing.
 func TestAReviewWithNoSpendReportedHasNoFooter(t *testing.T) {
