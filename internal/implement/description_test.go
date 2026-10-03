@@ -221,18 +221,15 @@ func TestAFixIsNotAskedForTheDescription(t *testing.T) {
 	}
 }
 
-// The prompt asks for the description as a file under the named headings,
-// says how long, and what not to write. It no longer asks for a reply.
+// The prompt asks for the skill's closing report as the description file,
+// rather than as a reply.
 func TestThePromptAsksForTheDescriptionFile(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(commit("ok"))
 	f.opened()
 
 	prompt := f.model.asked[0].Prompt
-	for _, want := range []string{
-		".git/afk-description.md", "## Start here", "## Where the ticket didn't decide", "## Not verified", "## Recipe",
-		"one screen", "file by file", "restate the issue", "tests pass", "self-rating", "hand-checks",
-	} {
+	for _, want := range []string{"closing report", ".git/afk-description.md"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt does not contain %q:\n%s", want, prompt)
 		}

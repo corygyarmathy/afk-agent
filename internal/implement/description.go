@@ -18,7 +18,7 @@ const descriptionFile = "afk-description.md"
 const titleLimit = 256
 
 // sections are the headings of the session's part, in the order the
-// description gives them (#111). The prompt names the same ones.
+// description gives them (#111). The implement skill names the same ones.
 var sections = []string{
 	"Start here",
 	"Where the ticket didn't decide",

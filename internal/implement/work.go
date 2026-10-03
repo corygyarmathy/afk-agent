@@ -34,6 +34,7 @@ var cutText string
 
 var (
 	prompt = template.Must(template.New("implement").Parse(promptText))
+	_      = template.Must(prompt.New("unattended").Parse(work.Unattended))
 	retry  = template.Must(template.New("retry").Parse(retryText))
 
 	// cutPrompt continues the session that wrote the work. The prompt for a
