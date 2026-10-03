@@ -40,9 +40,10 @@ func TestTheDescriptionsFirstLineIsTheTitle(t *testing.T) {
 	}
 }
 
-// The implement skill names the headings of the report the prompt asks for,
-// and the skill is vendored rather than written here, so a re-vendor that
-// renames one would leave that section out of every description.
+// The implement skill names the headings the prompt does. The skill is
+// vendored rather than written here, and it is the copy a host runs when the
+// implemented repository carries none, so a re-vendor that renames one would
+// set the skill against the prompt.
 func TestTheSkillNamesEverySection(t *testing.T) {
 	skill, err := os.ReadFile("../../.agents/skills/implement/SKILL.md")
 	if err != nil {

@@ -4,7 +4,8 @@ That is over the size signal of {{.Signal}}.
 Cut the branch to a first coherent piece: one concern, under the signal, worth
 merging on its own. A refactor the work does not need goes in the rest. Rewrite
 the commits on `{{.Branch}}` so that it holds the piece and nothing else -
-reset it and commit again if you need to - and run the local gate on it. The
+reset it and commit again if you need to, but do not create, switch or delete
+branches - and run the local gate on it. The
 work as it stands is kept on the remote as `{{.Kept}}`, and the issue filed for
 the rest names it, so nothing you reset away is lost.
 

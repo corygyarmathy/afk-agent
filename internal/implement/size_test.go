@@ -150,9 +150,9 @@ func TestThePromptCarriesTheSizeRule(t *testing.T) {
 		name, command string
 		want, not     []string
 	}{
-		{"unattended", "", []string{"one concern, reviewable in one sitting", "400 changed lines", "coherent first piece", "title for the piece"}, []string{"one pull request, whatever its size"}},
+		{"unattended", "", []string{"one concern, reviewable in one sitting", "400 changed lines", "coherent first piece", "title for the piece", "do not write that file"}, []string{"one pull request, whatever its size", "stop early"}},
 		{"commanded", "/implement keep it tidy", []string{"one concern, reviewable in one sitting", "400 changed lines", "title for the piece"}, []string{"one pull request, whatever its size"}},
-		{"one pull request asked for", "/implement do not split this", []string{"one pull request, whatever its size"}, []string{"400 changed lines", "title for the piece"}},
+		{"one pull request asked for", "/implement do not split this", []string{"one pull request, whatever its size", "stop early"}, []string{"400 changed lines", "title for the piece"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newTracker()
