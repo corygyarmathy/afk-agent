@@ -11,7 +11,8 @@ the rest names it, so nothing you reset away is lost.
 
 Then write what is left to `.git/afk-remainder.md`: what the rest of the work
 is, not what the piece does. Make `.git/afk-description.md` describe the piece,
-titled as a first piece.
+with its first line a plain line, not a heading, that gives a title for the
+piece.
 
 This is the only cut. If no coherent first piece exists, leave the branch as it
 is, and the agent hands the work back to a human.

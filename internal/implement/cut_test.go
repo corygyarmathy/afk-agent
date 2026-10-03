@@ -59,7 +59,7 @@ func TestWorkOverTheSizeSignalIsCutToItsFirstPiece(t *testing.T) {
 	if again.Session != "ses_1" {
 		t.Errorf("the cut ran in session %q, want the one that wrote the work", again.Session)
 	}
-	for _, want := range []string{"12 changed lines", "5 of tests", "size signal of 10", "first coherent piece", ".git/afk-remainder.md", "title", "`afk/7-1-whole`", "switch or delete"} {
+	for _, want := range []string{"12 changed lines", "5 of tests", "size signal of 10", "first coherent piece", ".git/afk-remainder.md", "title", "`afk/7-1-whole`", "switch or delete", "not a heading"} {
 		if !strings.Contains(again.Prompt, want) {
 			t.Errorf("the cut's prompt does not say %q:\n%s", want, again.Prompt)
 		}
