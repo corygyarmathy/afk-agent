@@ -371,6 +371,54 @@ func TestFailuresOpencodeReportsAreTransient(t *testing.T) {
 	}
 }
 
+// A run that failed was still paid for as far as it got (#22): the failure
+// comes with what its steps and its sub-agents spent, and with no text, which
+// is not a reply.
+func TestAFailedRunSaysWhatItSpent(t *testing.T) {
+	task := strings.Split(strings.TrimSpace(readFixture(t, "task.jsonl")), "\n")
+	var lines []string
+	for _, l := range task {
+		// The run's first step: some text, the task call, and its cost.
+		lines = append(lines, l)
+		if strings.Contains(l, `"step_finish"`) {
+			break
+		}
+	}
+	lines = append(lines, `{"type":"error","error":{"name":"APIError","data":{"message":"overloaded"}}}`)
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "replay", map[string]string{envStream: stream(t, lines...), envExit: "1", envExports: dir})
+
+	got, err := c.Run(context.Background(), costed(t))
+	var te *opencode.TransientError
+	if !errors.As(err, &te) {
+		t.Fatalf("got %v, want a TransientError", err)
+	}
+	const want = 0.001925676 + 0.001617276
+	if math.Abs(got.Cost-want) > 1e-12 {
+		t.Errorf("cost %v, want %v: the step that finished, and the sub-agent's", got.Cost, want)
+	}
+	if got.Tokens.Input != 12306+10730 || got.SubAgents != 1 || got.Unread != 0 {
+		t.Errorf("tokens %+v over %d sub-agents with %d unread, want the step's and the sub-agent's", got.Tokens, got.SubAgents, got.Unread)
+	}
+	if got.Text != "" || got.Session != "" {
+		t.Errorf("text %q in session %q came with a failure, want only what it spent", got.Text, got.Session)
+	}
+}
+
+// A failure that is not the model's comes with nothing: no run was paid for.
+func TestAFatalFailureSpentNothing(t *testing.T) {
+	c := fake(t, "replay", map[string]string{envStream: stream(t, `{"type":"step_finish","part":{"cost":0.5}}`, "not json"), envExit: "0"})
+
+	got, err := c.Run(context.Background(), request(t))
+	var fe *opencode.FatalError
+	if !errors.As(err, &fe) {
+		t.Fatalf("got %v, want a FatalError", err)
+	}
+	if got != (opencode.Reply{}) {
+		t.Errorf("a fatal failure came with %+v, want nothing", got)
+	}
+}
+
 // Failures another model would meet just the same.
 func TestFailuresThisProcessCanSeeAreFatal(t *testing.T) {
 	notADir := filepath.Join(t.TempDir(), "file")
