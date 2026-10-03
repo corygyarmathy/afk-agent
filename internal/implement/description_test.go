@@ -222,14 +222,19 @@ func TestAFixIsNotAskedForTheDescription(t *testing.T) {
 }
 
 // The prompt asks for the skill's closing report as the description file,
-// rather than as a reply.
+// rather than as a reply, under the headings the agent reads. The skill that
+// runs is whichever one the host finds, at whatever version that is, so the
+// prompt names them rather than trusting it to.
 func TestThePromptAsksForTheDescriptionFile(t *testing.T) {
 	f := setup(t, newTracker())
 	f.model.then(commit("ok"))
 	f.opened()
 
 	prompt := f.model.asked[0].Prompt
-	for _, want := range []string{"closing report", ".git/afk-description.md"} {
+	for _, want := range []string{
+		"closing report", ".git/afk-description.md",
+		"`## Start here`", "`## Where the ticket didn't decide`", "`## Not verified`", "`## Recipe`",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt does not contain %q:\n%s", want, prompt)
 		}
