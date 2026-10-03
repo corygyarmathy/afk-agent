@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/model"
@@ -136,5 +137,44 @@ func TestRedescribeBringsTheFooterUpToDate(t *testing.T) {
 				t.Errorf("the description is\n%s\nwant\n%s", ed.body, c.want)
 			}
 		})
+	}
+}
+
+// A footer that would take the description over GitHub's limit gives way to
+// the sensitive line: the line is still written, and the footer is left as it
+// was.
+func TestTheFooterGivesWayToTheSensitiveLine(t *testing.T) {
+	var was, now spend.Spent
+	first := model.Ref{Provider: "opencode-go", Model: "first"}
+	second := model.Ref{Provider: "opencode-go", Model: "second"}
+	for _, s := range []*spend.Spent{&was, &now} {
+		s.Add(context.Background(), first, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
+	}
+	now.Add(context.Background(), second, nil, opencode.Reply{Cost: 0.02, Tokens: opencode.Tokens{Input: 2}})
+	infra := []sensitive.Touched{{Label: "infra", Files: []string{"infra/main.tf"}}}
+	line := sensitive.Line(infra)
+
+	// Exactly at the limit once the line is in, with the footer as it was.
+	short := utf8.RuneCountInString(described(line, "") + "\n" + was.Held() + "\n")
+	start := strings.Repeat("x", github.BodyLimit-short)
+	opened := described("", start) + "\n" + was.Held() + "\n"
+	want := described(line, start) + "\n" + was.Held() + "\n"
+	if work.OverLimit(want) || !work.OverLimit(described(line, start)+"\n"+now.Footer()+"\n") {
+		t.Fatal("the fixture is not at the limit it means to be")
+	}
+
+	s := storetest.Open(t)
+	ed := &editor{}
+	pr := github.PullRequest{Number: 12, Body: opened}
+	reread := func(context.Context) (string, bool, error) { return opened, true, nil }
+	effect, ok, err := work.Redescribe(context.Background(), s, 3, ed, reread, pr, "feature", "abc123", infra, &now, func(string, ...any) {})
+	if err != nil || !ok {
+		t.Fatalf("Redescribe = %v, %v; want an edit", ok, err)
+	}
+	if err := effect.Do(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ed.body != want {
+		t.Errorf("the description is\n%s\nwant the sensitive line in and the footer as it was", ed.body)
 	}
 }

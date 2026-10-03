@@ -104,7 +104,8 @@ const (
 )
 
 // described is body with its sensitive line brought to touched and, unless
-// spent is nil, its footer to spent, and what that came to.
+// spent is nil, its footer to spent, and what that came to. A footer that would
+// take the description over GitHub's limit is left as it was.
 func described(body string, touched []sensitive.Touched, spent *spend.Spent) (string, change) {
 	was := strings.ReplaceAll(body, "\r\n", "\n")
 	footed := was
@@ -125,6 +126,10 @@ func described(body string, touched []sensitive.Touched, spent *spend.Spent) (st
 	switch {
 	case to == was:
 		return "", alreadyRight
+	case OverLimit(to) && spent != nil:
+		// The footer gives way: it reports, and the sensitive line is what
+		// the reviewer acts on.
+		return described(body, touched, nil)
 	case OverLimit(to):
 		return "", overLimit
 	}
