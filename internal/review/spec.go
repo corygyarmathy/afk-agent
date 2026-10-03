@@ -60,6 +60,8 @@ func closes(desc string, partOf int) []int {
 // line is left out: the advisory review is unaware of it (#112), so that it
 // reviews a pull request that touches a sensitive path as it does any other.
 // Its spend footer goes too: the review is of the work, not of its price.
+// Both are taken out of a description the agent wrote and no other, so a
+// human's description that quotes either is reviewed as they wrote it.
 //
 // A first piece is reviewed against the issue it is part of, which is headed
 // as only partly done by it, and beside the issue filed for the rest, headed
@@ -72,7 +74,11 @@ func closes(desc string, partOf int) []int {
 func (d *Deps) spec(ctx context.Context, pr github.PullRequest) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Pull request #%d: %s\n\n", pr.Number, pr.Title)
-	if desc := spend.Strip(sensitive.Strip(pr.Body)); strings.TrimSpace(desc) == "" {
+	desc := pr.Body
+	if strings.EqualFold(pr.Login, d.Login) {
+		desc = spend.Strip(sensitive.Strip(desc))
+	}
+	if strings.TrimSpace(desc) == "" {
 		b.WriteString("(no description)\n")
 	} else {
 		fmt.Fprintf(&b, "%s\n", desc)
