@@ -423,7 +423,7 @@ func TestTheModelRunsTheSkillWithTheLinkedIssueAsTheSpec(t *testing.T) {
 	}
 
 	prompt := f.model.asked[0].Prompt
-	for _, want := range []string{"reviewing-changes", ".git/afk-pr.diff", ".git/afk-pr-spec.md"} {
+	for _, want := range []string{"reviewing-changes", ".git/afk-pr.diff", ".git/afk-pr-spec.md", "No one is in the session"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt does not name %q:\n%s", want, prompt)
 		}
