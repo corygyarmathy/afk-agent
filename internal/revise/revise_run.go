@@ -31,6 +31,7 @@ var retryText string
 
 var (
 	prompt = template.Must(template.New("revise").Parse(promptText))
+	_      = template.Must(prompt.New("unattended").Parse(work.Unattended))
 	retry  = template.Must(template.New("retry").Parse(retryText))
 )
 

@@ -122,11 +122,11 @@ Its sections, in this order, each left out when it has nothing to say:
 8. **The spend footer**, what the job's runs have cost so far
    ([`spend.md`](spend.md)). The agent's.
 
-- **Sections 4-7 are the session's**, written to `.git/afk-description.md`
-  under those headings. The prompt gives the soft target (an item one or two
-  lines, the whole on one screen) and what not to write: a file-by-file
-  account, a restatement of the issue, "tests pass", a self-rating, or a list
-  of hand-checks. Nothing is capped or cut.
+- **Sections 4-7 are the session's**: the `implement` skill's closing report,
+  which the prompt asks for in `.git/afk-description.md`. The skill names the
+  headings, the soft target (an item one or two lines, the whole on one
+  screen) and what the report leaves to the diff and the checks. Nothing is
+  capped or cut.
 - **The title is the issue's** on a `Closes` pull request, whatever the file
   says. A `Part of` pull request, the first piece of an issue too big for one,
   takes its title from the file's first line when that line is not a heading

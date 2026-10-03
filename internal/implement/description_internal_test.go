@@ -1,6 +1,7 @@
 package implement
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -36,5 +37,20 @@ func TestTheDescriptionsFirstLineIsTheTitle(t *testing.T) {
 				t.Errorf("sessionPart(%q) = %q, %q; want %q, %q", c.text, title, part, c.title, c.part)
 			}
 		})
+	}
+}
+
+// The implement skill names the headings of the report the prompt asks for,
+// and the skill is vendored rather than written here, so a re-vendor that
+// renames one would leave that section out of every description.
+func TestTheSkillNamesEverySection(t *testing.T) {
+	skill, err := os.ReadFile("../../.agents/skills/implement/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sections {
+		if !strings.Contains(string(skill), "`## "+s+"`") {
+			t.Errorf("the implement skill does not name the section %q", s)
+		}
 	}
 }
