@@ -1271,6 +1271,30 @@ func TestAReviewCountsTheRunsThatFailedBeforeIt(t *testing.T) {
 	}
 }
 
+// Each review counts its spend from its claim. Runs that failed for a review
+// that was never written - here the job deferred, then went back to claim -
+// are not in the footer of the next one.
+func TestAReviewDoesNotCountAnEarlierReviewsRuns(t *testing.T) {
+	m := &reviewer{answers: []error{transient(first), transient(second)}, failed: opencode.Reply{Cost: 0.002, Tokens: opencode.Tokens{Input: 900, Output: 10}}}
+	f := setup(t, newTracker(command(1)), m)
+	f.drive()
+	if j := f.now(); j.State != review.Deferred {
+		t.Fatalf("job in %q, want %q", j.State, review.Deferred)
+	}
+
+	f.restart()
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	b := f.tr.byAgent()[0].Body
+	if want := "<br>\nopencode-go/first · 2k in · 300 out · $0.0123</sub>"; !strings.Contains(b, want) {
+		t.Errorf("the review does not say %q:\n%s", want, b)
+	}
+	if strings.Contains(b, "900") || strings.Contains(b, "opencode-go/second") {
+		t.Errorf("the review counts the runs of one that was never written:\n%s", b)
+	}
+}
+
 // A review whose runs reported no spend has no footer, rather than a zero
 // one: missing data reads as missing.
 func TestAReviewWithNoSpendReportedHasNoFooter(t *testing.T) {

@@ -252,6 +252,12 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 			return transition.Result{}, err
 		}
 	}
+	// Each review counts its spend from zero. A record a run left as the job
+	// went back to claim, or came to rest without reaching a post, is a
+	// review that was never written, and its runs are not this one's (#22).
+	if err := os.Remove(d.spentPath(in.Job.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return transition.Result{}, err
+	}
 	return book.Owe(ctx, in, Claiming, owed.Record{Next: Reviewing, Due: true, Items: items})
 }
 
