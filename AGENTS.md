@@ -27,7 +27,7 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
 - [`docs/agents/revise.md`](docs/agents/revise.md) - what `/revise` does, what
   it needs on the host, and how to run one by hand.
 - [`docs/agents/spend.md`](docs/agents/spend.md) - the footer that says what
-  a job's own model runs cost, and why it decides nothing.
+  a job's own model runs cost, and what it is not.
 - [`docs/agents/notification.md`](docs/agents/notification.md) - the
   conditions that reach the operator, and everything that deliberately does not.
 - [`docs/agents/branch-protection.md`](docs/agents/branch-protection.md) - what
