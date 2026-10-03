@@ -405,6 +405,37 @@ func TestAFailedRunSaysWhatItSpent(t *testing.T) {
 	}
 }
 
+// A run killed at its bound was paid for as far as it got, and comes with that.
+// The bound has run out by then, which leaves no time to read its sub-agents'
+// sessions: they are counted as unread, so the footer shows the figure as the
+// floor it is.
+func TestARunKilledAtItsBoundSaysWhatItSpentWithItsSubAgentsUnread(t *testing.T) {
+	task := strings.Split(strings.TrimSpace(readFixture(t, "task.jsonl")), "\n")
+	var lines []string
+	for _, l := range task {
+		// The run's first step: some text, the task call, and its cost.
+		lines = append(lines, l)
+		if strings.Contains(l, `"step_finish"`) {
+			break
+		}
+	}
+	dir := exports(t, map[string]string{"ses_f18153054ffe81GX1wynCfZBXI": readFixture(t, "task-child.json")})
+	c := fake(t, "stall", map[string]string{envStream: stream(t, lines...), envExports: dir})
+	c.Timeout = 500 * time.Millisecond
+
+	got, err := c.Run(context.Background(), costed(t))
+	var te *opencode.TransientError
+	if !errors.As(err, &te) || te.Bound != c.Timeout {
+		t.Fatalf("got %v, want a TransientError for a run killed at its bound", err)
+	}
+	if math.Abs(got.Cost-0.001925676) > 1e-12 || got.Tokens.Input != 12306 {
+		t.Errorf("cost %v over %+v, want the step that finished, and not the sub-agent's", got.Cost, got.Tokens)
+	}
+	if got.SubAgents != 1 || got.Unread != 1 {
+		t.Errorf("%d sub-agents with %d unread, want the one, unread: the bound had run out", got.SubAgents, got.Unread)
+	}
+}
+
 // A failure that is not the model's comes with nothing: no run was paid for.
 func TestAFatalFailureSpentNothing(t *testing.T) {
 	c := fake(t, "replay", map[string]string{envStream: stream(t, `{"type":"step_finish","part":{"cost":0.5}}`, "not json"), envExit: "0"})
@@ -799,6 +830,10 @@ func helper(mode string, args []string) int {
 		startChild(os.Stdout)
 		return replay()
 	case "sleep":
+		time.Sleep(time.Hour)
+		return 0
+	case "stall":
+		replay()
 		time.Sleep(time.Hour)
 		return 0
 	}
