@@ -19,8 +19,7 @@ and {{if .FoldCut}}a fold cut of {{.FoldCut}} changed lines{{else}}its default f
   only partly done, followed by the issue filed for the rest, headed as
   out of scope: review the piece against the part of the issue it takes on,
   and do not report what the rest's issue holds as missing.
-- **No one is in the session.** Where the skill says to ask the user, take the
-  path it gives for when nobody answers, and say which you took.
+{{template "nobody"}}
 
 Your reply is posted for you as one comment on the pull request, inside a
 `<details>` the agent adds. Reply with the skill's report and nothing around

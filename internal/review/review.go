@@ -71,6 +71,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // The review kind's states.
@@ -91,7 +92,10 @@ const Word = "/review"
 //go:embed prompt.md
 var promptText string
 
-var prompt = template.Must(template.New("review").Parse(promptText))
+var (
+	prompt = template.Must(template.New("review").Parse(promptText))
+	_      = template.Must(prompt.New("unattended").Parse(work.Unattended))
+)
 
 // Tracker is what the review reads and writes. *github.Client is one.
 type Tracker interface {
