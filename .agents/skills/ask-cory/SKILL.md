@@ -23,7 +23,7 @@ The route most work travels. You have an idea and want it built.
     - **Yes** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into tracer-bullet tickets, each declaring its **blocking edges**. On a local tracker that's one file per ticket under `.scratch/<feature>/issues/`, worked blockers-first by hand; on a real tracker the edges become native blocking links, so any ticket whose blockers are done can be grabbed: kick off **`/implement`** per ticket, **`/clear`ing context between each one**. Each ticket is self-contained, so the last one's context is disposable.
     - **No** → **`/implement`** right here, in the same context window.
 
-    Either way, **`/implement`** builds each issue by driving **`/tdd`** internally (one red-green slice at a time), commits, and reports the commit it started from. Then **`/clear`** and run **`/reviewing-changes`** against that commit: a four-axis review (Standards, Spec, Correctness, Approach) that has to run in a fresh context, because a reviewer sharing the author's reasoning accepts the author's justifications. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/reviewing-changes`** on its own whenever you want to review a branch or PR against a fixed point.
+    Either way, **`/implement`** builds each issue by driving **`/tdd`** internally (one red-green slice at a time), commits to the branch, and reports for the reviewer. Then **`/clear`** and run **`/reviewing-changes`** on that branch: a four-axis review (Standards, Spec, Correctness, Approach) that has to run in a fresh context, because a reviewer sharing the author's reasoning accepts the author's justifications. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/reviewing-changes`** on its own whenever you want to review a branch or PR against a fixed point.
 
 ### Context hygiene
 
@@ -37,7 +37,7 @@ A starting situation that generates work, then merges onto the main flow.
 
 - **Bugs and requests piling up** → **`/triage`**. It moves issues through triage roles and produces agent-ready issues, which **`/implement`** later picks up.
 
-    Triage is only for issues **you didn't create**: bug reports, incoming feature requests, anything that arrives raw. Tickets that `/to-tickets` produced are already agent-ready, so **don't triage them**.
+    Triage is only for issues **you didn't create**: bug reports, incoming feature requests, anything that arrives raw. Tickets that `/to-tickets` produced already carry their role, so **don't triage them**. Most are `ready-for-agent`. A deliberately large one is `recipe-ticket`: it waits for you to run `/implement` on it, asking for one PR.
 
 - **Something's broken** → **`/diagnosing-bugs`**. For the hard ones: the bug that resists a first glance, the intermittent flake, the regression that crept in between two known-good states. It refuses to theorise until it has a **tight feedback loop** (one command that already goes red on _this_ bug), then fixes with a regression test. Its post-mortem hands off to **`/improve-codebase-architecture`** when the real finding is that there's no good seam to lock the bug down.
 
