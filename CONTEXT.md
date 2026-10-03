@@ -44,6 +44,10 @@ _Avoid_: Outage, incident, streak
 One reading of the account's usage, taken from the provider's own endpoint. Account-wide and dollar-denominated, across independent windows, and it sees interactive use as well as the agent's. Never a number this agent accumulated: the agent observes its budget and does not estimate it.
 _Avoid_: Ledger, estimate, quota, usage tracking
 
+**Job spend**:
+What one job's own model runs cost, a line for each model, as opencode reports it at list price - failed runs included. Reported in a footer on what the job writes; never read back, and never an input to admission, the resolver or a retry. Not a budget observation: it counts one job, and the two are never reconciled.
+_Avoid_: Ledger, usage, metering, bill
+
 **Admission**:
 Whether the worker pool may start a new job now, decided from a budget observation. Not a gate: a gate is a check one job must pass on its way through the state machine, and admission is about work starting at all. It never interrupts a job already in flight, and it never applies to a hand-invocation.
 _Avoid_: Throttle, gate, rate limiting
