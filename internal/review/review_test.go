@@ -527,7 +527,7 @@ func TestTheSpecLeavesOutTheSensitiveLineAndTheSpend(t *testing.T) {
 	top := "<!-- afk:implement issue=7 -->\nCloses #7\n\n"
 	rest := "> **Your review** (x): read #7 first.\n\n## Start here\n\nok:1\n"
 	var spent spend.Spent
-	spent.Add(first, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 1}})
+	spent.Add(context.Background(), first, nil, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 1}})
 	tr.desc = top + "**Sensitive:** job store schema (`store/schema.sql`)\n\n" + rest + "\n" + spent.Footer() + "\n"
 	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."}}
 	f := setup(t, tr, &reviewer{})

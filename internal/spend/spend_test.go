@@ -1,6 +1,7 @@
 package spend_test
 
 import (
+	"context"
 	"encoding/json"
 	"go/parser"
 	"go/token"
@@ -24,9 +25,9 @@ var (
 // runs on one model are summed into its line.
 func TestAJobThatUsedTwoModelsShowsTwoLines(t *testing.T) {
 	var s spend.Spent
-	s.Add(flash, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1000, Output: 200}})
-	s.Add(pro, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 120000, CacheRead: 1080000, Output: 30000, Reasoning: 4500}})
-	s.Add(flash, opencode.Reply{Cost: 0.02, Tokens: opencode.Tokens{Input: 500, Output: 300}})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1000, Output: 200}})
+	s.Add(context.Background(), pro, nil, opencode.Reply{Cost: 0.5, Tokens: opencode.Tokens{Input: 120000, CacheRead: 1080000, Output: 30000, Reasoning: 4500}})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.02, Tokens: opencode.Tokens{Input: 500, Output: 300}})
 
 	got := s.Footer()
 	for _, want := range []string{
@@ -46,7 +47,7 @@ func TestAJobThatUsedTwoModelsShowsTwoLines(t *testing.T) {
 // a reader cannot take it for a bill or for the account's spend.
 func TestTheFooterSaysWhatItIs(t *testing.T) {
 	var s spend.Spent
-	s.Add(flash, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
 	got := s.Footer()
 	for _, want := range []string{"this job's own", "estimated at list price", "not a bill", "not the account's spend"} {
 		if !strings.Contains(got, want) {
@@ -58,11 +59,11 @@ func TestTheFooterSaysWhatItIs(t *testing.T) {
 	}
 }
 
-// A model opencode has no price for reports its tokens and no figure, rather
-// than a zero that reads as free.
+// A model with no price, from opencode or a catalogue, reports its tokens and
+// no figure, rather than a zero that reads as free.
 func TestAnUnpricedModelShowsNoFigure(t *testing.T) {
 	var s spend.Spent
-	s.Add(flash, opencode.Reply{Tokens: opencode.Tokens{Input: 900, Output: 90}})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Tokens: opencode.Tokens{Input: 900, Output: 90}})
 	got := s.Footer()
 	if !strings.Contains(got, "900 in · 90 out · no listed price") {
 		t.Errorf("footer\n%s\ndoes not show the tokens with no price", got)
@@ -72,19 +73,68 @@ func TestAnUnpricedModelShowsNoFigure(t *testing.T) {
 	}
 }
 
+// prices is a catalogue that lists flash at 1 in, 4 out, 0.1 a cached read
+// and nothing for a cache write, per million tokens; lists pro as free; and
+// lists nothing else. It counts its lookups.
+func prices(asked *int) spend.Prices {
+	return func(_ context.Context, ref model.Ref) model.Price {
+		*asked++
+		switch ref {
+		case flash:
+			return model.Price{Input: 1, Output: 4, CacheRead: 0.1, Known: true}
+		case pro:
+			return model.Price{Known: true}
+		}
+		return model.Price{}
+	}
+}
+
+// A run opencode reported no cost for is priced from the catalogue's dearest
+// band, and the footer says which part of the figure that is. A model the
+// catalogue lists as free shows a zero, and one it does not list shows none.
+func TestARunOpencodeDidNotPriceIsPricedFromTheCatalogue(t *testing.T) {
+	other := model.Ref{Provider: "opencode-go", Model: "unlisted"}
+	tokens := opencode.Tokens{Input: 1_000_000, Output: 100_000, Reasoning: 100_000, CacheRead: 1_000_000, CacheWrite: 1_000_000}
+	for _, c := range []struct {
+		name string
+		ref  model.Ref
+		runs []opencode.Reply
+		want string
+	}{
+		{"none priced by opencode", flash, []opencode.Reply{{Tokens: tokens}}, "· $2.9000 at the catalogue's dearest price"},
+		{"some priced by opencode", flash, []opencode.Reply{{Tokens: tokens}, {Cost: 0.5, Tokens: opencode.Tokens{Input: 1}}}, "· $3.4000, $2.9000 of it at the catalogue's dearest price"},
+		{"listed as free", pro, []opencode.Reply{{Tokens: tokens}}, "· $0.0000"},
+		{"not listed", other, []opencode.Reply{{Tokens: tokens}}, "· no listed price"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var s spend.Spent
+			var asked int
+			for _, r := range c.runs {
+				s.Add(context.Background(), c.ref, prices(&asked), r)
+			}
+			if got := s.Footer(); !strings.Contains(got, c.want+"</sub>") {
+				t.Errorf("footer\n%s\ndoes not end its line with %q", got, c.want)
+			}
+			if asked != 1 {
+				t.Errorf("the catalogue was asked %d times, want once: for the run opencode did not price", asked)
+			}
+		})
+	}
+}
+
 // Sub-agents' cost that could not be read makes the figure the floor it is.
 func TestUnreadSubAgentsMakeTheFigureAFloor(t *testing.T) {
 	var s spend.Spent
-	s.Add(pro, opencode.Reply{Cost: 0.25, Tokens: opencode.Tokens{Input: 10}, SubAgents: 3, Unread: 2})
+	s.Add(context.Background(), pro, nil, opencode.Reply{Cost: 0.25, Tokens: opencode.Tokens{Input: 10}, SubAgents: 3, Unread: 2})
 	if want := "opencode-go/deepseek-v4-pro and its sub-agents · 10 in · 0 out · ≥ $0.2500, with 2 sub-agents' cost unread"; !strings.Contains(s.Footer(), want) {
 		t.Errorf("footer\n%s\nhas no line %q", s.Footer(), want)
 	}
 }
 
 // A job whose runs reported nothing has no footer, not a zero one.
-func TestNoUsageIsNoFooter(t *testing.T) {
+func TestNoSpendReportedIsNoFooter(t *testing.T) {
 	var s spend.Spent
-	s.Add(flash, opencode.Reply{Text: "done"})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Text: "done"})
 	if got := s.Footer(); got != "" {
 		t.Errorf("footer %q for runs that reported nothing, want none", got)
 	}
@@ -93,7 +143,7 @@ func TestNoUsageIsNoFooter(t *testing.T) {
 // Spent outlives a transition in a job's state file.
 func TestSpentRoundTrips(t *testing.T) {
 	var s spend.Spent
-	s.Add(pro, opencode.Reply{Cost: 0.1, Tokens: opencode.Tokens{Input: 1, Output: 2, Reasoning: 3, CacheRead: 4, CacheWrite: 5}, SubAgents: 1, Unread: 1})
+	s.Add(context.Background(), pro, nil, opencode.Reply{Cost: 0.1, Tokens: opencode.Tokens{Input: 1, Output: 2, Reasoning: 3, CacheRead: 4, CacheWrite: 5}, SubAgents: 1, Unread: 1})
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -109,8 +159,8 @@ func TestSpentRoundTrips(t *testing.T) {
 
 func TestWith(t *testing.T) {
 	var one, two spend.Spent
-	one.Add(flash, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
-	two.Add(flash, opencode.Reply{Cost: 0.02, Tokens: opencode.Tokens{Input: 2}})
+	one.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
+	two.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.02, Tokens: opencode.Tokens{Input: 2}})
 	body := "intro\n\n## Start here\n\nsome text\n"
 
 	opened := spend.With(body, one.Footer())
@@ -147,7 +197,7 @@ func TestWith(t *testing.T) {
 
 func TestStrip(t *testing.T) {
 	var s spend.Spent
-	s.Add(flash, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
+	s.Add(context.Background(), flash, nil, opencode.Reply{Cost: 0.01, Tokens: opencode.Tokens{Input: 1}})
 	body := "Closes #7.\n\n## Start here\n\nok:1\n"
 	for _, footer := range []string{s.Held(), spend.Spent{}.Held()} {
 		if got := spend.Strip(body + "\n" + footer + "\n"); got != body {

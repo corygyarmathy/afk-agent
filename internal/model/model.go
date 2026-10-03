@@ -103,11 +103,17 @@ func OutputModality(m string) Capability { return Capability(outputPrefix + m) }
 // the provider, and a locally kept ledger answers the wrong question. These
 // numbers exist so that a job kind can decline to send work to a model dearer
 // than it is worth, which is a question about a published price list and not
-// about a balance.
+// about a balance. They also price a job's spend footer for a run opencode
+// reported no cost for, which reports and decides nothing (#22).
 type Price struct {
 	Input     float64
 	Output    float64
 	CacheRead float64
+
+	// CacheWrite is zero for a model that lists no price for writing its
+	// cache. No ceiling is checked against it: it prices a job's spend
+	// footer when opencode reports none (#22).
+	CacheWrite float64
 
 	// Headline is the base band: the prices upstream lists first, and the ones
 	// an operator reading models.dev will see. Carried only so that a rejection
@@ -125,9 +131,10 @@ type Price struct {
 
 // Band is a price per million tokens, as one of a model's advertised bands.
 type Band struct {
-	Input     float64
-	Output    float64
-	CacheRead float64
+	Input      float64
+	Output     float64
+	CacheRead  float64
+	CacheWrite float64
 }
 
 // Limit is the model's context and output window, in tokens.
