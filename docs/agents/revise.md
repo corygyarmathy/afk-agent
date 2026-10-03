@@ -80,6 +80,9 @@ code is
   follow-ups**, owed no answer; **Not verified**. The agent orders them, and
   posts nothing else the session wrote: no narration, no "tests pass", no
   self-rating, and no HTML comment, so no marker.
+- **The spend footer** comes last: what the revision's runs cost, CI fixes
+  and failed runs included ([`spend.md`](spend.md)). A hand-back carries it
+  too.
 - **Posted once, and never edited.** It is read back by a marker naming the
   new head, beside one marker for each command it answers. A later `/revise`
   written before the reply or a hand-back is read as written while the
@@ -132,7 +135,8 @@ The state directory is the directory holding `--store`. Beside the store, a
 revision keeps `send-backs/<job>.json` (the head, branch and points the claim
 took), `workspaces/<job>` and `relays/<job>.git`, `progress/<job>.json` (the
 head read, the head pushed, the session and its reply file, gate attempts,
-fixes and replays, and the size and sensitive paths at the last push),
+fixes and replays, the size and sensitive paths at the last push, and what
+its sessions have spent),
 `owed/<job>.json` (what is being read back) and `notes/<job>.json` (the last
 error of a push, a review request or a label). All of it is disposable. Lost
 before the push, the revision starts over from the send-back, or is handed

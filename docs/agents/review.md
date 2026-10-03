@@ -21,7 +21,8 @@ on the pull request it opened ([`implement.md`](implement.md)): it makes the
 review job due, never comments. The review claims that request with a 👀 on the
 pull request's description, which only counts on a pull request the agent
 wrote, and the review comment says the implement job asked for it. The review
-never gates, never merges, never pushes, and writes no label.
+never gates, never merges, never pushes, and writes no label. The comment ends
+with what its runs cost ([`spend.md`](spend.md)).
 
 The description's 👀 is taken by the first review of the agent's pull request
 that finds it missing. A `/review` during the CI watch takes it before the
@@ -59,7 +60,8 @@ that what the piece leaves for later is not reported as missing. `Part of`
 anywhere else in a description links nothing.
 The description goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
-touches a sensitive path is reviewed as any other. An issue it cannot find is noted there as a gap, not a failure. The prompt,
+touches a sensitive path is reviewed as any other, and without its spend
+footer ([`spend.md`](spend.md)). An issue it cannot find is noted there as a gap, not a failure. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue, and is no issue's first
 piece, is reviewed against its description, and the report says so.
@@ -126,8 +128,9 @@ history and never a second review of a head already reviewed.
 
 The state directory is the directory holding `--store`. Beside the store it
 holds the catalogue cache (`models.json`), a workspace per review while it runs
-(`workspaces/`), and replies written and not yet seen on the pull request
-(`replies/`). All of it is disposable.
+(`workspaces/`), replies written and not yet seen on the pull request
+(`replies/`), and what the review's runs have spent until it is at rest
+(`spent/`). All of it is disposable.
 
 ## The App's permissions
 

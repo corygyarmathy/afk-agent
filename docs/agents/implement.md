@@ -33,7 +33,7 @@ label, when `afk` is given `--eligibility-label`
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
-| `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
+| `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line and the spend footer up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failed and timed-out checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. A cancelled check goes back for the fix but is not logged. [`afk caught`](#what-ci-caught) counts the same catches from GitHub, with the differences listed there. |
 | `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
@@ -119,6 +119,8 @@ Its sections, in this order, each left out when it has nothing to say:
 6. **Not verified**, what the session could not check, and behaviour the diff
    cannot show.
 7. **Recipe**, only on a deliberately large, single-concern change.
+8. **The spend footer**, what the job's runs have cost so far
+   ([`spend.md`](spend.md)). The agent's.
 
 - **Sections 4-7 are the session's**, written to `.git/afk-description.md`
   under those headings. The prompt gives the soft target (an item one or two
@@ -145,8 +147,8 @@ Its sections, in this order, each left out when it has nothing to say:
 - **Written once**, when the pull request opens. A session after that - a CI
   fix, or a new session that takes one over - is not asked for the file.
 - **The sensitive line is recomputed on every push**, the first and each fix
-  after it, so a later push that newly touches a sensitive path adds it. Only
-  that line is edited: the description is read again as the edit is made, so
+  after it, so a later push that newly touches a sensitive path adds it. So is
+  the spend footer, so a fix's run is counted. Only those two are edited: the description is read again as the edit is made, so
   the rest of it - an edit the operator made included - is left as it is, and
   the files are counted rather than listed when listing them would take it
   over GitHub's limit. An edit that never lands after `--effect-rounds`, or
@@ -160,7 +162,8 @@ Its sections, in this order, each left out when it has nothing to say:
   the same diff and kept for the revision's reply
   ([#149](https://github.com/corygyarmathy/afk-agent/issues/149)). A measure
   that fails - the pull request or its base branch could not be read - is a
-  log line: the push goes on, and the sensitive line is left as it is.
+  log line: the push goes on, and the sensitive line is left as it is. A
+  revision's push leaves the spend footer alone: the revision reports its own.
 
 ### Sensitive paths
 
@@ -293,7 +296,7 @@ implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session, the session's description and what it says is left,
 whether the work was cut and the commit kept on `<branch>-whole`, the rest's issue and whether it was blocked, the sensitive line, gate attempts
-and fixes, the last failure, the pushed head), `requests/<job>.json` (which command the job's claim took, for its
+and fixes, the last failure, the pushed head, what its sessions have spent), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
