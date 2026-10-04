@@ -22,6 +22,7 @@ const (
 	repo    = "o/n"
 	handOff = "ready-for-review"
 	head    = "abc123"
+	base    = "fed456"
 )
 
 var now = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
@@ -68,14 +69,14 @@ type tracker struct {
 	lines      map[int64][]github.LineComment
 	reviewEyes map[string][]github.Reaction
 
-	// compares is every diff between two heads read, as base...head.
+	// compares is every diff between two commits read, as base...head.
 	compares []string
 }
 
 func newTracker() *tracker {
 	return &tracker{
 		pr: github.PullRequest{
-			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main",
+			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main", BaseSHA: base,
 			Login: "alice", Labels: []string{handOff, "bug"},
 		},
 		comments:   map[int][]github.Comment{},
@@ -131,10 +132,6 @@ func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, er
 		}
 	}
 	return pr, nil
-}
-
-func (tr *tracker) Diff(context.Context, int) (string, error) {
-	return "", nil
 }
 
 func (tr *tracker) Compare(_ context.Context, base, head string) (string, error) {

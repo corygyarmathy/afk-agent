@@ -101,7 +101,6 @@ var (
 type Tracker interface {
 	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
-	Diff(ctx context.Context, number int) (string, error)
 	Compare(ctx context.Context, base, head string) (string, error)
 
 	// PullRequestReviews and LineComments are how a send-back issued as a
@@ -333,11 +332,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 	since := asked.since(head)
-	if err := d.diffs(ctx, ws, n, since, head); err != nil {
-		return transition.Result{}, err
-	}
 	pr, err := d.Tracker.PullRequest(ctx, n)
 	if err != nil {
+		return transition.Result{}, err
+	}
+	if err := d.diffs(ctx, ws, pr.BaseSHA, since, head); err != nil {
 		return transition.Result{}, err
 	}
 	spec, err := d.spec(ctx, pr)
@@ -414,11 +413,15 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 // beside it as context (#132). The delta is what the operator's second sitting
 // reads, so it is what the review covers.
 //
-// The delta is the tracker's three-dot compare. A revision never rewrites the
-// head its send-back was written against - one that does is handed back
-// (revise_push.go) - so that is the same as the two-dot range.
-func (d *Deps) diffs(ctx context.Context, ws string, n int, since, head string) error {
-	whole, err := d.Tracker.Diff(ctx, n)
+// Both are the tracker's three-dot compare. The whole diff is from the pull
+// request's base, which is the diff the pull request endpoint gives, except
+// that compare's has no cap on the files it covers and the endpoint's refuses
+// past 300 (#176). It is of the head checked out, so it says what the checkout
+// holds. A revision never rewrites the head its send-back was written against
+// - one that does is handed back (revise_push.go) - so the delta is the same as
+// the two-dot range.
+func (d *Deps) diffs(ctx context.Context, ws, base, since, head string) error {
+	whole, err := d.Tracker.Compare(ctx, base, head)
 	if err != nil {
 		return err
 	}

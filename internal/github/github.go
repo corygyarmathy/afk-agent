@@ -99,6 +99,11 @@ type PullRequest struct {
 	// operator may change it, so it is read when it is needed.
 	BaseRef string
 
+	// BaseSHA is the commit on BaseRef the pull request was last compared
+	// against: the three-dot compare from it to HeadSHA is the pull request's
+	// diff.
+	BaseSHA string
+
 	// Login is the author's account.
 	Login string
 
@@ -246,28 +251,16 @@ func (c *Client) OpenPullRequests(ctx context.Context) ([]PullRequest, error) {
 	return prs, nil
 }
 
-// Diff reads a pull request's diff against its base, as unified diff text.
-func (c *Client) Diff(ctx context.Context, number int) (string, error) {
-	u, err := c.repoURL("/pulls/%d", number)
-	if err != nil {
-		return "", err
-	}
-	return c.diff(ctx, u)
-}
-
 // Compare reads the diff from base to head, as unified diff text. It is
 // GitHub's three-dot compare, from the commit the two last had in common:
-// base itself, when head was made on top of it.
+// base itself, when head was made on top of it. From a pull request's BaseSHA
+// to its HeadSHA, it is the pull request's diff, and unlike the pull request
+// endpoint's it has no 300-file cap (#176).
 func (c *Client) Compare(ctx context.Context, base, head string) (string, error) {
 	u, err := c.repoURL("/compare/%s...%s", url.PathEscape(base), url.PathEscape(head))
 	if err != nil {
 		return "", err
 	}
-	return c.diff(ctx, u)
-}
-
-// diff reads u as unified diff text.
-func (c *Client) diff(ctx context.Context, u string) (string, error) {
 	resp, err := c.send(ctx, http.MethodGet, u, mediaDiff, nil)
 	if err != nil {
 		return "", err
@@ -707,6 +700,7 @@ type wirePR struct {
 		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
+		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"base"`
 	User struct {
@@ -720,7 +714,7 @@ type wirePR struct {
 func (w wirePR) pullRequest() PullRequest {
 	pr := PullRequest{
 		Number: w.Number, State: w.State, HeadSHA: w.Head.SHA, HeadRef: w.Head.Ref,
-		BaseRef: w.Base.Ref, Login: w.User.Login, Title: w.Title, Body: w.Body,
+		BaseRef: w.Base.Ref, BaseSHA: w.Base.SHA, Login: w.User.Login, Title: w.Title, Body: w.Body,
 	}
 	if w.Head.Repo != nil {
 		pr.HeadRepo = w.Head.Repo.FullName

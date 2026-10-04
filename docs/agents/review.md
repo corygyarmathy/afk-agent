@@ -72,8 +72,12 @@ A description the agent wrote goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
 touches a sensitive path is reviewed as any other, and without its spend
 footer ([`spend.md`](spend.md)). A description anyone else wrote goes as they
-wrote it. An issue it cannot find is noted there as a gap, not a failure. For a
-revision's delta, `.git/afk-pr.diff` holds the delta alone, read from the
+wrote it. An issue it cannot find is noted there as a gap, not a failure.
+The diff is the tracker's three-dot compare from the pull request's base
+commit, as the pull request reports it, to the head checked out. That is the
+diff the pull request's own endpoint gives, but that endpoint refuses a pull
+request that touches more than 300 files, and compare has no such cap (#176).
+For a revision's delta, `.git/afk-pr.diff` holds the delta alone, read from the
 tracker's compare of the two heads, and the pull request's diff against its
 base goes beside it in `.git/afk-pr-whole.diff`, which the prompt passes as
 the skill's context diff: every sub-agent may read it, and none reviews it.
@@ -183,8 +187,8 @@ installation's grants:
 | the 👀 claim on the implement job's pull request, and reading its reactions | not recorded | not verified |
 | listing open issues and pull requests, which intake reads commands from | not recorded | not verified |
 | listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
-| reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
-| reading the diff between two heads, for a revision's delta | not recorded | not verified |
+| reading a pull request | Pull requests: read, or Contents: read | not verified: served with Metadata only |
+| reading the diff between two commits, for the pull request's diff from its base and a revision's delta | not recorded | not verified |
 | listing a pull request's reviews, and one review's line comments, for a revision's send-back | as for the revise job ([`revise.md`](revise.md)) | as there |
 | reading the issues a pull request closes, or is a first piece of, and a first piece's rest | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
