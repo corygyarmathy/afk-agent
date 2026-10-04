@@ -52,10 +52,14 @@ func (c Count) Over(signal int) bool { return c.Lines > signal }
 //     `linguist-generated`;
 //   - binary files, which have no lines to read.
 //
+// Of what is left, tests are counted apart from the rest: those a convention
+// names (see test), and those a repository marks with the `afk-test`
+// attribute, as `checks/** afk-test` marks a directory of checks.
+//
 // An attribute set false in the head's `.gitattributes` takes back what a
 // convention decided: `vendor/ours/** -linguist-vendored` counts that
-// directory. A rename is counted by what changed in it, so a file only moved
-// counts nothing.
+// directory, and `spec/** -afk-test` counts it as not tests. A rename is
+// counted by what changed in it, so a file only moved counts nothing.
 func Measure(ctx context.Context, dir, base, head string) (Count, error) {
 	files, err := changed(ctx, dir, base, head)
 	if err != nil || len(files) == 0 {
@@ -74,7 +78,7 @@ func Measure(ctx context.Context, dir, base, head string) (Count, error) {
 	var unknown []string
 	for _, f := range files {
 		a := attrs[f.path]
-		if excluded(a.vendored, vendored(f.path)) || excluded(a.generated, lock(f.path)) {
+		if in(a.vendored, vendored(f.path)) || in(a.generated, lock(f.path)) {
 			continue
 		}
 		kept = append(kept, f)
@@ -91,7 +95,7 @@ func Measure(ctx context.Context, dir, base, head string) (Count, error) {
 	for _, f := range kept {
 		switch {
 		case marked[f.path]:
-		case test(f.path):
+		case in(attrs[f.path].test, test(f.path)):
 			c.Tests += f.lines
 		default:
 			c.Lines += f.lines
@@ -155,12 +159,12 @@ func changed(ctx context.Context, dir, base, head string) ([]file, error) {
 
 // attrs is what a file's attributes say about it: "set" or "true" includes it
 // in the category, "unset" or "false" takes it out, and empty says nothing.
-type attrs struct{ vendored, generated string }
+type attrs struct{ vendored, generated, test string }
 
-// attributes reads the linguist attributes of paths from the .gitattributes
-// committed at head, never from a checkout.
+// attributes reads the linguist attributes and afk-test of paths from the
+// .gitattributes committed at head, never from a checkout.
 func attributes(ctx context.Context, dir, head string, paths []string) (map[string]attrs, error) {
-	out, err := git.Output(ctx, dir, git.Isolated, append([]string{"check-attr", "-z", "--source=" + head, "linguist-vendored", "linguist-generated", "--"}, paths...)...)
+	out, err := git.Output(ctx, dir, git.Isolated, append([]string{"check-attr", "-z", "--source=" + head, "linguist-vendored", "linguist-generated", "afk-test", "--"}, paths...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -177,19 +181,22 @@ func attributes(ctx context.Context, dir, head string, paths []string) (map[stri
 			value = ""
 		}
 		a := got[p]
-		if name == "linguist-vendored" {
+		switch name {
+		case "linguist-vendored":
 			a.vendored = value
-		} else {
+		case "linguist-generated":
 			a.generated = value
+		case "afk-test":
+			a.test = value
 		}
 		got[p] = a
 	}
 	return got, nil
 }
 
-// excluded is whether a category leaves a file out: its attribute if it says
-// either way, and the convention if it does not.
-func excluded(attribute string, convention bool) bool {
+// in is whether a file is in a category: its attribute if it says either way,
+// and the convention if it does not.
+func in(attribute string, convention bool) bool {
 	if attribute != "" {
 		return attribute == "set"
 	}
@@ -250,7 +257,10 @@ func lock(p string) bool {
 	return false
 }
 
-// test is whether a path is, by convention, a test or a test's data.
+// test is whether a path is, by convention, a test or a test's data: under a
+// `test`, `tests`, `testdata`, `__tests__` or `spec` directory, a file whose
+// stem ends in `_test`, `.test`, `.spec` or `_spec`, or a Python `test_*.py`.
+// A repository whose tests are named otherwise marks them `afk-test`.
 func test(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
