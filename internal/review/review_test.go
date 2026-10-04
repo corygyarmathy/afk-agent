@@ -76,6 +76,11 @@ type tracker struct {
 
 	// compares is every diff between two heads read, as base...head.
 	compares []string
+
+	// reviews is the submitted pull request reviews, and lines their line
+	// comments by review.
+	reviews []github.PullRequestReview
+	lines   map[int64][]github.LineComment
 }
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -115,6 +120,18 @@ func (tr *tracker) Compare(_ context.Context, base, head string) (string, error)
 	defer tr.mu.Unlock()
 	tr.compares = append(tr.compares, base+"..."+head)
 	return delta, nil
+}
+
+func (tr *tracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.reviews, nil
+}
+
+func (tr *tracker) LineComments(_ context.Context, _ int, review int64) ([]github.LineComment, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.lines[review], nil
 }
 
 func badGateway() error {
@@ -1671,5 +1688,39 @@ func TestAReviewNotOfARevisionIsOfThePullRequest(t *testing.T) {
 				t.Errorf("the reviews are %q, want one whose summary names the head alone", posted)
 			}
 		})
+	}
+}
+
+// A revision's delta is reviewed against the send-back it answers: the
+// operator's commands, verbatim, which the reply names in its hidden lines.
+// The issue the pull request closes follows as background, since the delta
+// takes on the points and not the whole issue.
+func TestARevisionsReviewIsOfItsSendBack(t *testing.T) {
+	point := github.Comment{ID: 30, Login: "operator", Body: "/revise\nRelease is never called."}
+	reply := github.Comment{ID: 40, Login: agent, Body: owed.RevisionReplyMarker(12, head) + "\n" + owed.RevisionReadMarker(read) + "\n" +
+		owed.RevisionMarker(30) + "\n" + owed.PullRequestReviewRevisionMarker(50) + "\n" + owed.PullRequestReviewRevisionMarker(51) + "\n## Points\n\n- done."}
+	tr := newTracker(point, reply)
+	tr.desc = "Closes #7."
+	tr.issues = map[int]github.Issue{7: {Number: 7, Title: "Reserve jobs", Body: "A job is reserved before it runs."}}
+	tr.reviews = []github.PullRequestReview{{ID: 50, Login: "operator", Body: "/revise name the lease"}}
+	tr.lines = map[int64][]github.LineComment{50: {{ID: 60, Body: "This leaks the lease.", Path: "store.go", Line: 3, CommitID: read}}}
+	m := &reviewer{}
+	f := setup(t, tr, m)
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	spec := m.specs[0]
+	order := []string{"/revise\nRelease is never called.", "/revise name the lease", "`store.go` line 3", "This leaks the lease.", "review 51", "could not be read", "Closes #7.", "A job is reserved before it runs."}
+	at := 0
+	for _, want := range order {
+		i := strings.Index(spec[at:], want)
+		if i < 0 {
+			t.Fatalf("the spec does not have %q after what comes before it:\n%s", want, spec)
+		}
+		at += i + len(want)
+	}
+	if p := m.asked[0].Prompt; !strings.Contains(p, "send-back") {
+		t.Errorf("the prompt does not say the spec is the send-back:\n%s", p)
 	}
 }

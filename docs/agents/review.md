@@ -75,8 +75,15 @@ footer ([`spend.md`](spend.md)). A description anyone else wrote goes as they
 wrote it. An issue it cannot find is noted there as a gap, not a failure. For a
 revision's delta, `.git/afk-pr.diff` holds the delta alone, read from the
 tracker's compare of the two heads, and the pull request's diff against its
-base goes beside it in `.git/afk-pr-whole.diff`, which the prompt names as
-context. The skill's fold cut counts the delta like any diff, so a small
+base goes beside it in `.git/afk-pr-whole.diff`, which the prompt passes as
+the skill's context diff. The skill does not take a context diff yet
+([corygyarmathy/skills#19](https://github.com/corygyarmathy/skills/issues/19)),
+so until it does, its sub-agents may not see that file. The spec file starts
+with the send-back the delta answers: each command the reply names, as the
+operator wrote it, with a review's line comments under it, and a command no
+longer there noted as a gap. The description and issues follow it as
+background, since the delta takes on the send-back's points rather than the
+whole issue. The skill's fold cut counts the delta like any diff, so a small
 revision folds Approach into Correctness and runs two sub-agents. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue, and is no issue's first
@@ -179,6 +186,7 @@ installation's grants:
 | listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
 | reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
 | reading the diff between two heads, for a revision's delta | not recorded | not verified |
+| listing a pull request's reviews, and one review's line comments, for a revision's send-back | as for the revise job ([`revise.md`](revise.md)) | as there |
 | reading the issues a pull request closes, or is a first piece of, and a first piece's rest | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
 | reading reactions | Issues: read | not verified: served with Metadata only |

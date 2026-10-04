@@ -103,6 +103,11 @@ type Tracker interface {
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
 	Diff(ctx context.Context, number int) (string, error)
 	Compare(ctx context.Context, base, head string) (string, error)
+
+	// PullRequestReviews and LineComments are how a send-back issued as a
+	// submitted review is read, for the spec of a revision's delta.
+	PullRequestReviews(ctx context.Context, number int) ([]github.PullRequestReview, error)
+	LineComments(ctx context.Context, number int, review int64) ([]github.LineComment, error)
 }
 
 // Model runs one model. opencode.Command is one.
@@ -252,6 +257,7 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		a := request{Reply: reply.ID}
 		if read, ok := owed.RevisionRead(reply.Body); ok {
 			a.Since, a.Of = read, pr.HeadSHA
+			a.Points, a.PullRequestReviews = owed.RevisionCommands(reply.Body)
 		}
 		if asked {
 			a.Issue = d.implementedFor(pr)
@@ -337,6 +343,13 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	spec, err := d.spec(ctx, pr)
 	if err != nil {
 		return transition.Result{}, err
+	}
+	if since != "" {
+		sb, err := d.sendBack(ctx, n, comments, since, asked)
+		if err != nil {
+			return transition.Result{}, err
+		}
+		spec = sb + "\n" + spec
 	}
 	if err := os.WriteFile(filepath.Join(ws, ".git", "afk-pr-spec.md"), []byte(spec), 0o644); err != nil {
 		return transition.Result{}, err
@@ -750,13 +763,17 @@ func (d *Deps) load(jobID string) (pending, error) {
 // implement job's pull request implements, or the reply the revise job left
 // its head with. It lasts until the review is on the pull request.
 //
-// A reply also says the head its send-back was written against, Since. Of is
-// the head the revision left, which the reply was for.
+// A reply also says the head its send-back was written against, Since, and
+// the send-back's comment commands, Points, and review commands,
+// PullRequestReviews. Of is the head the revision left, which the reply was
+// for.
 type request struct {
-	Issue int    `json:"issue,omitempty"`
-	Reply int64  `json:"reply,omitempty"`
-	Since string `json:"since,omitempty"`
-	Of    string `json:"of,omitempty"`
+	Issue              int     `json:"issue,omitempty"`
+	Reply              int64   `json:"reply,omitempty"`
+	Since              string  `json:"since,omitempty"`
+	Of                 string  `json:"of,omitempty"`
+	Points             []int64 `json:"points,omitempty"`
+	PullRequestReviews []int64 `json:"pull_request_reviews,omitempty"`
 }
 
 // since is the head a review of head covers the delta from, or "" for a review

@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
@@ -154,6 +155,26 @@ func RevisionMarker(id int64) string {
 // the submitted pull request review with id.
 func PullRequestReviewRevisionMarker(id int64) string {
 	return fmt.Sprintf("<!-- afk:revision pull-request-review=%d -->", id)
+}
+
+var revisionCommand = regexp.MustCompile(`<!-- afk:revision (comment|pull-request-review)=(\d+) -->`)
+
+// RevisionCommands is the commands a revision's reply or hand-back says it
+// answers, by RevisionMarker and PullRequestReviewRevisionMarker, each in the
+// order body names them.
+func RevisionCommands(body string) (comments, pullRequestReviews []int64) {
+	for _, m := range revisionCommand.FindAllStringSubmatch(body, -1) {
+		id, err := strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		if m[1] == "comment" {
+			comments = append(comments, id)
+		} else {
+			pullRequestReviews = append(pullRequestReviews, id)
+		}
+	}
+	return comments, pullRequestReviews
 }
 
 // RevisionReplyMarker is the hidden line a revision's reply carries: the

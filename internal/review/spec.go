@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -109,6 +110,59 @@ func (d *Deps) spec(ctx context.Context, pr github.PullRequest) (string, error) 
 	for _, n := range closes(pr.Body, issue) {
 		if err := write(n, ""); err != nil {
 			return "", err
+		}
+	}
+	return b.String(), nil
+}
+
+// sendBack is the spec of a revision's delta: the send-back it answers, which
+// the reply names, as the operator wrote each command. The delta takes on the
+// send-back's points, not the whole of the issue the pull request is for, so
+// the send-back is what it is reviewed against and the rest of the spec
+// follows it as background (#132). Comment commands come first, then review
+// commands with their line comments, as the reply names them.
+//
+// A command that is not there any more is written down as a gap, as a missing
+// issue is.
+func (d *Deps) sendBack(ctx context.Context, n int, comments []github.Comment, since string, a request) (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# The send-back the range answers\n\n")
+	fmt.Fprintf(&b, "The range is a revision of pull request #%d at `%s`, for these commands, verbatim. They are its spec. What follows them - the pull request's description, and the issues it closes - is background: what the pull request as a whole is for.\n", n, since)
+	for _, id := range a.Points {
+		fmt.Fprintf(&b, "\n## Command, comment %d\n\n", id)
+		i := slices.IndexFunc(comments, func(c github.Comment) bool { return c.ID == id })
+		if i < 0 {
+			b.WriteString("This command could not be read: it is not on the pull request.\n")
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n", strings.TrimSpace(comments[i].Body))
+	}
+	if len(a.PullRequestReviews) == 0 {
+		return b.String(), nil
+	}
+	reviews, err := d.Tracker.PullRequestReviews(ctx, n)
+	if err != nil {
+		return "", err
+	}
+	for _, id := range a.PullRequestReviews {
+		fmt.Fprintf(&b, "\n## Command, review %d\n\n", id)
+		i := slices.IndexFunc(reviews, func(r github.PullRequestReview) bool { return r.ID == id })
+		if i < 0 {
+			b.WriteString("This command could not be read: it is not on the pull request.\n")
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n", strings.TrimSpace(reviews[i].Body))
+		lines, err := d.Tracker.LineComments(ctx, n, id)
+		if err != nil {
+			return "", err
+		}
+		for _, l := range lines {
+			if l.Line > 0 {
+				fmt.Fprintf(&b, "\n### Line comment on `%s` line %d\n\n", l.Path, l.Line)
+			} else {
+				fmt.Fprintf(&b, "\n### Line comment on `%s`\n\n", l.Path)
+			}
+			fmt.Fprintf(&b, "%s\n", strings.TrimSpace(l.Body))
 		}
 	}
 	return b.String(), nil
