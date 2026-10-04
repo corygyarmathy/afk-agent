@@ -414,10 +414,6 @@ func (dt *diskTracker) RequiredChecks(context.Context, string) ([]string, error)
 	return nil, nil
 }
 
-func (dt *diskTracker) Diff(context.Context, int) (string, error) {
-	return "", nil
-}
-
 func (dt *diskTracker) Compare(context.Context, string, string) (string, error) {
 	return "", nil
 }

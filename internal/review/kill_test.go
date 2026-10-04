@@ -234,8 +234,6 @@ func (ft *fileTracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	return github.Issue{Number: n}, nil
 }
 
-func (ft *fileTracker) Diff(context.Context, int) (string, error) { return diff, nil }
-
 func (ft *fileTracker) Compare(context.Context, string, string) (string, error) { return diff, nil }
 
 func (ft *fileTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,7 @@ const (
 	diff  = "diff --git a/store.go b/store.go\n+func Reserve() {}\n"
 	delta = "diff --git a/store.go b/store.go\n+func Release() {}\n"
 	read  = "fedcba9876543210fedcba9876543210fedcba98"
+	base  = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
 var (
@@ -72,9 +75,8 @@ type tracker struct {
 
 	// diffErr decides what the diff read returns, by call.
 	diffErr func(call int) error
-	diffs   int
 
-	// compares is every diff between two heads read, as base...head.
+	// compares is every diff between two commits read, as base...head.
 	compares []string
 
 	// reviews is the submitted pull request reviews, and lines their line
@@ -90,7 +92,7 @@ func newTracker(comments ...github.Comment) *tracker {
 func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head, Title: "Reserve a job", Body: tr.desc, Login: tr.author}, nil
+	return github.PullRequest{Number: n, State: tr.state, HeadSHA: head, BaseSHA: base, Title: "Reserve a job", Body: tr.desc, Login: tr.author}, nil
 }
 
 func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
@@ -103,22 +105,20 @@ func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
 	return is, nil
 }
 
-func (tr *tracker) Diff(context.Context, int) (string, error) {
+// Compare is the pull request's diff from its base, and the delta from
+// anywhere else.
+func (tr *tracker) Compare(_ context.Context, from, to string) (string, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	tr.diffs++
+	tr.compares = append(tr.compares, from+"..."+to)
 	if tr.diffErr != nil {
-		if err := tr.diffErr(tr.diffs); err != nil {
+		if err := tr.diffErr(len(tr.compares)); err != nil {
 			return "", err
 		}
 	}
-	return diff, nil
-}
-
-func (tr *tracker) Compare(_ context.Context, base, head string) (string, error) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.compares = append(tr.compares, base+"..."+head)
+	if from == base {
+		return diff, nil
+	}
 	return delta, nil
 }
 
@@ -1624,8 +1624,8 @@ func TestARevisionsReviewIsOfItsDelta(t *testing.T) {
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
-	if want := []string{read + "..." + head}; !slices.Equal(tr.compares, want) {
-		t.Errorf("the diffs read between heads were %v, want %v", tr.compares, want)
+	if want := []string{base + "..." + head, read + "..." + head}; !slices.Equal(tr.compares, want) {
+		t.Errorf("the diffs read were %v, want %v", tr.compares, want)
 	}
 	if len(m.diffs) != 1 || m.diffs[0] != delta {
 		t.Errorf("the diff file held %q, want only the delta %q", m.diffs, delta)
@@ -1669,8 +1669,8 @@ func TestAReviewNotOfARevisionIsOfThePullRequest(t *testing.T) {
 			if errs := f.drive(); len(errs) != 0 {
 				t.Fatalf("errors: %v", errs)
 			}
-			if len(tr.compares) != 0 {
-				t.Errorf("a diff between heads was read: %v", tr.compares)
+			if want := []string{base + "..." + head}; !slices.Equal(tr.compares, want) {
+				t.Errorf("the diffs read were %v, want %v: the pull request's alone", tr.compares, want)
 			}
 			if len(m.diffs) != 1 || m.diffs[0] != diff || m.wholes[0] != "" {
 				t.Errorf("the diff file held %q and the whole diff %q, want the pull request's diff alone", m.diffs, m.wholes)
@@ -1688,6 +1688,51 @@ func TestAReviewNotOfARevisionIsOfThePullRequest(t *testing.T) {
 				t.Errorf("the reviews are %q, want one whose summary names the head alone", posted)
 			}
 		})
+	}
+}
+
+// comparing is the fixture tracker with its diffs read by a real client, from
+// a server whose pull request endpoint refuses the diff as GitHub does past
+// 300 files, and whose compare serves it.
+type comparing struct {
+	*tracker
+	client *github.Client
+}
+
+func (c comparing) Compare(ctx context.Context, from, to string) (string, error) {
+	return c.client.Compare(ctx, from, to)
+}
+
+// A pull request too large for the pull request endpoint's diff is reviewed
+// all the same: its diff is read through compare, from its base, which has no
+// cap on the files it covers (#176).
+func TestAPullRequestPastTheDiffCapIsReviewed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/name/pulls/12":
+			w.WriteHeader(http.StatusNotAcceptable)
+			fmt.Fprint(w, `{"message":"Sorry, the diff exceeded the maximum number of files (300).","errors":[{"resource":"PullRequest","field":"diff","code":"too_large"}]}`)
+		case "/repos/owner/name/compare/" + base + "..." + head:
+			fmt.Fprint(w, diff)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	tr := newTracker(command(1))
+	m := &reviewer{}
+	f := setup(t, tr, m)
+	f.deps.Tracker = comparing{tr, &github.Client{Repo: "owner/name", BaseURL: srv.URL}}
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(m.diffs) != 1 || m.diffs[0] != diff {
+		t.Errorf("the diff file held %q, want the pull request's diff %q", m.diffs, diff)
+	}
+	if posted := tr.byAgent(); len(posted) != 1 || !strings.Contains(posted[0].Body, review.Marker(head)) {
+		t.Errorf("agent comments = %+v, want the review of %s", posted, head)
 	}
 }
 

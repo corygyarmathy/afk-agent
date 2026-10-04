@@ -61,7 +61,7 @@ func expect(t *testing.T, w http.ResponseWriter, r *http.Request, method, path, 
 func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github+json") {
-			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"base":{"ref":"main"},"user":{"login":"alice"},"labels":[{"name":"needs-review"}]}`)
+			fmt.Fprint(w, `{"number":12,"state":"open","title":"Reserve a job","body":"Closes #7.","head":{"sha":"abc123","ref":"feature"},"base":{"sha":"fed456","ref":"main"},"user":{"login":"alice"},"labels":[{"name":"needs-review"}]}`)
 		}
 	})
 
@@ -69,7 +69,7 @@ func TestPullRequestReadsItsHeadAndDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", BaseRef: "main", Login: "alice", Labels: []string{"needs-review"}, Title: "Reserve a job", Body: "Closes #7."}
+	want := github.PullRequest{Number: 12, State: "open", HeadSHA: "abc123", HeadRef: "feature", BaseRef: "main", BaseSHA: "fed456", Login: "alice", Labels: []string{"needs-review"}, Title: "Reserve a job", Body: "Closes #7."}
 	if fmt.Sprint(pr) != fmt.Sprint(want) {
 		t.Errorf("got %+v, want %+v", pr, want)
 	}
@@ -151,23 +151,6 @@ func TestAnIssueSaysHowManyOpenIssuesBlockIt(t *testing.T) {
 				t.Errorf("blocked by %d, dependencies read %t; want %d, %t", is.BlockedBy, is.DependenciesRead, tc.blockedBy, tc.read)
 			}
 		})
-	}
-}
-
-func TestDiffAsksForTheDiff(t *testing.T) {
-	const diff = "diff --git a/x b/x\n+added\n"
-	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		if expect(t, w, r, "GET", "/repos/o/n/pulls/12", "application/vnd.github.diff") {
-			fmt.Fprint(w, diff)
-		}
-	})
-
-	got, err := c.Diff(context.Background(), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != diff {
-		t.Errorf("got %q, want %q", got, diff)
 	}
 }
 

@@ -123,7 +123,7 @@ func TestARevisionIsRepliedToThenReviewedThenHandedOff(t *testing.T) {
 	if !strings.Contains(reply.Body, owed.RevisionReadMarker(f.head)) {
 		t.Errorf("the reply does not say the send-back's head %s:\n%s", f.head, reply.Body)
 	}
-	if want := []string{f.head + "..." + at}; !slices.Equal(f.tr.compares, want) {
+	if want := []string{base + "..." + at, f.head + "..." + at}; !slices.Equal(f.tr.compares, want) {
 		t.Errorf("the review read the diffs %v, want %v", f.tr.compares, want)
 	}
 	if want := fmt.Sprintf("Advisory review of <code>%s..%s</code>", git.Short(f.head), git.Short(at)); !strings.Contains(reviews[0].Body, want) {
