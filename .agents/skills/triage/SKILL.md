@@ -30,7 +30,7 @@ Two **category** roles:
 
 Six **state** roles:
 
-- `needs-triage`: maintainer needs to evaluate
+- `needs-triage`: maintainer needs to evaluate, or a ticket from `/to-tickets` waits on its blocker to confirm a premise
 - `needs-info`: waiting on reporter for more information
 - `ready-for-agent`: fully specified, ready for an AFK agent
 - `ready-for-human`: needs human implementation
@@ -62,11 +62,21 @@ Query the issue tracker and present three buckets, oldest first:
 2. **`needs-triage`**: evaluation in progress.
 3. **`needs-info` with reporter activity since the last triage notes**: needs re-evaluation.
 
+Tag each `needs-triage` ticket with a waiting premise (see below) `[waiting]` while any blocker it marks is open, and `[confirm]` once all have closed.
+
 When PRs are in scope, include external PRs in these buckets and tag each line `[PR]` or `[issue]`. Discovery surfaces only _external_ PRs (the tracker config defines who counts as external), so a collaborator's in-flight PR is not triage work. This filter is discovery-only; an explicitly named PR is always triaged regardless of author.
 
 Show counts and a one-line summary per item. Let the maintainer pick.
 
 ## Triage a specific issue or PR
+
+A ticket from `/to-tickets` whose Premises mark one "confirm once <blocker> closes" has a **waiting premise**. It is already specified, so it skips the steps below:
+
+1. While any marked blocker is open, say which and leave the ticket as it is.
+2. Once all have closed, read what each blocker landed and report each marked premise as held, with a permalink to its source, or broken, with what landed instead.
+3. If every premise held, recommend the edit: each mark replaced by its permalink, and the ticket moved to the role it would otherwise carry, `recipe-ticket` if its What to build asks for one `/implement` as one PR, otherwise `ready-for-agent`. Wait for direction, then apply it. A broken premise means the ticket needs rewriting: leave it `needs-triage` and say so.
+
+Every other issue or PR goes through these steps:
 
 1. **Gather context.** Read the full issue or PR (body, comments, labels, author, dates; for a PR, the diff too). Parse any prior triage notes so you don't re-ask resolved questions. Explore the codebase using the project's domain glossary, respecting ADRs in the area. Run two checks against the codebase: (a) **redundancy**: search for an existing implementation of the requested behavior by domain concept (not just the request's wording), and report where you looked. If found, it's an already-implemented `wontfix` (step 5). (b) **prior rejection**: read `.out-of-scope/*.md` and surface any that resembles this request.
 
