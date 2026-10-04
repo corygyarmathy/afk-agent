@@ -7,12 +7,12 @@ decisions it implements are [ADR 0001 §10 and
 
 ## The four conditions
 
-| condition | when it fires | what it says |
-| --- | --- | --- |
-| a job **parked** after a failure | a transition failed and there was no retry left to schedule, or the job is in a state no transition runs from | the job, its state, its attempts, the tracker subject, and the error |
-| a budget window is **spent** | the provider reports a window `rate-limited` while the pool is deciding whether to start a job | the window, its percent, and when it reopens |
-| a job's model tier **stays exhausted** | the job's tier has run out `--tier-notify-after` times in one episode | the job, the tracker subject, how many times since when, what the tier said, what the last candidate's run failed with, and when it tries again |
-| work is admitted under a **waiver** | the first job the pool starts through a spent window the operator waived | the window, and when the waiver lapses |
+| condition | when it fires | what it says | what it links to |
+| --- | --- | --- | --- |
+| a job **parked** after a failure | a transition failed and there was no retry left to schedule, or the job is in a state no transition runs from | the job, its state, its attempts, the tracker subject, and the error | the subject |
+| a budget window is **spent** | the provider reports a window `rate-limited` while the pool is deciding whether to start a job | the window, its percent, and when it reopens | nothing |
+| a job's model tier **stays exhausted** | the job's tier has run out `--tier-notify-after` times in one episode | the job, the tracker subject, how many times since when, what the tier said, what the last candidate's run failed with, and when it tries again | the subject |
+| work is admitted under a **waiver** | the first job the pool starts through a spent window the operator waived | the window, and when the waiver lapses | nothing |
 
 Nothing else notifies. Not a pull request ready for review, not a job handed
 back, not a red CI run, not a retry still in flight, not a window approaching
@@ -27,6 +27,17 @@ anyway is [ADR 0001
 before waiving is [`budget.md`](budget.md#waiving-a-window).
 
 The happy path publishes nothing at all.
+
+## Links
+
+A notification about a job links to its subject on GitHub: the issue or the
+pull request, in `--repo`. The link is a line of its own in the message,
+ahead of any error so the length limit never cuts it, and it is ntfy's click
+action, so tapping the notification opens it. The subject is named in the text
+as well (`on pr #12`), for wherever the link is not rendered. Without `--repo`
+there is no link, and the subject is only named.
+
+A spent budget and a waiver are about a window, not a job, and link to nothing.
 
 ## What is not a notification
 

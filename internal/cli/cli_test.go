@@ -721,6 +721,24 @@ func TestTheNotifyURLComesFromTheEnvironmentToo(t *testing.T) {
 	}
 }
 
+// The notifier links into the tracker's repository (#169), which is the one
+// already configured rather than a parameter of its own.
+func TestTheNotifierLinksIntoTheConfiguredRepository(t *testing.T) {
+	t.Setenv("AFK_NOTIFY_URL", "https://ntfy.example/afk")
+	t.Setenv("AFK_NOTIFY_KEY", "")
+	t.Setenv("AFK_TIER_NOTIFY_AFTER", "3")
+	t.Setenv("AFK_REPO", "owner/from-the-unit")
+
+	var p params
+	n, err := p.notifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Repo != "owner/from-the-unit" {
+		t.Fatalf("Repo = %q, want the repository from AFK_REPO", n.Repo)
+	}
+}
+
 // How many times a tier is exhausted before the operator hears is the
 // deployment's call (#76), so a channel is refused without one rather than
 // given a number chosen here.

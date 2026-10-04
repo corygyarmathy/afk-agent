@@ -655,10 +655,10 @@ type published struct {
 	sent []string
 }
 
-func (p *published) post(_ context.Context, title, _, body string) error {
+func (p *published) post(_ context.Context, m notify.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.sent = append(p.sent, title+"\n"+body)
+	p.sent = append(p.sent, m.Title+"\n"+m.Body)
 	return nil
 }
 

@@ -72,11 +72,17 @@ type Notifier struct {
 	// without saying what it is.
 	Token string
 
+	// Repo is the tracker's repository, owner/name, which a notification about
+	// a job links its subject in. Empty means no link: the subject is still
+	// spelled out, and `afk work` with no repository has no tracker for one to
+	// point at.
+	Repo string
+
 	// Post publishes one message. Nil means HTTP to URL with Token. A field
 	// rather than a package-level function because "the tests do not reach the
 	// network" is enforced by scripts/offline-test.sh (AGENTS.md), and a seam
 	// that has to be honoured is better than one that has to be remembered.
-	Post func(ctx context.Context, title, tag, body string) error
+	Post func(ctx context.Context, m Message) error
 
 	// TierAfter is how many times one episode of an exhausted tier defers a
 	// job before the operator is told: see TierExhausted. A parameter, and at
@@ -106,6 +112,21 @@ type Notifier struct {
 	sent map[string]struct{}
 }
 
+// Message is one notification, as Post publishes it.
+type Message struct {
+	Title string
+	Tag   string
+	Body  string
+
+	// Click is where tapping the notification goes, or empty for nowhere in
+	// particular. A notification about a job carries its subject's link here
+	// and in Body both: here because a tap is what an operator does with a
+	// notification on a phone, and in Body because not every client honours a
+	// click action, and the message read anywhere else - ntfy's web view, an
+	// email forward - should still say where the work is.
+	Click string
+}
+
 // Parked reports a job that has come to rest and will not move without an
 // operator (CONTEXT.md: park). cause is what failed, or nil for a job parked
 // with nothing wrong - a state no transition leads out of.
@@ -119,17 +140,16 @@ func (n *Notifier) Parked(ctx context.Context, job store.Job, cause error) error
 	// the key changes as soon as the job has got anywhere.
 	key := fmt.Sprintf("parked:%s:%s:%d", job.ID, job.State, job.Attempts)
 
+	link := n.link(job.Subject)
 	body := fmt.Sprintf("%s is parked in state %q after %d attempt(s), on %s #%d.",
 		job.ID, job.State, job.Attempts, job.Subject.Type, job.Subject.Number)
+	body += paragraph(link)
 	if cause != nil {
 		body += "\n\n" + cause.Error()
 	}
-	// No tracker link: this agent does not yet know which repository it is
-	// working (#3), and a link built from a guess is worse than the subject
-	// spelled out. Add it here when the repository becomes configuration.
 	body += "\n\nIt stays there until an operator moves it; nothing will pick it up."
 
-	return n.send(ctx, key, "afk-agent parked "+job.ID, tagParked, body)
+	return n.send(ctx, key, Message{Title: "afk-agent parked " + job.ID, Tag: tagParked, Body: body, Click: link})
 }
 
 // Exhausted reports a budget window the provider says is spent (ADR 0001 §11).
@@ -164,7 +184,7 @@ func (n *Notifier) Exhausted(ctx context.Context, w budget.Window) error {
 	}
 	body += "\nWork already in flight is untouched, and `afk run` still works."
 
-	return n.send(ctx, key, "afk-agent: the "+w.Name+" budget is spent", tagExhausted, body)
+	return n.send(ctx, key, Message{Title: "afk-agent: the " + w.Name + " budget is spent", Tag: tagExhausted, Body: body})
 }
 
 // Waived reports work starting through a spent window the operator waived (ADR
@@ -188,7 +208,7 @@ func (n *Notifier) Waived(ctx context.Context, wa budget.Waiver) error {
 	body += "\n\nThis needs no action. A spent " + wa.Window + " window defers work again once the waiver lapses."
 	body += "\n\nWork already in flight is untouched, and `afk run` still works."
 
-	return n.send(ctx, key, "afk-agent: the "+wa.Window+" budget is waived", tagWaived, body)
+	return n.send(ctx, key, Message{Title: "afk-agent: the " + wa.Window + " budget is waived", Tag: tagWaived, Body: body})
 }
 
 // TierExhausted reports a job whose model tier has run out and keeps running
@@ -223,8 +243,10 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 	// location, and must not be another occurrence.
 	key := fmt.Sprintf("tier:%s:%d", job.ID, ep.Since.UnixNano())
 
+	link := n.link(job.Subject)
 	body := fmt.Sprintf("%s, on %s #%d, has run out of models %d times since %s.",
 		job.ID, job.Subject.Type, job.Subject.Number, ep.Times, ep.Since.UTC().Format(time.RFC3339))
+	body += paragraph(link)
 	body += "\n\nIt is deferred"
 	if !job.NextRunAt.IsZero() {
 		body += " until " + job.NextRunAt.Format(time.RFC3339)
@@ -249,7 +271,7 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 		body += "\n\n" + cause.Error()
 	}
 
-	if err := n.send(ctx, key, "afk-agent: "+job.ID+" cannot reach a model", tagTier, body); err != nil {
+	if err := n.send(ctx, key, Message{Title: "afk-agent: " + job.ID + " cannot reach a model", Tag: tagTier, Body: body, Click: link}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -274,7 +296,7 @@ func (n *Notifier) TierExhausted(ctx context.Context, job store.Job, ep store.Ep
 // The lock is not held across the publish. A notification is best effort and
 // the server is on the other side of a network; a worker that has nothing to
 // report should not wait behind one that is talking to it.
-func (n *Notifier) send(ctx context.Context, key, title, tag, body string) error {
+func (n *Notifier) send(ctx context.Context, key string, m Message) error {
 	if !n.reserve(key) {
 		return nil
 	}
@@ -283,11 +305,41 @@ func (n *Notifier) send(ctx context.Context, key, title, tag, body string) error
 	if post == nil {
 		post = n.publish
 	}
-	if err := post(ctx, clean(title), tag, truncate(body)); err != nil {
+	title := m.Title
+	m.Title, m.Click, m.Body = clean(m.Title), clean(m.Click), truncate(m.Body)
+	if err := post(ctx, m); err != nil {
 		n.give(key)
 		return fmt.Errorf("publishing %q: %w", title, err)
 	}
 	return nil
+}
+
+// link is a subject's page on the tracker, or empty with no repository.
+//
+// Built rather than read back from GitHub: the repository is configuration,
+// the subject's type and number are the job's, and the URL is GitHub's, which
+// is the one tracker this agent works. A notification is the last place to
+// spend a request that can fail.
+func (n *Notifier) link(s store.Subject) string {
+	if n.Repo == "" {
+		return ""
+	}
+	path := "issues"
+	if s.Type == store.SubjectPR {
+		path = "pull"
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/%d", n.Repo, path, s.Number)
+}
+
+// paragraph is s as a paragraph of its own, or nothing for an empty s. A link
+// is on a line by itself so a client that linkifies the body does not take the
+// sentence's full stop with it, and before the cause so the length limit,
+// which cuts the end, never reaches it.
+func paragraph(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "\n\n" + s
 }
 
 // reserve claims this occurrence, reporting false if it is already claimed.
@@ -312,11 +364,15 @@ func (n *Notifier) give(key string) {
 }
 
 // publish is the default Post: an ntfy publish, with the bearer token.
-func (n *Notifier) publish(ctx context.Context, title, tag, body string) error {
-	return fetch.Post(ctx, n.URL, n.Token, http.Header{
-		"Title": {title},
-		"Tags":  {tag},
-	}, []byte(body))
+func (n *Notifier) publish(ctx context.Context, m Message) error {
+	h := http.Header{
+		"Title": {m.Title},
+		"Tags":  {m.Tag},
+	}
+	if m.Click != "" {
+		h.Set("Click", m.Click)
+	}
+	return fetch.Post(ctx, n.URL, n.Token, h, []byte(m.Body))
 }
 
 // clean makes a string safe to carry in a header. A newline in a title is a

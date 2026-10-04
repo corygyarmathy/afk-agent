@@ -642,7 +642,10 @@ func (p *params) notifier() (*notify.Notifier, error) {
 			return nil, err
 		}
 	}
-	return &notify.Notifier{URL: url, Token: token, TierAfter: tierAfter}, nil
+	// The repository is the tracker's, and is validated by tracker(): a
+	// notification links into the repository the work came from, and there is
+	// no other one it could name.
+	return &notify.Notifier{URL: url, Token: token, TierAfter: tierAfter, Repo: optional(p.repo, "AFK_REPO")}, nil
 }
 
 // requireBudgetAge is the check a caller that reuses an observation across jobs
