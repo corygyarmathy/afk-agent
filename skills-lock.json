@@ -4,7 +4,7 @@
     "repo": "corygyarmathy/skills",
     "url": "https://github.com/corygyarmathy/skills.git",
     "prefix": "skills",
-    "rev": "7dd8d8f4a1b068233882351893e82c3e8ffc9d2f"
+    "rev": "647a660f0a4f85d72e038ab77a01d938b3312956"
   },
   "vendorPath": ".agents/skills",
   "linkPath": ".claude/skills",
@@ -63,7 +63,7 @@
     },
     "reviewing-changes": {
       "path": "skills/reviewing-changes",
-      "hash": "d718e49a63689479ccc999565abcec113289915dad7087418e8ea8a1e0aad939"
+      "hash": "6241ae63f68bb5c15fd8e397b0e211a242f327b9e34e6162834914682c1d39a6"
     },
     "setup-cory-gyarmathy-skills": {
       "path": "skills/setup-cory-gyarmathy-skills",

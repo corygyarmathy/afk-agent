@@ -3,7 +3,7 @@ name: reviewing-changes
 description: 'Review the changes since a fixed point (commit, branch, tag, or merge-base) on four axes: Standards, Spec, Correctness, and Approach, in parallel sub-agents, reported side by side. Use when the user wants a branch, a PR, or work in progress reviewed, or asks to "review since X".'
 ---
 
-Four-axis review of the diff between `HEAD` and a fixed point:
+Four-axis review of the diff between `HEAD` and a fixed point, optionally read against a wider context diff (see below):
 
 - **Standards**: does the code conform to this repo's documented coding standards?
 - **Spec**: does the code faithfully implement the originating issue / spec?
@@ -15,6 +15,8 @@ The axes run as **parallel sub-agents** with fresh contexts, one per axis except
 The review takes a **severity floor** as input, one of the three severities below: `should-fix` by default, `blocker` or `consider` when a caller asks for it. Nothing below the floor is produced, so every finding in the report is worth reading.
 
 It also takes a **fold cut**, a count of changed lines, default `50`. A diff below the cut is small enough to fold Approach into Correctness (step 4).
+
+A caller may also give a **context diff**: a wider diff the change sits in, such as a whole pull request around the revision under review, as a file or a range, a range read as `git diff <base>...<head>` like step 1's diff. It is for reading, not for review: it tells the reviewers which surrounding code the wider change added and which was already on the base. Step 1 checks it, and steps 4 and 5 say how the fold cut and each axis treat it.
 
 This repo's issue tracker is described in `docs/agents/issue-tracker.md`. If that file is missing and a spec has to be fetched from a tracker, say so rather than guessing at a `gh` invocation - a review that cites the wrong tracker is worse than one that admits it has no spec.
 
@@ -38,6 +40,8 @@ Before going further, confirm the fixed point resolves (`git rev-parse <fixed-po
 
 A caller whose checkout has no base may give a diff file instead of a fixed point. The file is then the diff wherever a step uses the diff command, and there is no commit list.
 
+A context diff, when one was given, is checked here too: its file exists and is non-empty, or its range resolves. If it fails, review without it and say in the report that it was given but not read.
+
 ### 2. Identify the spec source
 
 Look for the originating spec, in this order:
@@ -59,7 +63,7 @@ At a `consider` floor, the Standards axis also carries the **smell baseline** in
 Two folds, each decided by an input. Nothing else adds a sub-agent: not a large diff, and not a sensitive path.
 
 - **Standards folds into Spec above a `consider` floor.** At `should-fix` or `blocker`, the Spec sub-agent also gets the Standards brief and the standards-source files, and its brief adds: "Report these under `## Standards`, apart from your `## Spec` findings." At a `consider` floor, or with no spec, Standards runs in its own sub-agent.
-- **Approach folds into Correctness below the fold cut.** Count the changed lines: non-test lines only, leaving out generated, vendored and lock files. Below the cut, no Approach sub-agent runs; the Correctness sub-agent also gets Approach's step 2, **Blast radius**, verbatim, and its brief adds: "Report these under `## Approach`, apart from your `## Correctness` findings."
+- **Approach folds into Correctness below the fold cut.** Count the diff's changed lines, never the context diff's: non-test lines only, leaving out generated, vendored and lock files. Below the cut, no Approach sub-agent runs; the Correctness sub-agent also gets Approach's step 2, **Blast radius**, verbatim, and its brief adds: "Report these under `## Approach`, apart from your `## Correctness` findings."
 
 ### 5. Spawn the sub-agents in parallel
 
@@ -68,6 +72,7 @@ Where the harness runs no sub-agents, work each axis in turn from the same input
 Every sub-agent prompt carries the same inputs and nothing else:
 
 - The diff command and commit list, or the diff file's path.
+- The context diff, when one was given: its path, or for a range the command `git diff <base>...<head>`, with this line: "The context diff is a wider diff this change sits in, for reading, not for review. Read it where judging a hunk needs it, and anchor every finding in a change the diff makes."
 - The spec, pasted verbatim or as a path to it, never as your summary of it.
 - The severity floor, with the severity definitions above.
 - The inputs specific to its axis, below.
@@ -84,14 +89,14 @@ Standards is checklist matching: when it runs in its own sub-agent, run it on a 
 
 At a `consider` floor, paste [`SMELLS.md`](SMELLS.md) in full as well (the sub-agent has no other access to it), and add to the brief: "Also report any baseline smell you spot, under the baseline's rules: name it and quote the hunk."
 
-**Spec** brief: "Report (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding." Skipped when there is no spec.
+**Spec** brief: "Report (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. When there is a context diff, judge (a) against the diff and the context diff together: a requirement the context diff implements is not missing, and one missing from both is a finding even though no change in the diff anchors it. (b) and (c) stay anchored in the diff." Skipped when there is no spec.
 
 **Correctness** brief: "Find the ways this change produces wrong output, crashes, loses data, or breaks an existing caller: edge cases, error paths, concurrency, resource cleanup, and the invariants the surrounding code relies on. Every finding states a **failure scenario**: the inputs and state, and the wrong result they produce. A suspicion you cannot turn into a failure scenario is listed separately as a question." Folded, see step 4.
 
 **Approach** brief: "Judge the approach the change takes, not its details. Work in this order:
 
 1. **Design it twice.** Before reading the diff, read the spec and the code it touches, and sketch in a few lines how you would have done it. Then read the diff and compare. Where your sketch is simpler, that is a finding.
-2. **Blast radius.** Work out every interface, type, schema, config key, or behaviour the diff changes, and find their callers and dependents across the repo. Report each one the change affects but didn't update, and existing code the change duplicates instead of reusing.
+2. **Blast radius.** Work out every interface, type, schema, config key, or behaviour the diff changes, and find their callers and dependents across the repo, and in the context diff when there is one. Report each one the change affects but didn't update, and existing code the change duplicates instead of reusing.
 3. **Pre-mortem.** Assume that six months from now this change caused a problem. Find the most likely one: migration, reversibility, performance at scale, operability, security, or a future change it makes harder. Report it as a finding when it clears the floor.
 4. **Spec pushback.** Report where the code shows the spec itself was wrong, unnecessary, or missing a case. With no spec, list as questions whether the change should exist at all, and whether a smaller change solves the same problem."
 

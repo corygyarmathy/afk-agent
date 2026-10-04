@@ -76,9 +76,8 @@ wrote it. An issue it cannot find is noted there as a gap, not a failure. For a
 revision's delta, `.git/afk-pr.diff` holds the delta alone, read from the
 tracker's compare of the two heads, and the pull request's diff against its
 base goes beside it in `.git/afk-pr-whole.diff`, which the prompt passes as
-the skill's context diff. The skill does not take a context diff yet
-([corygyarmathy/skills#19](https://github.com/corygyarmathy/skills/issues/19)),
-so until it does, its sub-agents may not see that file. The spec file starts
+the skill's context diff: every sub-agent may read it, and none reviews it.
+The spec file starts
 with the send-back the delta answers: each command the reply names, as the
 operator wrote it, with a review's line comments under it, and a command no
 longer there noted as a gap. The description and issues follow it as
