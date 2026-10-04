@@ -67,6 +67,9 @@ type tracker struct {
 	reviews    []github.PullRequestReview
 	lines      map[int64][]github.LineComment
 	reviewEyes map[string][]github.Reaction
+
+	// compares is every diff between two heads read, as base...head.
+	compares []string
 }
 
 func newTracker() *tracker {
@@ -131,6 +134,11 @@ func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, er
 }
 
 func (tr *tracker) Diff(context.Context, int) (string, error) {
+	return "", nil
+}
+
+func (tr *tracker) Compare(_ context.Context, base, head string) (string, error) {
+	tr.compares = append(tr.compares, base+"..."+head)
 	return "", nil
 }
 

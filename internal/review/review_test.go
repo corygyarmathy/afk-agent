@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,8 @@ const (
 	agent = "afk-bot"
 	head  = "0123456789abcdef0123456789abcdef01234567"
 	diff  = "diff --git a/store.go b/store.go\n+func Reserve() {}\n"
+	delta = "diff --git a/store.go b/store.go\n+func Release() {}\n"
+	read  = "fedcba9876543210fedcba9876543210fedcba98"
 )
 
 var (
@@ -70,6 +73,9 @@ type tracker struct {
 	// diffErr decides what the diff read returns, by call.
 	diffErr func(call int) error
 	diffs   int
+
+	// compares is every diff between two heads read, as base...head.
+	compares []string
 }
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -102,6 +108,13 @@ func (tr *tracker) Diff(context.Context, int) (string, error) {
 		}
 	}
 	return diff, nil
+}
+
+func (tr *tracker) Compare(_ context.Context, base, head string) (string, error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.compares = append(tr.compares, base+"..."+head)
+	return delta, nil
 }
 
 func badGateway() error {
@@ -229,6 +242,7 @@ type reviewer struct {
 	silent bool
 	asked  []opencode.Request
 	diffs  []string
+	wholes []string
 	specs  []string
 }
 
@@ -236,6 +250,8 @@ func (m *reviewer) Run(_ context.Context, req opencode.Request) (opencode.Reply,
 	m.asked = append(m.asked, req)
 	b, _ := os.ReadFile(filepath.Join(req.Dir, ".git", "afk-pr.diff"))
 	m.diffs = append(m.diffs, string(b))
+	b, _ = os.ReadFile(filepath.Join(req.Dir, ".git", "afk-pr-whole.diff"))
+	m.wholes = append(m.wholes, string(b))
 	b, _ = os.ReadFile(filepath.Join(req.Dir, ".git", "afk-pr-spec.md"))
 	m.specs = append(m.specs, string(b))
 	var err error
@@ -1572,5 +1588,88 @@ func TestADeferredReviewClaimsTheReplyLeftWhileItWaited(t *testing.T) {
 	}
 	if len(posted) != 1 || !strings.Contains(posted[0].Body, "[its reply](https://github.com/owner/name/pull/12#issuecomment-40)") {
 		t.Fatalf("reviews = %+v, want one linking the reply", posted)
+	}
+}
+
+// The review a revision asks for covers what the operator's second sitting
+// reads: the delta from the head the send-back was written against, which the
+// reply says, to the head the revision left (#132). The diff file holds the
+// delta and nothing else, the whole pull request's diff is beside it as
+// context, and the summary names the range. The earlier review is left as it
+// was: this one is a new comment, numbered from 1 again.
+func TestARevisionsReviewIsOfItsDelta(t *testing.T) {
+	earlier := github.Comment{ID: 20, Login: agent, Body: "<details>\n<summary>Advisory review of <code>fedcba9</code>.</summary>\n\n" + review.Marker(read) + "\n1. should-fix\n</details>\n"}
+	reply := github.Comment{ID: 40, Login: agent, Body: owed.RevisionReplyMarker(12, head) + "\n" + owed.RevisionReadMarker(read) + "\n## Points\n\n- done."}
+	tr := newTracker(earlier, reply)
+	m := &reviewer{replies: []string{"## Correctness\n\n1. should-fix `store.go:1`: Release is untested."}}
+	f := setup(t, tr, m)
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if want := []string{read + "..." + head}; !slices.Equal(tr.compares, want) {
+		t.Errorf("the diffs read between heads were %v, want %v", tr.compares, want)
+	}
+	if len(m.diffs) != 1 || m.diffs[0] != delta {
+		t.Errorf("the diff file held %q, want only the delta %q", m.diffs, delta)
+	}
+	if len(m.wholes) != 1 || m.wholes[0] != diff {
+		t.Errorf("the whole pull request's diff was %q, want %q beside the delta", m.wholes, diff)
+	}
+	if p := m.asked[0].Prompt; !strings.Contains(p, read+".."+head) || !strings.Contains(p, ".git/afk-pr-whole.diff") {
+		t.Errorf("the prompt does not name the range and the whole diff:\n%s", p)
+	}
+
+	got := tr.byAgent()
+	if len(got) != 3 || got[0] != earlier || got[1] != reply {
+		t.Fatalf("the agent's comments are %+v, want the earlier review and the reply untouched, and one more", got)
+	}
+	posted := got[2].Body
+	if !strings.Contains(posted, review.Marker(head)) {
+		t.Fatalf("the new comment is not the review of %s:\n%s", head, posted)
+	}
+	if want := "<summary>Advisory review of <code>" + git.Short(read) + ".." + git.Short(head) + "</code>. Open it after your own reading.</summary>"; !strings.Contains(posted, want) {
+		t.Errorf("the summary does not name the range, and nothing else (%s):\n%s", want, posted)
+	}
+	if !strings.Contains(posted, "1. should-fix") {
+		t.Errorf("the findings are not numbered from 1:\n%s", posted)
+	}
+}
+
+// A review nobody asked for by a revision is of the pull request against its
+// base, as before: a /review, and a revision whose reply does not say where
+// its send-back was written, which a reply posted before replies said so does
+// not.
+func TestAReviewNotOfARevisionIsOfThePullRequest(t *testing.T) {
+	for name, c := range map[string]github.Comment{
+		"a /review":            command(1),
+		"a reply with no read": {ID: 40, Login: agent, Body: owed.RevisionReplyMarker(12, head) + "\n## Points\n\n- done."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := newTracker(c)
+			m := &reviewer{}
+			f := setup(t, tr, m)
+			if errs := f.drive(); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			if len(tr.compares) != 0 {
+				t.Errorf("a diff between heads was read: %v", tr.compares)
+			}
+			if len(m.diffs) != 1 || m.diffs[0] != diff || m.wholes[0] != "" {
+				t.Errorf("the diff file held %q and the whole diff %q, want the pull request's diff alone", m.diffs, m.wholes)
+			}
+			if p := m.asked[0].Prompt; strings.Contains(p, "afk-pr-whole.diff") {
+				t.Errorf("the prompt names a whole diff:\n%s", p)
+			}
+			var posted []string
+			for _, c := range tr.byAgent() {
+				if strings.Contains(c.Body, review.Marker(head)) {
+					posted = append(posted, c.Body)
+				}
+			}
+			if len(posted) != 1 || !strings.Contains(posted[0], "<summary>Advisory review of <code>"+git.Short(head)+"</code>.") {
+				t.Errorf("the reviews are %q, want one whose summary names the head alone", posted)
+			}
+		})
 	}
 }

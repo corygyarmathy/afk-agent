@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -116,6 +117,17 @@ func TestARevisionIsRepliedToThenReviewedThenHandedOff(t *testing.T) {
 	link := fmt.Sprintf("https://github.com/%s/pull/12#issuecomment-%d", repo, reply.ID)
 	if !strings.Contains(reviews[0].Body, link) {
 		t.Errorf("the review does not link the reply it claimed (%s):\n%s", link, reviews[0].Body)
+	}
+	// The review is of the revision's delta, from the head the send-back
+	// was written against, which the reply says (#132).
+	if !strings.Contains(reply.Body, owed.RevisionReadMarker(f.head)) {
+		t.Errorf("the reply does not say the send-back's head %s:\n%s", f.head, reply.Body)
+	}
+	if want := []string{f.head + "..." + at}; !slices.Equal(f.tr.compares, want) {
+		t.Errorf("the review read the diffs %v, want %v", f.tr.compares, want)
+	}
+	if want := fmt.Sprintf("Advisory review of <code>%s..%s</code>", git.Short(f.head), git.Short(at)); !strings.Contains(reviews[0].Body, want) {
+		t.Errorf("the review's summary does not name the range (%s):\n%s", want, reviews[0].Body)
 	}
 	if !f.tr.claimed(reply.ID) || f.tr.reacts[reply.ID] != 1 {
 		t.Errorf("the reply has %d reactions landed, and claimed is %v: want one claim", f.tr.reacts[reply.ID], f.tr.claimed(reply.ID))

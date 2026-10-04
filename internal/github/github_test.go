@@ -171,6 +171,23 @@ func TestDiffAsksForTheDiff(t *testing.T) {
 	}
 }
 
+func TestCompareAsksForTheDiffBetweenTwoHeads(t *testing.T) {
+	const diff = "diff --git a/x b/x\n+added\n"
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if expect(t, w, r, "GET", "/repos/o/n/compare/abc...def", "application/vnd.github.diff") {
+			fmt.Fprint(w, diff)
+		}
+	})
+
+	got, err := c.Compare(context.Background(), "abc", "def")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != diff {
+		t.Errorf("got %q, want %q", got, diff)
+	}
+}
+
 // A listing is read to the end. A command written on the hundred-and-first
 // comment of a long conversation is a command, and a client that stopped at
 // the first page would never see it.
