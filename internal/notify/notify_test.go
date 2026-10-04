@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +20,7 @@ import (
 )
 
 // message is one publish, as the seam saw it.
-type message struct{ title, tag, body string }
+type message struct{ title, tag, body, click string }
 
 // recorder stands in for the ntfy server. The tests here run offline
 // (AGENTS.md), so this is what Post is for.
@@ -29,7 +31,7 @@ type recorder struct {
 	slow time.Duration // how long a publish takes
 }
 
-func (r *recorder) post(_ context.Context, title, tag, body string) error {
+func (r *recorder) post(_ context.Context, m notify.Message) error {
 	r.mu.Lock()
 	err, slow := r.err, r.slow
 	r.mu.Unlock()
@@ -43,7 +45,7 @@ func (r *recorder) post(_ context.Context, title, tag, body string) error {
 	if err != nil {
 		return err
 	}
-	r.msgs = append(r.msgs, message{title, tag, body})
+	r.msgs = append(r.msgs, message{m.Title, m.Tag, m.Body, m.Click})
 	return nil
 }
 
@@ -563,5 +565,135 @@ func TestConcurrentObservationsReportOnce(t *testing.T) {
 
 	if got := r.all(); len(got) != 1 {
 		t.Fatalf("%d notifications from 8 workers observing one window, want 1: %s", len(got), fmt.Sprint(got))
+	}
+}
+
+// A notification about a job links to its subject on the tracker (#169), in
+// the body and as where a tap goes, for an issue and for a pull request. The
+// subject is still named in the text, for wherever the link is not rendered.
+func TestANotificationAboutAJobLinksToItsSubject(t *testing.T) {
+	cases := []struct {
+		subject store.Subject
+		named   string
+		link    string
+	}{
+		{store.Subject{Type: store.SubjectPR, Number: 12}, "pr #12", "https://github.com/owner/repo/pull/12"},
+		{store.Subject{Type: store.SubjectIssue, Number: 7}, "issue #7", "https://github.com/owner/repo/issues/7"},
+	}
+	for _, c := range cases {
+		t.Run(string(c.subject.Type), func(t *testing.T) {
+			ctx := context.Background()
+			r := &recorder{}
+			n := notifier(r)
+			n.Repo = "owner/repo"
+			n.TierAfter = 1
+
+			job := parked("await-ci", 3)
+			job.Subject = c.subject
+			if err := n.Parked(ctx, job, errors.New("the build did not finish")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := n.TierExhausted(ctx, job, store.Episode{Since: time.Now(), Times: 1}, errors.New("tier exhausted")); err != nil {
+				t.Fatal(err)
+			}
+
+			got := r.all()
+			if len(got) != 2 {
+				t.Fatalf("%d notifications, want a park and an exhausted tier: %+v", len(got), got)
+			}
+			for _, m := range got {
+				if m.click != c.link {
+					t.Errorf("%s: click = %q, want %q", m.title, m.click, c.link)
+				}
+				if !strings.Contains(m.body, "\n"+c.link+"\n") {
+					t.Errorf("%s: body does not carry %s on a line of its own:\n%s", m.title, c.link, m.body)
+				}
+				if !strings.Contains(m.body, c.named) {
+					t.Errorf("%s: body does not name %q:\n%s", m.title, c.named, m.body)
+				}
+			}
+		})
+	}
+}
+
+// The link is ahead of the cause, so a cause long enough to be truncated does
+// not take the link with it.
+func TestALongCauseDoesNotCutTheLink(t *testing.T) {
+	r := &recorder{}
+	n := notifier(r)
+	n.Repo = "owner/repo"
+
+	if err := n.Parked(context.Background(), parked("await-ci", 1), errors.New(strings.Repeat("x", 5000))); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.all()[0].body; !strings.Contains(got, "https://github.com/owner/repo/pull/12") {
+		t.Errorf("the truncated body lost the link:\n%.200s", got)
+	}
+}
+
+// With no repository there is nothing to link to, and a notification says so
+// by carrying no link rather than a guessed one.
+func TestWithNoRepositoryThereIsNoLink(t *testing.T) {
+	r := &recorder{}
+	n := notifier(r)
+
+	if err := n.Parked(context.Background(), parked("await-ci", 1), nil); err != nil {
+		t.Fatal(err)
+	}
+	got := r.all()[0]
+	if got.click != "" || strings.Contains(got.body, "https://") {
+		t.Errorf("a notifier with no repository linked somewhere: click %q\n%s", got.click, got.body)
+	}
+}
+
+// A budget is about a window, not a job, and has no subject to link.
+func TestABudgetNotificationHasNoLink(t *testing.T) {
+	ctx := context.Background()
+	r := &recorder{}
+	n := notifier(r)
+	n.Repo = "owner/repo"
+
+	if err := n.Exhausted(ctx, window("monthly", "rate-limited", 100, "2026-09-27T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Waived(ctx, budget.Waiver{Window: "monthly", Until: time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range r.all() {
+		if m.click != "" {
+			t.Errorf("%s: click = %q, want none", m.title, m.click)
+		}
+	}
+}
+
+// The default Post carries the link as ntfy's Click header, and no header at
+// all for a notification with none. Over loopback, which is not the network.
+func TestThePublishCarriesTheLinkAsTheClickAction(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		clicks []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, has := req.Header["Click"]
+		clicks = append(clicks, fmt.Sprintf("%t %s", has, req.Header.Get("Click")))
+	}))
+	defer srv.Close()
+
+	n := &notify.Notifier{URL: srv.URL, Repo: "owner/repo"}
+	ctx := context.Background()
+	if err := n.Parked(ctx, parked("await-ci", 1), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Exhausted(ctx, window("monthly", "rate-limited", 100, "")); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"true https://github.com/owner/repo/pull/12", "false "}
+	if strings.Join(clicks, "|") != strings.Join(want, "|") {
+		t.Errorf("Click headers = %q, want %q", clicks, want)
 	}
 }
