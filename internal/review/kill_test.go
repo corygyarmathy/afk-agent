@@ -238,6 +238,14 @@ func (ft *fileTracker) Diff(context.Context, int) (string, error) { return diff,
 
 func (ft *fileTracker) Compare(context.Context, string, string) (string, error) { return diff, nil }
 
+func (ft *fileTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
+	return nil, nil
+}
+
+func (ft *fileTracker) LineComments(context.Context, int, int64) ([]github.LineComment, error) {
+	return nil, nil
+}
+
 func (ft *fileTracker) Comments(context.Context, int) ([]github.Comment, error) {
 	f, err := ft.load()
 	return f.Comments, err
