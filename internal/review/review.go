@@ -102,6 +102,7 @@ type Tracker interface {
 	owed.Tracker
 	PullRequest(ctx context.Context, number int) (github.PullRequest, error)
 	Diff(ctx context.Context, number int) (string, error)
+	Compare(ctx context.Context, base, head string) (string, error)
 }
 
 // Model runs one model. opencode.Command is one.
@@ -229,8 +230,8 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if reply != 0 {
-		items = append(items, owed.Claim(github.Comment{ID: reply}))
+	if reply.ID != 0 {
+		items = append(items, owed.Claim(github.Comment{ID: reply.ID}))
 	}
 
 	if pr.State != "open" {
@@ -244,11 +245,14 @@ func (d *Deps) claim(ctx context.Context, in transition.In) (transition.Result, 
 		}
 		return book.Owe(ctx, in, Claiming, owed.Record{Next: Start, Items: items})
 	}
-	if asked || reply != 0 {
+	if asked || reply.ID != 0 {
 		// Recorded here, where the request is taken, for the review to say
-		// which job asked. Who wrote the pull request cannot say it: a
-		// /review on it later is a human's.
-		a := request{Reply: reply}
+		// which job asked, and where a revision's delta starts. Who wrote the
+		// pull request cannot say it: a /review on it later is a human's.
+		a := request{Reply: reply.ID}
+		if read, ok := owed.RevisionRead(reply.Body); ok {
+			a.Since, a.Of = read, pr.HeadSHA
+		}
 		if asked {
 			a.Issue = d.implementedFor(pr)
 		}
@@ -315,14 +319,15 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 	if reply, err := d.askedByRevision(ctx, comments, n, head); err != nil {
 		return transition.Result{}, err
-	} else if reply != 0 {
+	} else if reply.ID != 0 {
 		return transition.Result{State: Start, RunAt: in.Now}, nil
 	}
-	diff, err := d.Tracker.Diff(ctx, n)
+	asked, err := d.askedFor(in.Job.ID)
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if err := os.WriteFile(filepath.Join(ws, ".git", "afk-pr.diff"), []byte(diff), 0o644); err != nil {
+	since := asked.since(head)
+	if err := d.diffs(ctx, ws, n, since, head); err != nil {
 		return transition.Result{}, err
 	}
 	pr, err := d.Tracker.PullRequest(ctx, n)
@@ -341,9 +346,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err := prompt.Execute(&text, struct {
 		Number  int
 		Head    string
+		Since   string
 		Floor   string
 		FoldCut int
-	}{n, head, d.Floor, d.FoldCut}); err != nil {
+	}{n, head, since, d.Floor, d.FoldCut}); err != nil {
 		return transition.Result{}, err
 	}
 
@@ -375,10 +381,6 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	asked, err := d.askedFor(in.Job.ID)
-	if err != nil {
-		return transition.Result{}, err
-	}
 	spent := d.spend(ctx, in.Job.ID, ref, reply)
 	// Posts of a head's review are counted from here, so a review written
 	// again for a head whose posts ran out before has an allowance of its
@@ -387,10 +389,37 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if err := d.save(in.Job.ID, pending{Head: head, Body: d.body(n, head, reply, asked, spent), From: from, Spent: spent}); err != nil {
+	if err := d.save(in.Job.ID, pending{Head: head, Body: d.body(n, since, head, reply, asked, spent), From: from, Spent: spent}); err != nil {
 		return transition.Result{}, err
 	}
 	return transition.Result{State: Posting, RunAt: in.Now}, nil
+}
+
+// diffs writes the diff the review is of into the checkout in ws: the pull
+// request's against its base or, for a revision's review, the delta since the
+// head its send-back was written against, with the whole pull request's diff
+// beside it as context (#132). The delta is what the operator's second sitting
+// reads, so it is what the review covers.
+//
+// The delta is the tracker's three-dot compare. A revision only adds commits
+// on top of the head the operator read, so that is the same as the two-dot
+// range; a revision a point asked to rebase is reviewed from the commit the
+// two heads last had in common.
+func (d *Deps) diffs(ctx context.Context, ws string, n int, since, head string) error {
+	whole, err := d.Tracker.Diff(ctx, n)
+	if err != nil {
+		return err
+	}
+	diff := whole
+	if since != "" {
+		if diff, err = d.Tracker.Compare(ctx, since, head); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(ws, ".git", "afk-pr-whole.diff"), []byte(whole), 0o644); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(filepath.Join(ws, ".git", "afk-pr.diff"), []byte(diff), 0o644)
 }
 
 // post is `review-post`: post the saved reply under the next round's key.
@@ -553,13 +582,13 @@ func (d *Deps) implementedFor(pr github.PullRequest) int {
 // askedByRevision is the reply the revise job left pull request n at head
 // with, if nobody has claimed it: a comment the agent wrote carrying
 // owed.RevisionReplyMarker for that head, with no 👀 from the agent on it yet.
-// Zero if there is none.
+// The zero comment if there is none.
 //
 // The request is the revise job making this job due, never the comment: a
 // comment the agent wrote still instructs nothing. The reply is what that job
 // posted, so the claim is on it, as implement's is on the description it
 // wrote. A reply for another head is not this review's to claim.
-func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, n int, head string) (int64, error) {
+func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, n int, head string) (github.Comment, error) {
 	marker := owed.RevisionReplyMarker(n, head)
 	for _, c := range comments {
 		if !strings.EqualFold(c.Login, d.Login) || !strings.Contains(c.Body, marker) {
@@ -567,13 +596,13 @@ func (d *Deps) askedByRevision(ctx context.Context, comments []github.Comment, n
 		}
 		reactions, err := d.Tracker.Reactions(ctx, c.ID)
 		if err != nil {
-			return 0, err
+			return github.Comment{}, err
 		}
 		if !intake.Claimed(reactions, d.Login) {
-			return c.ID, nil
+			return c, nil
 		}
 	}
-	return 0, nil
+	return github.Comment{}, nil
 }
 
 // askedByJob reports whether the implement job has asked for a review that
@@ -614,16 +643,17 @@ func already(n int, c github.Comment, head string) owed.Item {
 }
 
 // body is the comment a review is posted as: all of it inside one <details>,
-// under a summary that names the head and nothing else, so that the operator
-// reads it after their own reading rather than instead of it (#110). A count
-// or a verdict in the summary is what invites a rubber stamp. When a job asked
-// for it, it says which: the implement job for its issue, or the revise job,
+// under a summary that names what it reviewed and nothing else - the head, or
+// a revision's range since its send-back (#132) - so that the operator reads
+// it after their own reading rather than instead of it (#110). A count or a
+// verdict in the summary is what invites a rubber stamp. When a job asked for
+// it, it says which: the implement job for its issue, or the revise job,
 // linking the reply it claimed.
 //
 // It is posted once and never edited or deleted: a send-back cites a finding
 // by its number in the latest review before it (#123), so a review of a new
-// head is a new comment.
-func (d *Deps) body(n int, head string, reply opencode.Reply, a request, spent spend.Spent) string {
+// head is a new comment, numbered from 1 again.
+func (d *Deps) body(n int, since, head string, reply opencode.Reply, a request, spent spend.Spent) string {
 	asked := ""
 	switch {
 	case a.Reply != 0 && d.Repo != "":
@@ -637,8 +667,12 @@ func (d *Deps) body(n int, head string, reply opencode.Reply, a request, spent s
 	if f := spent.Footer(); f != "" {
 		footer = "\n\n" + f
 	}
+	of := git.Short(head)
+	if since != "" {
+		of = git.Short(since) + ".." + of
+	}
 	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
-		git.Short(head), Marker(head), asked, strings.TrimSpace(reply.Text), footer)
+		of, Marker(head), asked, strings.TrimSpace(reply.Text), footer)
 }
 
 // spend counts a run of ref, failed or not, into what the review has spent
@@ -716,9 +750,26 @@ func (d *Deps) load(jobID string) (pending, error) {
 // request is a job's request, once its claim has been taken: the issue the
 // implement job's pull request implements, or the reply the revise job left
 // its head with. It lasts until the review is on the pull request.
+//
+// A reply also says the head its send-back was written against, Since. Of is
+// the head the revision left, which the reply was for.
 type request struct {
-	Issue int   `json:"issue,omitempty"`
-	Reply int64 `json:"reply,omitempty"`
+	Issue int    `json:"issue,omitempty"`
+	Reply int64  `json:"reply,omitempty"`
+	Since string `json:"since,omitempty"`
+	Of    string `json:"of,omitempty"`
+}
+
+// since is the head a review of head covers the delta from, or "" for a review
+// of the whole pull request: the revision's delta only while head is still the
+// one the revision left. A review of any other head - someone else's push, or
+// a revision whose reply did not say where it started - is of the pull request
+// against its base, as before.
+func (a request) since(head string) string {
+	if a.Of != head {
+		return ""
+	}
+	return a.Since
 }
 
 func (d *Deps) askedPath(jobID string) string {

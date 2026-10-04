@@ -8,8 +8,18 @@ skill was missing.
 Run it at {{if .Floor}}a severity floor of `{{.Floor}}`{{else}}the skill's default severity floor{{end}},
 and {{if .FoldCut}}a fold cut of {{.FoldCut}} changed lines{{else}}its default fold cut{{end}}, with these inputs:
 
+{{if .Since -}}
+- **The diff is the file `.git/afk-pr.diff`: the range {{.Since}}..{{.Head}}.**
+  It is what a revision added on top of {{.Since}}, the head the operator
+  read and sent back. Review that range and nothing before it.
+- **The whole pull request's diff against its base is `.git/afk-pr-whole.diff`**,
+  as context: read it where judging a hunk of the range needs it, and report
+  nothing in it that the range does not change.
+- The checkout is shallow: it holds the head commit and no base.
+{{- else -}}
 - **The diff is the file `.git/afk-pr.diff`.** The checkout is shallow: it
   holds the head commit and no base.
+{{- end}}
 - **The spec is `.git/afk-pr-spec.md`**: the pull request's title and
   description, then each issue the pull request closes, verbatim. The issues
   are the spec. The description is the author's claims, to be checked against

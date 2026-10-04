@@ -7,8 +7,9 @@ decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md
 agent authenticates; the spec is
 [#3](https://github.com/corygyarmathy/afk-agent/issues/3),
 [#29](https://github.com/corygyarmathy/afk-agent/issues/29),
-[#44](https://github.com/corygyarmathy/afk-agent/issues/44) and
-[#124](https://github.com/corygyarmathy/afk-agent/issues/124); the code is
+[#44](https://github.com/corygyarmathy/afk-agent/issues/44),
+[#124](https://github.com/corygyarmathy/afk-agent/issues/124) and
+[#132](https://github.com/corygyarmathy/afk-agent/issues/132); the code is
 [`internal/intake`](../../internal/intake) and
 [`internal/review`](../../internal/review).
 
@@ -37,6 +38,15 @@ never on the description. A reply for an older head is not claimed. A review
 job already due when the revise job asks claims the reply from `review-run`,
 by way of `review`. The review links the reply it claimed.
 
+The revise job's review covers the revision's **delta**: from the head the
+send-back was written against to the head the revision left, which is what the
+operator's second sitting reads. The reply names the first in a hidden
+`<!-- afk:revision-read head=<sha> -->` line, which counts only in the agent's
+own comment. The rest of the pull request is context for the delta, not
+something it reviews again. Every other review - a `/review`, the implement
+job's, or a revise job's whose reply has no such line, or whose head has moved
+since - covers the pull request against its base.
+
 | transition | from | does |
 | --- | --- | --- |
 | `review` | `start` | reacts 👀 to every unanswered `/review`, to the implement job's pull request if it has not yet, and to the revise job's reply for the head if it has not yet (the claims), then either moves on to `reviewing` or, if the head already has a review, replies "Already reviewed" to each command and rests |
@@ -62,7 +72,12 @@ A description the agent wrote goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
 touches a sensitive path is reviewed as any other, and without its spend
 footer ([`spend.md`](spend.md)). A description anyone else wrote goes as they
-wrote it. An issue it cannot find is noted there as a gap, not a failure. The prompt,
+wrote it. An issue it cannot find is noted there as a gap, not a failure. For a
+revision's delta, `.git/afk-pr.diff` holds the delta alone, read from the
+tracker's compare of the two heads, and the pull request's diff against its
+base goes beside it in `.git/afk-pr-whole.diff`, which the prompt names as
+context. The skill's fold cut counts the delta like any diff, so a small
+revision folds Approach into Correctness and runs two sub-agents. The prompt,
 [`internal/review/prompt.md`](../../internal/review/prompt.md), tells the model
 where those are. A pull request that closes no issue, and is no issue's first
 piece, is reviewed against its description, and the report says so.
@@ -72,6 +87,8 @@ piece, is reviewed against its description, and the report says so.
 The advisory review is one comment on the pull request, and the whole of it
 sits inside one `<details>`, collapsed. Its summary names the reviewed head and
 nothing else: "Advisory review of `abc1234`. Open it after your own reading".
+A revision's review names its range instead: "Advisory review of
+`abc1234..def5678`".
 There are no counts by severity and no verdict, because a line like "0
 blockers" is what invites a rubber stamp. The wrapper is the agent's, added when it posts; the
 model is told not to add one of its own.
@@ -88,11 +105,14 @@ follows the prompt.
 What is in it is the skill's to decide, at two of the skill's inputs that the
 prompt passes through: the severity floor and the fold cut, `--review-floor`
 and `--review-fold-cut` ([Parameters](#parameters)). Findings are numbered
-across the advisory review, so a send-back can cite one ("advisory 3").
+across the advisory review, from 1 in each, so a send-back can cite one
+("advisory 3").
 
 An advisory review is append-only. Once posted it is never edited or deleted,
 and each advisory review is a new comment, so a citation resolves to the latest
-advisory review before the send-back that cites it. The tracker the review job
+advisory review before the send-back that cites it. A finding from an earlier
+review, on code a revision did not change, is not in the latest one: a
+send-back quotes it rather than cite it by number. The tracker the review job
 writes through can only add a comment, and a replayed transition finds the
 advisory review of its head already there and posts nothing.
 
@@ -158,6 +178,7 @@ installation's grants:
 | listing open issues and pull requests, which intake reads commands from | not recorded | not verified |
 | listing open pull requests, which `implement` finds the agent's pull request in | Pull requests: read | not verified: served with Metadata only |
 | reading a pull request, and its diff | Pull requests: read, or Contents: read | not verified: served with Metadata only |
+| reading the diff between two heads, for a revision's delta | not recorded | not verified |
 | reading the issues a pull request closes, or is a first piece of, and a first piece's rest | Issues: read | not verified: served with Metadata only |
 | reading comments | Issues: read, or Pull requests: read | not verified: served with Metadata only |
 | reading reactions | Issues: read | not verified: served with Metadata only |

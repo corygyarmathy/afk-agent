@@ -1411,6 +1411,7 @@ func (closedTracker) OpenPullRequests(context.Context) ([]github.PullRequest, er
 	return nil, nil
 }
 func (closedTracker) Diff(context.Context, int) (string, error)               { return "", nil }
+func (closedTracker) Compare(context.Context, string, string) (string, error) { return "", nil }
 func (closedTracker) Comments(context.Context, int) ([]github.Comment, error) { return nil, nil }
 func (closedTracker) Reactions(context.Context, int64) ([]github.Reaction, error) {
 	return nil, nil

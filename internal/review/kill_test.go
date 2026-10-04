@@ -236,6 +236,8 @@ func (ft *fileTracker) Issue(_ context.Context, n int) (github.Issue, error) {
 
 func (ft *fileTracker) Diff(context.Context, int) (string, error) { return diff, nil }
 
+func (ft *fileTracker) Compare(context.Context, string, string) (string, error) { return diff, nil }
+
 func (ft *fileTracker) Comments(context.Context, int) ([]github.Comment, error) {
 	f, err := ft.load()
 	return f.Comments, err

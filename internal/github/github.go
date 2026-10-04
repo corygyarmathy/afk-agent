@@ -252,6 +252,22 @@ func (c *Client) Diff(ctx context.Context, number int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return c.diff(ctx, u)
+}
+
+// Compare reads the diff from base to head, as unified diff text. It is
+// GitHub's three-dot compare, from the commit the two last had in common:
+// base itself, when head was made on top of it.
+func (c *Client) Compare(ctx context.Context, base, head string) (string, error) {
+	u, err := c.repoURL("/compare/%s...%s", url.PathEscape(base), url.PathEscape(head))
+	if err != nil {
+		return "", err
+	}
+	return c.diff(ctx, u)
+}
+
+// diff reads u as unified diff text.
+func (c *Client) diff(ctx context.Context, u string) (string, error) {
 	resp, err := c.send(ctx, http.MethodGet, u, mediaDiff, nil)
 	if err != nil {
 		return "", err

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
@@ -161,6 +162,27 @@ func PullRequestReviewRevisionMarker(id int64) string {
 // the commands it answers. A hand-back does not carry it: only a reply asks.
 func RevisionReplyMarker(n int, head string) string {
 	return fmt.Sprintf("<!-- afk:revision-reply pr=%d head=%s -->", n, head)
+}
+
+// RevisionReadMarker is the hidden line a revision's reply carries beside
+// RevisionReplyMarker: the head the send-back was written against, which the
+// revision added to. The review the reply asks for reads it back, to review
+// the revision's delta from there (#132).
+func RevisionReadMarker(head string) string {
+	return "<!-- afk:revision-read head=" + head + " -->"
+}
+
+var revisionRead = regexp.MustCompile(`<!-- afk:revision-read head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
+
+// RevisionRead is the head a revision's reply says the send-back was written
+// against, if it says one. Only a full commit name is read, since it goes into
+// a request to the tracker.
+func RevisionRead(body string) (string, bool) {
+	m := revisionRead.FindStringSubmatch(body)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
 
 // Command is one command, in either form it may be issued: a comment, or a
