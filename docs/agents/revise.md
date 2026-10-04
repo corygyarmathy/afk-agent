@@ -91,14 +91,10 @@ code is
 ## The review, and the hand-off
 
 The review is the `review` job the revise job makes due for the new head,
-never a `/review` comment (ADR 0001 §14). It reviews the revision's delta,
-from the head the send-back was written against to the new head, with the whole
-pull request as context: what the operator's second sitting reads
-([#132](https://github.com/corygyarmathy/afk-agent/issues/132)). The reply
-carries that head in a hidden line for it. Its request is claimed with a 👀 on
-the reply, which the revise job posted, never on the description. The review
-links the reply it claimed ([`review.md`](review.md)). The hand-off label goes
-back on once the review is there.
+never a `/review` comment (ADR 0001 §14). It reviews the revision's delta
+([`review.md`](review.md)). Its request is claimed with a 👀 on the reply,
+which the revise job posted, never on the description. The review links the
+reply it claimed. The hand-off label goes back on once the review is there.
 
 A **hand-back** is a comment saying what stopped the revision, and the
 hand-back label. The pull request stays open, with the branch as the revision

@@ -401,10 +401,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 // beside it as context (#132). The delta is what the operator's second sitting
 // reads, so it is what the review covers.
 //
-// The delta is the tracker's three-dot compare. A revision only adds commits
-// on top of the head the operator read, so that is the same as the two-dot
-// range; a revision a point asked to rebase is reviewed from the commit the
-// two heads last had in common.
+// The delta is the tracker's three-dot compare. A revision never rewrites the
+// head its send-back was written against - one that does is handed back
+// (revise_push.go) - so that is the same as the two-dot range.
 func (d *Deps) diffs(ctx context.Context, ws string, n int, since, head string) error {
 	whole, err := d.Tracker.Diff(ctx, n)
 	if err != nil {
