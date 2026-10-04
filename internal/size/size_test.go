@@ -174,6 +174,25 @@ func TestAnAttributeSetFalseCountsTheFileAgain(t *testing.T) {
 	}
 }
 
+// A repository marks its own tests, and takes back a convention's: tests
+// named as no convention knows are counted as tests, and a directory the
+// convention calls tests is counted as code.
+func TestTheTestAttributeDecidesWhatIsATest(t *testing.T) {
+	dir, base := repo(t, map[string]string{".gitattributes": "checks/** afk-test\nspec/** -afk-test\n"})
+	write(t, dir, map[string]string{
+		"checks/afk-agent.nix":   lines(5),
+		"checks/foo/default.nix": lines(6),
+		"spec/rules.go":          lines(7),
+		"internal/x/x_test.go":   lines(2),
+		"internal/x/checks.go":   lines(3),
+	})
+	head := commitAll(t, dir)
+
+	if got, want := measure(t, dir, base, head), (size.Count{Lines: 7 + 3, Tests: 5 + 6 + 2}); got != want {
+		t.Errorf("count = %+v, want %+v", got, want)
+	}
+}
+
 // A path is read exactly as git wrote it, so a file deleted whole whose name
 // starts with a space is still one deleted whole.
 func TestAPathIsReadWithItsSpaces(t *testing.T) {
