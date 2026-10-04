@@ -4,14 +4,14 @@
     "repo": "corygyarmathy/skills",
     "url": "https://github.com/corygyarmathy/skills.git",
     "prefix": "skills",
-    "rev": "647a660f0a4f85d72e038ab77a01d938b3312956"
+    "rev": "9d7c18d0273508970ec8d3d85627214be55520de"
   },
   "vendorPath": ".agents/skills",
   "linkPath": ".claude/skills",
   "skills": {
     "ask-cory": {
       "path": "skills/ask-cory",
-      "hash": "7716a4b587151d730d24d1fa4d12008516e94ca19f66eacb9fc23b3a460b7322"
+      "hash": "c2f34ce79d9ac7cdc5b9a9993db327b13e7920c9f6683bd6448ba50bff01a671"
     },
     "codebase-design": {
       "path": "skills/codebase-design",
@@ -67,7 +67,7 @@
     },
     "setup-cory-gyarmathy-skills": {
       "path": "skills/setup-cory-gyarmathy-skills",
-      "hash": "9fd913aa3677c035bda5e5657121b27acd78caf2d24da8401f03765a5f98c14a"
+      "hash": "c81450e61172a02d9103555c481a497c6db258b251b943ed441bc937e7a14dd5"
     },
     "tdd": {
       "path": "skills/tdd",
@@ -87,11 +87,11 @@
     },
     "to-tickets": {
       "path": "skills/to-tickets",
-      "hash": "bb1c3e8f9bca42fd9d3ffe5a3a7e8a0c1777495da2d10e4bb1d3afee3fcf6015"
+      "hash": "7e8e7cad687be5de784dba7baaccf596f647788ad83bb3d6249873a25ddb9f7e"
     },
     "triage": {
       "path": "skills/triage",
-      "hash": "836bc0f36a37beb4f297df45ede17b5a2e72f13d64064d0aa3e6aa24ec8fcbc8"
+      "hash": "7fff875d8904e06bc1682b244bfc644800142c94737e43e4f5ba0f82a66111a4"
     },
     "wait-what": {
       "path": "skills/wait-what",

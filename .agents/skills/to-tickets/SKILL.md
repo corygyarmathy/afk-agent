@@ -42,7 +42,17 @@ Give each ticket its **blocking edges**: the other tickets that must complete be
 
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own recipe ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
 
-### 4. Quiz the user
+### 4. Settle each ticket's premises
+
+A **premise** is a fact a ticket takes from outside itself and outside the code it changes: another repository's interface, flag or documented behaviour, a decision recorded on another ticket, what a blocker will produce. A premise the ticket leaves open hands its research to the implementing agent, and research is the most expensive thing an agent does.
+
+State each premise as the fact itself, with a permalink to its source of record (a file at a commit, a comment, a tagged doc). "Maps to the flags the revise ticket defines" names where the fact will be decided, so it is not a premise. "afk-agent has no revise tier; a revision runs on implement's tier and needs (`docs/agents/revise.md` at <rev>)" is. A ticket with no premises says "None".
+
+A **waiting premise** depends on what a blocker produces, not only on its order, so it can't hold until the blocker lands. State it as the outcome the blocker is expected to produce, taken from the plan or the blocker's ticket, link the blocker in place of a permalink, and mark it "confirm once <blocker> closes". A ticket with a waiting premise is published as `needs-triage`, whatever role it would otherwise carry; once the blocker closes, `/triage` confirms the premise and returns the ticket to that role. A blocker that only orders the work leaves the role as it is.
+
+Confirm every other premise against its source now. One you cannot confirm becomes a question in the quiz, and stays out of the ticket until the user settles it.
+
+### 5. Quiz the user
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
@@ -50,21 +60,23 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 - **Recipe ticket**: if it is one (runs past one sitting on purpose), and its recipe
+- **Premises**: each as its fact and source, marking any waiting premise
 
 Ask the user:
 
 - Does the granularity feel right? (too coarse / too fine) Can each ticket be reviewed in one sitting?
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
+- Each premise you could not confirm, as its own question
 
 Iterate until the user approves the breakdown.
 
-### 5. Publish the tickets to the configured tracker
+### 6. Publish the tickets to the configured tracker
 
 Publish the approved tickets. **How** depends on the tracker `/setup-cory-gyarmathy-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
 
 - **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply each ticket's triage role unless instructed otherwise: `ready-for-agent`, or `recipe-ticket` for a recipe ticket (see the slice rules). Every other ticket is agent-grabbable by construction.
+- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply each ticket's triage role unless instructed otherwise: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see step 4). A `ready-for-agent` ticket is agent-grabbable by construction.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
@@ -76,9 +88,11 @@ Do NOT close or modify any parent issue.
 
 **What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
 
+**Premises:** each outside fact the ticket rests on, with a permalink to its source of record, or "None".
+
 **Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
 
-**Status:** the ticket's triage role: `ready-for-agent`, or `recipe-ticket` for a recipe ticket (see the slice rules).
+**Status:** the ticket's triage role: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see step 4).
 
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
@@ -95,6 +109,10 @@ A reference to the parent issue on the tracker (if the source was an existing is
 
 The end-to-end behaviour this ticket makes work, from the user's perspective, not layer-by-layer implementation.
 
+## Premises
+
+- Each outside fact the ticket rests on, with a permalink to its source of record, or "None".
+
 ## Acceptance criteria
 
 - [ ] Criterion 1
@@ -106,4 +124,4 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 
 </issue-template>
 
-In either form, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+In either form, avoid specific file paths or code snippets: they go stale fast. A premise's permalink is pinned to a revision, so it stays. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
