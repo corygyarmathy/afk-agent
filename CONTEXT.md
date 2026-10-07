@@ -88,6 +88,10 @@ _Avoid_: Comment, issue, nit
 The operator reading a pull request and deciding it: merge, send back, or close. The only review that decides anything.
 _Avoid_: Review (bare), approval
 
+**Operator load**:
+Everything the agent's work asks of the operator, before, during and after a pull request: planning the work, and writing the issues it starts from and revising them when they fall short; the operator's review of each pull request - the reading it hands them and the decisions it asks of them; answering hand-backs, notifications and waivers; and keeping their own understanding of the codebase and the system current as the agent changes them. What the agent exists to lower, and what a change to it is judged against. Counted in what is asked of the operator, never in what the agent did.
+_Avoid_: Effort, cost, time, burden
+
 **Send-back**:
 An operator's review that ends with points to address, written in the operator's own words: a `/revise` comment, or a submitted review whose body starts `/revise`, with its line comments as points. The only instruction `/revise` acts on. It may cite advisory findings one at a time, but it is never an answer to them: the operator owes no reply to any finding, and a reaction, an approval or a resolved thread decides nothing.
 _Avoid_: Change request, triage, feedback
