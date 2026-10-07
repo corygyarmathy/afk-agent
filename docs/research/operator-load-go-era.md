@@ -10,6 +10,12 @@ advisory review, replies, changed lines) and the decisions (questions,
 findings cited or let go, size-signal decisions). Which part dominates, how
 much is the advisory review, and does the measure count cleanly?
 
+**Scope.** This counts one part of operator load: the operator's review of
+each pull request. The rest of it - planning the work, writing and revising
+the issues, answering hand-backs, notifications and waivers, and keeping an
+understanding of the codebase and the system current - is not counted here.
+"The measure" below means this pull-request part.
+
 ## Short answer
 
 1. **The changed lines dominate the reading: 57% of the words across the four.**
