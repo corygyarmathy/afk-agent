@@ -81,8 +81,12 @@ The agent's report on a pull request: advice to the operator, never a gate, neve
 _Avoid_: Review (bare), AI review
 
 **Finding**:
-One numbered item in an advisory review, carrying a severity. Advice only: it is owed no answer, and it enters a send-back only when the operator cites it.
-_Avoid_: Comment, issue, nit
+One numbered item in an advisory review, carrying a severity and the evidence its axis requires; without that evidence it is not a finding. Advice only: it is owed no answer, and it enters a send-back only when the operator cites it.
+_Avoid_: Comment, issue, nit, suspicion
+
+**Question**:
+An item in an advisory review that asks the operator about intent, where the answer lives with the operator rather than in the code or the spec. Never about behaviour, which the reviewer settles itself or drops.
+_Avoid_: Concern, suspicion
 
 **Operator's review**:
 The operator reading a pull request and deciding it: merge, send back, or close. The only review that decides anything.
