@@ -81,7 +81,7 @@ The agent's report on a pull request: advice to the operator, never a gate, neve
 _Avoid_: Review (bare), AI review
 
 **Finding**:
-One numbered item in an advisory review, carrying a severity and the evidence its axis requires; without that evidence it is not a finding. Advice only: it is owed no answer, and it enters a send-back only when the operator cites it.
+One numbered item in an advisory review, carrying a severity and the evidence its axis requires; without that evidence it is not a finding. Advice to the operator: it is owed no answer, and it enters a send-back only when the operator cites it. The exception is a Correctness or Standards finding on the agent's own pull request, which is the agent's to make right in a correction before hand-off.
 _Avoid_: Comment, issue, nit, suspicion
 
 **Question**:
@@ -135,6 +135,10 @@ _Avoid_: Retry, try, attempt
 **Fix**:
 A red CI run sent back to the session that wrote the branch, to be fixed and pushed again. Bounded, and counted once for each head CI failed on.
 _Avoid_: CI round, fix round
+
+**Correction**:
+The one pass, before hand-off, that sends the Correctness and Standards findings of the advisory review of the agent's own pull request back to be made right. Checked by the gate and CI, never by a second advisory review; one that fails leaves the pull request as it was reviewed, its findings advice. Distinct from a fix: a fix is caused by a red CI run, a correction by findings.
+_Avoid_: Self-fix, self-review
 
 **Catch**:
 A check that failed or timed out on a head the agent pushed, which the local gate had passed. Counted once for each head and check, however many runs saw it fail there. A check that was cancelled, or passed when a human re-ran it, is not one. Distinct from a fix: a fix is what the agent does about a red run, and a catch is what the red run says about the gate.
