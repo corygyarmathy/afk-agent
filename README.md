@@ -37,4 +37,4 @@ The binary is `cmd/afk`. The runner, the worker pool and the command surface are
 
 ## Status
 
-Early. The design is settled and recorded in [ADR 0001](docs/adr/0001-a-go-state-machine-in-its-own-repository.md); the vocabulary it uses is in [CONTEXT.md](CONTEXT.md). [AGENTS.md](AGENTS.md) is the house style, for a person or an agent working here. It replaces a working bash prototype that ran for several weeks in [corygyarmathy/dotfiles](https://github.com/corygyarmathy/dotfiles), which is where the NixOS module that packages and configures this agent still lives.
+Early. The design is settled and recorded in [ADR 0001](docs/adr/0001-a-go-state-machine-in-its-own-repository.md); the vocabulary it uses is in [GLOSSARY.md](GLOSSARY.md). [AGENTS.md](AGENTS.md) is the house style, for a person or an agent working here. It replaces a working bash prototype that ran for several weeks in [corygyarmathy/dotfiles](https://github.com/corygyarmathy/dotfiles), which is where the NixOS module that packages and configures this agent still lives.

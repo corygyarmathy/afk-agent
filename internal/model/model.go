@@ -7,7 +7,7 @@
 //     models.dev. Facts about the world, true whether or not this agent has
 //     any opinion about them.
 //   - The enrolment. Which models a human has admitted to which tier
-//     (CONTEXT.md: enrolled model). Eligibility is never inferred: a model
+//     (GLOSSARY.md: enrolled model). Eligibility is never inferred: a model
 //     absent from the enrolment is not a candidate however capable the
 //     catalogue says it is, so a newly published model cannot become eligible
 //     on its own.

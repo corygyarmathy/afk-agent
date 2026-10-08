@@ -6,7 +6,7 @@
     - Source: [`corygyarmathy/skills`](https://github.com/corygyarmathy/skills), the canonical home this decision creates.
     - Derived from: [`mattpocock/skills`](https://github.com/mattpocock/skills), MIT, whose copies seeded it.
     - Also consumed by: `corygyarmathy/dotfiles`, which vendored the originals and is expected to adopt this.
-    - Vocabulary: `CONTEXT.md` in this repository.
+    - Vocabulary: `GLOSSARY.md` in this repository.
 
 ## Context
 

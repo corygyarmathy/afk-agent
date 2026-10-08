@@ -6,8 +6,8 @@ it holds to. For the full map of which document owns which fact, see
 
 ## Before exploring, read these
 
-- **[`CONTEXT.md`](../../CONTEXT.md)** at the repository root: the glossary. This
-  repository is single-context; there is no `CONTEXT-MAP.md` and there should
+- **[`GLOSSARY.md`](../../GLOSSARY.md)** at the repository root: the glossary. This
+  repository is single-context; there is no `GLOSSARY-MAP.md` and there should
   not be one.
 - **[`docs/adr/`](../adr/)**: the ADRs touching the area you are about to work
   in. [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repository.md) is the
@@ -16,7 +16,7 @@ it holds to. For the full map of which document owns which fact, see
 ## Use the glossary's vocabulary
 
 When your output names a domain concept - an issue title, a test name, a type
-name, a hypothesis, a commit message - use the term as `CONTEXT.md` defines it,
+name, a hypothesis, a commit message - use the term as `GLOSSARY.md` defines it,
 and not a synonym it explicitly lists under `_Avoid_`.
 
 This matters more here than in most repositories, because several pairs in that

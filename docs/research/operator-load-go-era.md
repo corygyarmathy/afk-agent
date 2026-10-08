@@ -4,7 +4,7 @@ Research for [#185](https://github.com/corygyarmathy/afk-agent/issues/185),
 part of the map [#182](https://github.com/corygyarmathy/afk-agent/issues/182).
 Gathered 2026-10-07, read-only, from GitHub alone.
 
-**Question.** Count **operator load** (`CONTEXT.md`) for
+**Question.** Count **operator load** (`GLOSSARY.md`) for
 `corygyarmathy/dotfiles` #318, #324, #346 and #353: the reading (description,
 advisory review, replies, changed lines) and the decisions (questions,
 findings cited or let go, size-signal decisions). Which part dominates, how
@@ -20,7 +20,7 @@ understanding of the codebase and the system current - is not counted here.
 
 1. **The changed lines dominate the reading: 57% of the words across the four.**
    The advisory review is **29%** (3,189 of 11,031 words), the description
-   15%. No pull request had a reply in the `CONTEXT.md` sense (an agent's
+   15%. No pull request had a reply in the `GLOSSARY.md` sense (an agent's
    revision reply): none was sent back.
 2. **The advisory review is the larger read on small pull requests.** On #346
    (36 changed lines) the review is 514 words against 398 in the diff, 40% of
@@ -124,7 +124,7 @@ Notes on the table:
 - **Questions in the description.** #346's "Where the ticket didn't decide"
   (four bullets) and #324's "Where the issue was out of date" (five) are
   decisions the description puts to the operator, and the blockers on #346
-  are about one of them. `CONTEXT.md` names "questions put to them" without
+  are about one of them. `GLOSSARY.md` names "questions put to them" without
   saying whether these count. They are not in the 6 above.
 
 ## Where the measure is ambiguous

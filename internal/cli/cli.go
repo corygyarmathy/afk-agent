@@ -574,7 +574,7 @@ func readCaught(ctx context.Context, tr *tracker, list bool, stdout io.Writer) e
 }
 
 // holder names this process in a lease. Host and pid, because the store's
-// leases are local (CONTEXT.md: lease) and the pair is unique among the live
+// leases are local (GLOSSARY.md: lease) and the pair is unique among the live
 // processes that can reach one store.
 func holder() string {
 	host, err := os.Hostname()

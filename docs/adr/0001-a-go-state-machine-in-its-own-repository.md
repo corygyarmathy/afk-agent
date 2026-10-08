@@ -5,7 +5,7 @@
 - **Related Artefacts:**
     - Replaces: the bash prototype in `corygyarmathy/dotfiles`, `modules/services/afk-agent/`, whose shape is recorded in that repository's [ADR 0004](https://github.com/corygyarmathy/dotfiles/blob/master/docs/adr/0004-afk-agent-runs-self-hosted-with-a-harness-split.md) and [ADR 0007](https://github.com/corygyarmathy/dotfiles/blob/master/docs/adr/0007-the-pull-request-opens-before-the-review.md). Those decisions are amended, not deleted: they remain the correct record of why the prototype was built the way it was.
     - Packaged by: the NixOS module in `corygyarmathy/dotfiles`, which owns this design's parameters - worker counts, thresholds, intervals, tier membership, budget ceilings. This document states decisions only.
-    - Vocabulary: `CONTEXT.md` in this repository.
+    - Vocabulary: `GLOSSARY.md` in this repository.
 
 **Amended 2026-09-14 (a spent window can be waived).** §11, §12 and §13 are revised below, and two alternatives are added, after [#37](https://github.com/corygyarmathy/afk-agent/issues/37). The first live run deferred a review for ten days on a spent monthly window, when the account's balance could have paid for it in minutes. OpenCode Go's "Use balance" setting already falls back to the pay-as-you-go balance, at the Go list price, once any window is spent. This agent's admission is what stopped the work: the usage endpoint reports the window as rate-limited whether or not that fallback is on, and nothing in it says which.
 

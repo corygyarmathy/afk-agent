@@ -12,7 +12,7 @@ Nothing else in this list restates a spec; they link the issue instead.
 
 Where the issues live and how to read them: [`issue-tracker.md`](issue-tracker.md).
 
-## CONTEXT.md - the vocabulary, one home
+## GLOSSARY.md - the vocabulary, one home
 
 The glossary, and nothing else. No implementation detail, no decisions, no
 scratch notes. When a term is sharpened, it is sharpened there and the documents
@@ -85,7 +85,7 @@ in a code comment or an ADR.
 ## AGENTS.md - the house style
 
 How to work in this repository: conventions, checks, what not to touch. Not a
-place for domain vocabulary (`CONTEXT.md`), decisions (`docs/adr/`), or specs
+place for domain vocabulary (`GLOSSARY.md`), decisions (`docs/adr/`), or specs
 (the tracker). It points at those and states the rest once.
 
 ## docs/agents/ - reference and instructions, no reasoning
