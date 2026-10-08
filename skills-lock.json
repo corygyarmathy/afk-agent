@@ -57,10 +57,6 @@
       "path": "skills/research",
       "hash": "1737d1fed95cd4816674a1be78100ebfddbe6b27f6f5eb1164dfd5bfdeacf194"
     },
-    "resolving-merge-conflicts": {
-      "path": "skills/resolving-merge-conflicts",
-      "hash": "1d85d1991edce6f4308e3bcebd0083a88400b36e214e72a78d65ce5e4f7134e1"
-    },
     "reviewing-changes": {
       "path": "skills/reviewing-changes",
       "hash": "6241ae63f68bb5c15fd8e397b0e211a242f327b9e34e6162834914682c1d39a6"
