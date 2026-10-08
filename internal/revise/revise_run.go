@@ -229,6 +229,10 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok {
+		// Failed here, and the move that followed lost.
+		return r, nil
+	}
 	// Before the gate runs, and before an attempt is counted: a session that
 	// rewrote the head the send-back was written against has broken the one
 	// history rule there is, and a retry to make the gate pass is not what

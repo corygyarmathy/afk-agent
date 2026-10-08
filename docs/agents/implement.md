@@ -97,9 +97,11 @@ is [`internal/implement/correct.go`](../../internal/implement/correct.go).
   the finding folded beneath it. A correctable finding no commit names stays,
   marked as advice a correction was attempted on. The summary names both heads:
   reviewed at A, corrected to B, checked by reproductions and CI, not
-  re-reviewed. The citations stay permalinks at A, and the review's `head=`
-  marker keeps meaning A. The trailers are read from the commits in the relay
-  the correction was pushed from, never in the workspace.
+  re-reviewed. When no commit names any finding, the summary names both heads
+  but says the correction named none, so the findings are advice. The citations
+  stay permalinks at A, and the review's `head=` marker keeps meaning A. The
+  trailers are read from the commits in the relay the correction was pushed
+  from, never in the workspace.
 - **Failed**: the gate red at its last attempt, nothing committed, a rewrite of
   the reviewed head, a denied path, a push that never landed, or CI red past
   `--ci-fixes`, past `--ci-ceiling` or waiting for an approval. It is not a
@@ -109,7 +111,13 @@ is [`internal/implement/correct.go`](../../internal/implement/correct.go).
   correction failed and why, and each correctable finding is marked "correction
   attempted, failed": advice. Then the hand-off. Each failure is a log line too.
 - **Someone else's push**, or a record lost with the state directory, hands
-  back as at any other time, and the review is left as it was posted.
+  back as at any other time, and the review is left as it was posted. The
+  branch is read again before the review is edited, so a push during a
+  correction that failed without pushing hands back too.
+- **A failed correction replayed**, after a process killed between the
+  failure and its move, goes where the failure sent it: back to the reviewed
+  head, then the edit and the hand-off. It is never handed back for the work
+  it already failed on.
 - **An edit that never lands** after `--effect-rounds`, or a review that has
   gone, is a log line. The hand-off goes on: the review is advice.
 

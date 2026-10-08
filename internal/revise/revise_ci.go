@@ -37,11 +37,11 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	if err != nil {
 		return transition.Result{}, err
 	}
-	if c := p.Correction; c != nil && !c.Running() && p.Pushed == c.Reviewed {
-		// A failed correction, put back at the head the review read: CI
-		// was green there before the review was asked for, and it is not
-		// watched again.
-		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
+	if r, ok := over(in, p); ok {
+		// A failed correction: put back at the head the review read, where
+		// CI was green before the review was asked for and is not watched
+		// again, or failed here and the move that followed lost.
+		return r, nil
 	}
 	r, err := d.work().Watch(ctx, in, d.ci(), n, &p.Progress)
 	if err != nil {

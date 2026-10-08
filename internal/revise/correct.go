@@ -5,8 +5,8 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/correction"
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
-	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 // correct starts correction c of the advisory review of the revision's delta:
@@ -23,29 +23,22 @@ func (d *Deps) correct(ctx context.Context, in transition.In, p progress, c corr
 	return transition.Result{State: Revising, RunAt: in.Now}, nil
 }
 
-// corrected is the correction done with, in `revise-review`: the advisory
-// review edited to say how it ended, and then the hand-off. The reply is not
-// edited: it answers the send-back, at the head the review read.
+// corrected is the correction in `revise-review`, where it begins and ends,
+// as implement's is (correction.Next): the advisory review edited to say how
+// it ended, and then the hand-off. The reply is not edited: it answers the
+// send-back, at the head the review read. Someone else's push since is
+// theirs, and hands back.
 func (d *Deps) corrected(ctx context.Context, in transition.In, p progress) (transition.Result, error) {
-	c := p.Correction
-	switch {
-	case c.Running() && p.Pushed == c.Reviewed:
-		// Begun, and the commit that sent it to the session never
-		// happened: it goes there now.
-		return transition.Result{State: Revising, RunAt: in.Now}, nil
-	case !c.Running() && p.Pushed != c.Reviewed:
-		// Failed, and the push back to the reviewed head not seen yet.
-		return transition.Result{State: Pushing, RunAt: in.Now}, nil
+	if s := correction.Next(p.Correction, p.Pushed); s != correction.Edit {
+		return transition.Result{State: step(s), RunAt: in.Now}, nil
 	}
-	var commits map[int]string
-	if c.Running() {
-		var err error
-		if commits, err = correction.Commits(ctx, d.work().RelayDir(in.Job.ID), c.Reviewed, p.Pushed); err != nil {
-			return transition.Result{}, err
-		}
+	if r, err := d.handOffDeps().Kept(ctx, p.Progress); err != nil {
+		return transition.Result{}, err
+	} else if r.State == handoff.HandBack {
+		return d.handBackReplied(ctx, in, p, r.Reason, r.Output)
 	}
 	logf := func(format string, a ...any) { d.logf("%s: "+format, append([]any{in.Job.ID}, a...)...) }
-	effect, ok, err := d.editor().Edit(ctx, in.Job.Subject.Number, *c, p.Pushed, commits, logf)
+	effect, ok, err := d.editor().Edit(ctx, in.Job.Subject.Number, *p.Correction, p.Pushed, d.work().RelayDir(in.Job.ID), logf)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -53,6 +46,24 @@ func (d *Deps) corrected(ctx context.Context, in transition.In, p progress) (tra
 		return transition.Result{State: Reviewing, RunAt: in.Now, Effects: []transition.Effect{effect}}, nil
 	}
 	return transition.Result{State: HandingOff, RunAt: in.Now}, nil
+}
+
+// over is a failed correction met again in a state that failed it, which has
+// nothing left to do for it: ok, and where the job goes instead.
+func over(in transition.In, p progress) (transition.Result, bool) {
+	s := p.Correction.Over(p.Pushed)
+	return transition.Result{State: step(s), RunAt: in.Now}, s != correction.Making
+}
+
+// step is the state a correction's step s goes on in.
+func step(s correction.Step) string {
+	switch s {
+	case correction.Session:
+		return Revising
+	case correction.PushBack:
+		return Pushing
+	}
+	return Reviewing
 }
 
 // stop is the revision stopped by something it did: a correction under way
@@ -73,23 +84,16 @@ func (d *Deps) failCorrection(ctx context.Context, in transition.In, p progress,
 		return d.handBackLost(ctx, in)
 	}
 	c := p.Correction
-	if err := work.Restore(ctx, d.work().Dir(in.Job.ID), p.Branch, c.Reviewed); err != nil {
-		return transition.Result{}, err
-	}
-	from, err := work.PushFrom(ctx, d.Store, p.Branch, c.Reviewed)
-	if err != nil {
+	if err := c.Fail(ctx, d.Store, d.work().Dir(in.Job.ID), p.Branch, why); err != nil {
 		return transition.Result{}, err
 	}
 	d.logf("%s: the correction of the review of `%s` failed, so the pull request goes back to it: %s", in.Job.ID, git.Short(c.Reviewed), why)
-	c.Failed, c.From = why, from
 	p.Failure, p.Why = "", ""
 	if err := d.save(in.Job.ID, p); err != nil {
 		return transition.Result{}, err
 	}
-	if p.Pushed == c.Reviewed {
-		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
-	}
-	return transition.Result{State: Pushing, RunAt: in.Now}, nil
+	r, _ := over(in, p)
+	return r, nil
 }
 
 // reviewed is the head the advisory review read, for a correction's prompt.

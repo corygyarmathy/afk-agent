@@ -13,10 +13,11 @@
 // its review marker keeps meaning that head.
 //
 // What the kinds share is here: which findings are correctable, read from the
-// review as posted; the prompt and the file the session is given them in; which
-// commit corrected which finding, read from the commits' trailers; and the
-// edit. Where a correction leaves the job - the session, the gate, the push,
-// CI, the revert and the hand-off - is each kind's.
+// review as posted; the prompt and the file the session is given them in;
+// where a correction sends the job next (Next), and what failing one does to
+// the workspace (Fail); which commit corrected which finding, read from the
+// commits' trailers; and the edit. Each kind maps a Step onto its own states,
+// and keeps the session, the gate, the push and CI its own.
 package correction
 
 import (
@@ -35,6 +36,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
+	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
 //go:embed correct.md
@@ -99,6 +101,69 @@ func (c *Correction) PushFrom(head string) int {
 	return c.From
 }
 
+// Step is where a correction sends the job making it. Each kind maps it onto
+// its own states.
+type Step int
+
+const (
+	// Making is no correction, or one still being made: the job goes on as
+	// the state it is in would.
+	Making Step = iota
+	// Session is a correction begun and never given to its session: the
+	// move that sent it there was lost, and it goes there now.
+	Session
+	// PushBack is a failed correction whose push back to the head the
+	// review read has not been seen yet.
+	PushBack
+	// Edit is a correction done with, the branch where it ended: the review
+	// is edited for how it ended, and the pull request handed off.
+	Edit
+)
+
+// Next is where c sends a job whose last push is pushed, in the state that
+// awaits the review, where every correction begins and ends.
+func Next(c *Correction, pushed string) Step {
+	switch {
+	case c == nil:
+		return Making
+	case !c.Running():
+		return c.Over(pushed)
+	case pushed == c.Reviewed:
+		return Session
+	}
+	return Edit
+}
+
+// Over is where c sends a job whose last push is pushed once c has failed, in
+// any state Fail is reached from: Fail saves the correction failed before the
+// job moves, and a process killed between the two runs that state again. The
+// state has nothing left to do for it. Making for a correction that has not
+// failed, or none.
+func (c *Correction) Over(pushed string) Step {
+	switch {
+	case c == nil || c.Running():
+		return Making
+	case pushed != c.Reviewed:
+		return PushBack
+	}
+	return Edit
+}
+
+// Fail is c failed, for why: the workspace ws put back on branch at the head
+// the review read, and the rounds of its push back counted past the first
+// push's (work.PushFrom). The caller saves c, and goes where c.Over says.
+func (c *Correction) Fail(ctx context.Context, s store.Store, ws, branch, why string) error {
+	if err := work.Restore(ctx, ws, branch, c.Reviewed); err != nil {
+		return err
+	}
+	from, err := work.PushFrom(ctx, s, branch, c.Reviewed)
+	if err != nil {
+		return err
+	}
+	c.Failed, c.From = why, from
+	return nil
+}
+
 // Begin is the correction the advisory review r of head asks for, if it has a
 // correctable finding: a Correctness or Standards finding, of any severity. A
 // merged duplicate is under the axis whose evidence is strongest, so it counts
@@ -159,7 +224,7 @@ func parse(body string) ([]string, []block) {
 	var (
 		blocks []block
 		axis   string
-		fence  bool
+		fence  string
 		open   bool
 		depth  int
 	)
@@ -175,11 +240,16 @@ func parse(body string) ([]string, []block) {
 	}
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			fence = !fence
+		if fence != "" {
+			// Closed only by a fence of its own character, at least as
+			// long, and with nothing after it: a reproduction may hold a
+			// shorter one.
+			if run := fenceOf(t); run != "" && run[0] == fence[0] && len(run) >= len(fence) && strings.TrimSpace(t[len(run):]) == "" {
+				fence = ""
+			}
 			continue
 		}
-		if fence {
+		if fence = fenceOf(t); fence != "" {
 			continue
 		}
 		if h, ok := strings.CutPrefix(line, "## "); ok {
@@ -199,7 +269,14 @@ func parse(body string) ([]string, []block) {
 			continue
 		}
 		if open {
-			depth += strings.Count(t, "<details") - strings.Count(t, "</details>")
+			// Only a tag on a line of its own counts, as the skill and the
+			// wrapper write them: one a finding's text mentions does not.
+			if strings.HasPrefix(t, "<details") {
+				depth++
+			}
+			if strings.HasSuffix(t, "</details>") && (t == "</details>" || strings.HasPrefix(t, "<details")) {
+				depth--
+			}
 			if depth < 0 {
 				// The wrapper's own `</details>`: the review ends here.
 				end(i)
@@ -209,6 +286,19 @@ func parse(body string) ([]string, []block) {
 	}
 	end(len(lines))
 	return lines, blocks
+}
+
+// fenceOf is the fence t opens or closes, if it is one: its run of backticks
+// or tildes, three or more.
+func fenceOf(t string) string {
+	if !strings.HasPrefix(t, "```") && !strings.HasPrefix(t, "~~~") {
+		return ""
+	}
+	n := 0
+	for n < len(t) && t[n] == t[0] {
+		n++
+	}
+	return t[:n]
 }
 
 // Write puts c's findings where the prompt says they are, in the workspace ws.
@@ -266,9 +356,6 @@ func Marker(c Correction, head string) string {
 	return fmt.Sprintf("<!-- afk:correction reviewed=%s head=%s -->", c.Reviewed, head)
 }
 
-// summary is the advisory review's own summary line, as review.body writes it.
-var summary = regexp.MustCompile(`(?m)^<summary>Advisory review of (<code>[^<]*</code>)\. Open it after your own reading\.</summary>$`)
-
 // Amended is body, the advisory review c answers, edited for how c ended, in
 // repository repo: corrected to head, with commits saying which commit
 // corrected which finding, or failed. Only c's findings change, each found in
@@ -281,6 +368,9 @@ var summary = regexp.MustCompile(`(?m)^<summary>Advisory review of (<code>[^<]*<
 //     correction was attempted on.
 //   - Failed, every finding stays as it was, marked "correction attempted,
 //     failed".
+//
+// The summary names both heads once CI passed the correction, and says it
+// corrected the review only when a commit named a finding it corrected.
 func Amended(body string, c Correction, head string, commits map[int]string, repo string) string {
 	ours := map[int]bool{}
 	for _, f := range c.Findings {
@@ -288,7 +378,7 @@ func Amended(body string, c Correction, head string, commits map[int]string, rep
 	}
 	lines, blocks := parse(body)
 	var out []string
-	at := 0
+	at, linked := 0, false
 	for _, b := range blocks {
 		if !ours[b.number] || !correctable(b.axis) {
 			continue
@@ -300,6 +390,7 @@ func Amended(body string, c Correction, head string, commits map[int]string, rep
 			out = append(out, finding...)
 			out = append(out, "", "_Correction attempted, failed: this is advice._")
 		case sha != "":
+			linked = true
 			out = append(out, fmt.Sprintf("<details><summary>%d. Corrected in %s.</summary>", b.number, commitLink(repo, sha)), "")
 			out = append(out, finding...)
 			out = append(out, "", "</details>")
@@ -313,9 +404,13 @@ func Amended(body string, c Correction, head string, commits map[int]string, rep
 	edited := strings.Join(out, "\n")
 
 	said := fmt.Sprintf("A correction of its Correctness and Standards findings was attempted and failed: %s The pull request is back at `%s`, as reviewed, so those findings are advice.", strings.TrimSpace(c.Failed), git.Short(c.Reviewed))
-	if c.Failed == "" {
+	switch {
+	case c.Failed == "" && linked:
 		said = fmt.Sprintf("Reviewed at `%s`; corrected to `%s` by %s of its Correctness and Standards findings, checked by their reproductions and CI, not re-reviewed. The citations are at `%s`.", git.Short(c.Reviewed), git.Short(head), compareLink(repo, c.Reviewed, head), git.Short(c.Reviewed))
-		edited = summary.ReplaceAllString(edited, "<summary>Advisory review of $1; corrected to <code>"+git.Short(head)+"</code>, checked by reproductions and CI, not re-reviewed. Open it after your own reading.</summary>")
+		edited = review.Followed(edited, "; corrected to <code>"+git.Short(head)+"</code>, checked by reproductions and CI, not re-reviewed")
+	case c.Failed == "":
+		said = fmt.Sprintf("Reviewed at `%s`; pushed to `%s` by %s of its Correctness and Standards findings, checked by CI, not re-reviewed, but no commit of it named a finding it corrected, so those findings are advice. The citations are at `%s`.", git.Short(c.Reviewed), git.Short(head), compareLink(repo, c.Reviewed, head), git.Short(c.Reviewed))
+		edited = review.Followed(edited, "; pushed to <code>"+git.Short(head)+"</code> by a correction that named no finding, so the findings are advice")
 	}
 	added := Marker(c, head) + "\n" + said + "\n"
 	if mark := review.Marker(c.Reviewed); strings.Contains(edited, mark) {
@@ -362,7 +457,7 @@ type Editor struct {
 }
 
 // Edit is the edit of pull request pr's advisory review for how c ended: at
-// head, with commits, as Amended says. It is false when there is nothing to
+// head, with the commits that corrected it read from relay, as Amended says. It is false when there is nothing to
 // edit, and the caller hands off: the review already says so, it is gone, or
 // the edit was made Rounds times and never showed. Either of the last two is
 // logged and costs the hand-off nothing: the review is advice, and the pull
@@ -371,7 +466,14 @@ type Editor struct {
 //
 // The effect reads the review again and edits that, so a replay after a slow
 // success edits nothing.
-func (e Editor) Edit(ctx context.Context, pr int, c Correction, head string, commits map[int]string, logf func(format string, a ...any)) (transition.Effect, bool, error) {
+func (e Editor) Edit(ctx context.Context, pr int, c Correction, head, relay string, logf func(format string, a ...any)) (transition.Effect, bool, error) {
+	var commits map[int]string
+	if c.Running() {
+		var err error
+		if commits, err = Commits(ctx, relay, c.Reviewed, head); err != nil {
+			return transition.Effect{}, false, err
+		}
+	}
 	comments, err := e.Tracker.Comments(ctx, pr)
 	if err != nil {
 		return transition.Effect{}, false, err

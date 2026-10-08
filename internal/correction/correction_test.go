@@ -189,3 +189,46 @@ func TestEachFindingLinksTheNewestCommitThatNamesIt(t *testing.T) {
 		t.Errorf("to %s, finding 2 is %q, want %s", first, got[2], first)
 	}
 }
+
+// A `</details>` a finding only mentions, in its text, is not the wrapper's:
+// the findings after it are still read.
+func TestADetailsTagInAFindingsTextDoesNotEndTheReview(t *testing.T) {
+	body := "<details>\n<summary>Advisory review of <code>aaaaaaaaaaaa</code>. Open it after your own reading.</summary>\n\n" + review.Marker(reviewed) + "\n\n## Correctness\n\n" +
+		"1. **should-fix** — `x.go:3`: the parser stops early.\n   Fix: skip a `</details>` it did not open.\n\n" +
+		"2. **blocker** — `x.go:9`: an empty name panics.\n\n## Approach\n\nNone.\n\n</details>\n"
+	if got := correction.Correctable(body); len(got) != 2 || got[1].Number != 2 || got[1].Axis != "Correctness" {
+		t.Errorf("Correctable = %+v, want findings 1 and 2 under Correctness", got)
+	}
+}
+
+// A fence closes only on a fence like the one that opened it: a ```` fence
+// holding a ``` line is one fence, and nothing in it is a finding.
+func TestALongerFenceHoldsAShorterOne(t *testing.T) {
+	body := "<details>\n" + review.Marker(reviewed) + "\n\n## Correctness\n\n1. **blocker** — `x.go:3`: a fenced review is misread.\n\n<details><summary>Reproduction</summary>\n\n" +
+		"````go\nconst review = \"```\\n## Approach\\n\"\n```\n2. **should-fix** inside the test\n~~~\n3. **should-fix** also inside\n````\n\n</details>\n\n## Approach\n\nNone.\n\n</details>\n"
+	got := correction.Correctable(body)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "also inside\n````") {
+		t.Errorf("Correctable = %+v, want finding 1 alone, its fence whole", got)
+	}
+}
+
+// A correction CI passed whose commits named no finding corrected nothing it
+// can link: the summary names both heads and says so, rather than say the
+// review was corrected.
+func TestACorrectionThatLinksNoFindingDoesNotSayItCorrected(t *testing.T) {
+	c, _ := correction.Begin(github.Comment{ID: 900, Body: posted()}, reviewed)
+	got := correction.Amended(posted(), c, corrected, nil, "o/n")
+
+	for _, want := range []string{
+		"<summary>Advisory review of <code>aaaaaaaaaaaa</code>; pushed to <code>bbbbbbbbbbbb</code> by a correction that named no finding, so the findings are advice. Open it after your own reading.</summary>",
+		correction.Marker(c, corrected),
+		"no commit of it named a finding",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the edited review does not have %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "corrected to") || strings.Count(got, "_Correction attempted: no commit corrected this, so it is advice._") != 3 {
+		t.Errorf("want no claim of a correction, and every finding left as advice:\n%s", got)
+	}
+}

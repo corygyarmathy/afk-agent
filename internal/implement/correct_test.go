@@ -1,6 +1,7 @@
 package implement_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -238,21 +239,50 @@ func TestAPushByAnyoneElseDuringACorrectionHandsBack(t *testing.T) {
 		t.Fatalf("job in %q, want the correction's CI watched", j.State)
 	}
 
-	human := filepath.Join(t.TempDir(), "human")
-	if _, err := run("", "git", "clone", "--quiet", "--branch", "afk/7-1", f.remote, human); err != nil {
-		t.Fatal(err)
-	}
-	if err := commit("theirs")(human); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := run(human, "git", "push", "--quiet", "origin", "afk/7-1"); err != nil {
+	if err := f.pushAsSomeoneElse(); err != nil {
 		t.Fatal(err)
 	}
 	f.at = f.at.Add(f.deps.CIWait)
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}
+	f.handedBackForTheirPush()
+}
 
+// Someone else's push while a correction is being made is theirs however the
+// correction ends, and one that fails with nothing pushed is no exception: the
+// pull request is handed back, not handed off with their push in it.
+func TestAPushByAnyoneElseDuringAFailedCorrectionHandsBack(t *testing.T) {
+	f := greenPR(t)
+	f.postFindings()
+	f.model.then(func(string) error { return f.pushAsSomeoneElse() })
+
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.handedBackForTheirPush()
+}
+
+// pushAsSomeoneElse pushes a commit to the pull request's branch from a clone
+// of someone else's.
+func (f *fixture) pushAsSomeoneElse() error {
+	human := filepath.Join(f.t.TempDir(), "human")
+	if _, err := run("", "git", "clone", "--quiet", "--branch", "afk/7-1", f.remote, human); err != nil {
+		return err
+	}
+	if err := commit("theirs")(human); err != nil {
+		return err
+	}
+	_, err := run(human, "git", "push", "--quiet", "origin", "afk/7-1")
+	return err
+}
+
+// handedBackForTheirPush checks for one hand-back, for someone else's push,
+// no hand-off, and the review left as it was posted.
+func (f *fixture) handedBackForTheirPush() {
+	t := f.t
+	t.Helper()
 	var handBacks []github.Comment
 	for _, c := range f.tr.byAgent() {
 		if c.ID != reviewID {
@@ -328,4 +358,84 @@ func logged(f *fixture, want string) bool {
 		}
 	}
 	return false
+}
+
+// driveReplayingTheFailure drives the job as drive does, a transition at a
+// time, and the first time one leaves the correction failed puts the job back
+// in the state that transition ran from: the progress saved, and the process
+// killed before the runner committed where it went. It returns that state.
+func (f *fixture) driveReplayingTheFailure() string {
+	f.t.Helper()
+	path := filepath.Join(f.deps.StateDir, "progress", f.job.ID+".json")
+	for range 60 {
+		job := f.now()
+		next, ok := f.reg.Next(job.Kind, job.State)
+		if !ok {
+			break
+		}
+		if _, err := f.run.Run(context.Background(), next.Name, job.ID); err != nil {
+			f.t.Fatalf("%s: %v", next.Name, err)
+		}
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), `"failed"`) {
+			f.setState(job.State)
+			if errs := f.drive(); len(errs) != 0 {
+				f.t.Fatalf("errors: %v", errs)
+			}
+			return job.State
+		}
+		if job = f.now(); job.NextRunAt.IsZero() || job.NextRunAt.After(f.at) {
+			break
+		}
+	}
+	f.t.Fatal("the correction never failed")
+	return ""
+}
+
+// A failed correction replayed from the state that failed it, because the
+// process was killed before that state's move was committed, still ends the
+// way a failed correction does: handed off at the reviewed head, its findings
+// left as advice. It is not handed back for the work it already failed on.
+func TestAFailedCorrectionReplayedIsStillHandedOff(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		from  string
+		setup func(f *fixture, reviewed string)
+	}{
+		{"the gate", implement.Gating, func(f *fixture, reviewed string) {
+			f.model.then(func(dir string) error {
+				if _, err := run(dir, "git", "rm", "--quiet", "ok"); err != nil {
+					return err
+				}
+				_, err := run(dir, "git", "commit", "--quiet", "-m", "drop ok")
+				return err
+			})
+		}},
+		{"CI", implement.Watching, func(f *fixture, reviewed string) {
+			f.tr.checks = func(sha string, call int) []github.CheckRun {
+				if sha == reviewed {
+					return green(sha, call)
+				}
+				return []github.CheckRun{{Name: "test", Status: "completed", Conclusion: "failure"}}
+			}
+			f.model.then(correcting(nil, "regression", "Corrects: advisory 2"), commit("fix1"), commit("fix2"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := greenPR(t)
+			reviewed := f.postFindings()
+			tc.setup(f, reviewed)
+			f.at = f.at.Add(f.deps.CIWait)
+
+			if from := f.driveReplayingTheFailure(); from != tc.from {
+				t.Errorf("the correction failed in %q, want %q", from, tc.from)
+			}
+			if at := f.pushed(); at != reviewed {
+				t.Errorf("the branch is at %s, want it at the reviewed head %s", at, reviewed)
+			}
+			if body := f.theReview(); !strings.Contains(body, "attempted and failed") {
+				t.Errorf("the review does not say the correction failed:\n%s", body)
+			}
+			f.handedOffWithNoHandBack()
+		})
+	}
 }

@@ -1770,3 +1770,27 @@ func TestARevisionsReviewIsOfItsSendBack(t *testing.T) {
 		t.Errorf("the prompt does not say the spec is the send-back:\n%s", p)
 	}
 }
+
+// What followed a review is said in its summary, right after what it
+// reviewed, whether that was a head or a revision's range; and nothing else
+// of the review changes.
+func TestWhatFollowedAReviewIsSaidInItsSummary(t *testing.T) {
+	const since, head = "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"
+	d := &review.Deps{}
+	for name, tc := range map[string]struct{ since, of string }{
+		"a head":  {"", "222222222222"},
+		"a range": {since, "111111111111..222222222222"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := d.Body(5, tc.since, head, opencode.Reply{Text: "## Correctness\n\n1. **blocker** — it breaks."})
+			got := review.Followed(body, "; then this")
+			want := "<summary>Advisory review of <code>" + tc.of + "</code>; then this. Open it after your own reading.</summary>"
+			if !strings.Contains(got, want) {
+				t.Errorf("Followed did not say it:\n%s", got)
+			}
+			if strings.Replace(got, want, "", 1) != strings.Replace(body, "<summary>Advisory review of <code>"+tc.of+"</code>. Open it after your own reading.</summary>", "", 1) {
+				t.Errorf("Followed changed more than the summary:\n%s", got)
+			}
+		})
+	}
+}

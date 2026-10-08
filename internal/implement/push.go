@@ -40,6 +40,12 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		// it never happened. The work is still uncut, and is not pushed.
 		return transition.Result{State: Implementing, RunAt: in.Now}, nil
 	}
+	if r, ok := over(in, p); ok && r.State != Pushing {
+		// A failed correction already at the head the review read, failed
+		// here and the move that followed lost. One that is not there yet
+		// is what this push sends back.
+		return r, nil
+	}
 
 	relayDir := d.work().RelayDir(in.Job.ID)
 	head, err := work.Relay(ctx, ws, relayDir, p.Branch)

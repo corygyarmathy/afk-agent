@@ -259,6 +259,10 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok {
+		// Failed here, and the move that followed lost.
+		return r, nil
+	}
 
 	// Before the gate runs, as revise's check of the head it read is: a
 	// correction that rewrote the head the review read has nothing left for

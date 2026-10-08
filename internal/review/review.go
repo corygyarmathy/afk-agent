@@ -695,8 +695,27 @@ func (d *Deps) body(n int, since, head string, reply opencode.Reply, a request, 
 	if since != "" {
 		of = git.Short(since) + ".." + of
 	}
-	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
-		of, Marker(head), asked, strings.TrimSpace(reply.Text), footer)
+	return fmt.Sprintf("<details>\n%s\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
+		summary(of, ""), Marker(head), asked, strings.TrimSpace(reply.Text), footer)
+}
+
+// summary is the line a review is folded under: of, what it reviewed, and
+// after, what followed the review, which nothing says until a correction does
+// (Followed).
+func summary(of, after string) string {
+	return "<summary>Advisory review of <code>" + of + "</code>" + after + ". Open it after your own reading.</summary>"
+}
+
+// posted is the summary line as body writes it, whatever it reviewed.
+var posted = regexp.MustCompile(`(?m)^` + strings.Replace(regexp.QuoteMeta(summary("\x00", "")), "\x00", `([^<]*)`, 1) + `$`)
+
+// Followed is body, a review as this package posts it, with its summary
+// saying what followed the review: after, read straight after what it
+// reviewed. A correction says it (package correction), and keeps the rest.
+func Followed(body, after string) string {
+	return posted.ReplaceAllStringFunc(body, func(line string) string {
+		return summary(posted.FindStringSubmatch(line)[1], after)
+	})
 }
 
 // spend counts a run of ref, failed or not, into what the review has spent

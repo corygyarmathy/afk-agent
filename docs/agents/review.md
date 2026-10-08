@@ -134,7 +134,8 @@ the review's `head=` marker keeps meaning the head it reviewed. Corrected, the
 summary names both heads, "Advisory review of `abc1234`; corrected to
 `def5678`, checked by reproductions and CI, not re-reviewed", each corrected
 finding collapses to one line linking its commit, and the citations stay at
-the reviewed head. Failed, the pull request is back at the reviewed head, and
+the reviewed head. A correction CI passed whose commits named no finding says
+so in the summary instead of "corrected to". Failed, the pull request is back at the reviewed head, and
 the findings are marked as advice a correction failed on. Nothing reviews the
 corrected head again. A review that `/review` asked for on someone else's pull
 request is never corrected, and never edited.

@@ -28,6 +28,12 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok && r.State != Pushing {
+		// A failed correction already at the head the review read, failed
+		// here and the move that followed lost. One that is not there yet
+		// is what this push sends back.
+		return r, nil
+	}
 
 	relayDir := d.work().RelayDir(in.Job.ID)
 	head, err := work.Relay(ctx, d.work().Dir(in.Job.ID), relayDir, p.Branch)

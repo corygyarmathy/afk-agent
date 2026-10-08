@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/review"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
@@ -145,6 +146,53 @@ func TestARevisionsFailedCorrectionLeavesTheFindingsAsAdvice(t *testing.T) {
 		t.Fatalf("%d reviews of %s, want the branch left at the one reviewed", len(reviews), at)
 	}
 	if body := reviews[0].Body; !strings.Contains(body, "attempted and failed: The local gate still failed after 3 attempts.") || !strings.Contains(body, "_Correction attempted, failed: this is advice._") {
+		t.Errorf("the review does not say the correction failed:\n%s", body)
+	}
+	if _, n := f.reply(); n != 1 {
+		t.Errorf("%d replies, want one", n)
+	}
+	if !f.tr.labelled() {
+		t.Error("the hand-off label is not back on the pull request")
+	}
+	if f.handedBack() {
+		t.Errorf("the revision was handed back:\n%s", f.handBack())
+	}
+}
+
+// A correction CI is still red on after its fixes is pushed back to the head
+// the review read, under the lease, and is not a hand-back: that head is not
+// watched again, the review says the correction failed, the reply is left as
+// it was posted, and the pull request is handed off.
+func TestARevisionsCorrectionCIRefusesIsPushedBackToTheReviewedHead(t *testing.T) {
+	f := setupReplying(t)
+	f.tr.pr.Login = agent
+	f.review.Model = finder{}
+	var reviewed string
+	f.tr.checks = func(sha string, call int) []github.CheckRun {
+		if reviewed == "" {
+			reviewed = sha
+		}
+		if sha == reviewed {
+			return green(sha, call)
+		}
+		return []github.CheckRun{{Name: "test", Status: "completed", Conclusion: "failure", Text: "--- FAIL: TestBar"}}
+	}
+	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"), correctOn("regression", "Corrects: advisory 1"), commitOn("fix1"), commitOn("fix2"))
+
+	if job := f.finish(); job.State != revise.Start || !job.NextRunAt.IsZero() {
+		t.Fatalf("the revision is in %q, want at rest\n%s", job.State, f.handBack())
+	}
+	if len(f.model.asked) != 2+f.deps.CIFixes {
+		t.Errorf("the model was asked %d times, want the revision, the correction and its %d fixes", len(f.model.asked), f.deps.CIFixes)
+	}
+	if at := f.remoteHead(); at != reviewed {
+		t.Errorf("the branch is at %s, want it pushed back to the reviewed head %s", at, reviewed)
+	}
+	reviews := f.reviews(reviewed)
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews of %s, want one", len(reviews), reviewed)
+	}
+	if body := reviews[0].Body; !strings.Contains(body, "attempted and failed: CI still failed after 2 fixes.") || !strings.Contains(body, "_Correction attempted, failed: this is advice._") {
 		t.Errorf("the review does not say the correction failed:\n%s", body)
 	}
 	if _, n := f.reply(); n != 1 {
