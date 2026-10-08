@@ -4,26 +4,26 @@
     "repo": "corygyarmathy/skills",
     "url": "https://github.com/corygyarmathy/skills.git",
     "prefix": "skills",
-    "rev": "9d7c18d0273508970ec8d3d85627214be55520de"
+    "rev": "e5d771e20bc847e819e7dcec69adc9ac099306ce"
   },
   "vendorPath": ".agents/skills",
   "linkPath": ".claude/skills",
   "skills": {
     "ask-cory": {
       "path": "skills/ask-cory",
-      "hash": "c2f34ce79d9ac7cdc5b9a9993db327b13e7920c9f6683bd6448ba50bff01a671"
+      "hash": "c512e74bd38394b2f05e03a310cd6f6c9bcbc7f3b41be547d9dfa2debe16d920"
     },
     "codebase-design": {
       "path": "skills/codebase-design",
-      "hash": "9cdaf206d4d13e38a569bef3e4abfee5ed4958777b33ff0a71322162c9c81318"
+      "hash": "d593ce0e662aa841cfa22e5b7036868d807ea880e612685ea92fbc23bced0c2a"
     },
     "diagnosing-bugs": {
       "path": "skills/diagnosing-bugs",
-      "hash": "877b1a32ed425ba9524cf407a21b307e03143a8f66870f9676cfc0994631401e"
+      "hash": "9060ab000374da88e3cf2665fafe3db82fe553508388b4b18b185a550936f49f"
     },
     "domain-modeling": {
       "path": "skills/domain-modeling",
-      "hash": "4f19c80e5354b4ff247d7082ea82686136a316ced34098f466ab63f04a35d28d"
+      "hash": "14c21839edb3f0313dc56a860c758e45615083a667341688adab63e03fcb44b2"
     },
     "grill-me": {
       "path": "skills/grill-me",
@@ -35,19 +35,23 @@
     },
     "grilling": {
       "path": "skills/grilling",
-      "hash": "34a8f82bacc12e9cacfc5d95ccd06cfad88a5bd4a6f85958b5f62e05d289d11d"
+      "hash": "60416bd8d2f912663b4c6f5dcf2be4673b8a88716ea7d1baa5d154f798e101f7"
     },
     "handoff": {
       "path": "skills/handoff",
-      "hash": "60a12bfa0a77577d71b5bce7d56ceb61eff31b0d0b334556a7ed5ec684d3d03a"
+      "hash": "92cf6148383bbb1d4edaca133729b97fe13dd3bd05c220227e5774bc0d45b6b4"
     },
     "implement": {
       "path": "skills/implement",
-      "hash": "f79a0c25514d8886350c9c13d39ef7458bd35d06265280366cffddd0e32bddd5"
+      "hash": "6bba45315872955325316fbd6d67c837e32e0fa501e96fe4c9f6ae63c1bdadbb"
     },
     "improve-codebase-architecture": {
       "path": "skills/improve-codebase-architecture",
-      "hash": "1b23d8622f942d56f608fbcda1d7d3b9433f49211a3c6da79a672b6617600997"
+      "hash": "3523da74c307c22810f737af4a4f7bdedf958940fe6117ac38499766e5372670"
+    },
+    "pr": {
+      "path": "skills/pr",
+      "hash": "2fb29d468ff431bff0c48cd4f5249c4c4763cdad8c8811dc69caac828ad3be3a"
     },
     "prototype": {
       "path": "skills/prototype",
@@ -59,19 +63,19 @@
     },
     "reviewing-changes": {
       "path": "skills/reviewing-changes",
-      "hash": "6241ae63f68bb5c15fd8e397b0e211a242f327b9e34e6162834914682c1d39a6"
+      "hash": "8a9b42193b7d478bf1dc8b13ab291f7b62ef9f39588cb47f9809a0dc45ecb9e1"
     },
     "setup-cory-gyarmathy-skills": {
       "path": "skills/setup-cory-gyarmathy-skills",
-      "hash": "c81450e61172a02d9103555c481a497c6db258b251b943ed441bc937e7a14dd5"
+      "hash": "7a12af2cb1318f83a5e0351889e5f82f8d9f2f55c9144678599232e535a3fd84"
     },
     "tdd": {
       "path": "skills/tdd",
-      "hash": "44836df6e60f33988eef66c39b6b36bd4155fc7011d1d620fa9d3daa8e8f26bb"
+      "hash": "44bffef9598d43169641f9d5e0f9a29037f5e80c1f909cda2a52191f79521417"
     },
     "teach": {
       "path": "skills/teach",
-      "hash": "18b58ce84235aca57833214badd98447ac17e181f4afc927a329baf2a6790988"
+      "hash": "91a82d62b30ad4ed1aa47168d390f98c098e3b1f2d82c2efb64a009518a36166"
     },
     "to-questionnaire": {
       "path": "skills/to-questionnaire",
@@ -83,23 +87,23 @@
     },
     "to-tickets": {
       "path": "skills/to-tickets",
-      "hash": "7e8e7cad687be5de784dba7baaccf596f647788ad83bb3d6249873a25ddb9f7e"
+      "hash": "5894273ed91bf84da66ddc0edbaf5b63c9d3f55c32fa80b1aae92893f5d546f1"
     },
     "triage": {
       "path": "skills/triage",
-      "hash": "7fff875d8904e06bc1682b244bfc644800142c94737e43e4f5ba0f82a66111a4"
+      "hash": "e8797d1e989bd39fc6d6e36a25f108946b70aef05ff0659383bb34c1ea99c91d"
     },
     "wait-what": {
       "path": "skills/wait-what",
-      "hash": "885d0b4d35ab2976e173886989a9338b57f0314de827ce54ad32e7c69e642924"
+      "hash": "6b7702f55718411531c7085f4d60ea6a4d5c5f1903d0dbfeb3ed9e354b7bbe06"
     },
     "wayfinder": {
       "path": "skills/wayfinder",
-      "hash": "887cfd94753f0e21ef7478291eeb336e29a63c69df0ea2969d41491a0f43f948"
+      "hash": "a4e830168f64827b0a08446a4ba069922357465bded5db3f89342b74f916c4da"
     },
     "wizard": {
       "path": "skills/wizard",
-      "hash": "89b177f68dd997a5d87e53b6179f02eb80ee0c2cec5c67e7d3f3248799112914"
+      "hash": "33818dcc48afb0583a9ca5074bfc1d1f04bb53ad6c57fb98b9ea06c8213210dd"
     },
     "writing-for-agents": {
       "path": "skills/writing-for-agents",
