@@ -44,7 +44,8 @@ type reviser struct {
 	// nothing.
 	cost float64
 
-	// lastInput is the last-turn input each run that succeeds reports.
+	// lastInput is the last-turn input each run reports, whether its turn
+	// failed or not.
 	lastInput int
 }
 
@@ -63,7 +64,9 @@ func (m *reviser) Run(_ context.Context, req opencode.Request) (opencode.Reply, 
 		turn := m.turns[0]
 		m.turns = m.turns[1:]
 		if err := turn(req.Dir); err != nil {
-			return m.spent(), err
+			reply := m.spent()
+			reply.LastInput = m.lastInput
+			return reply, err
 		}
 	}
 	reply := m.spent()

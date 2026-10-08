@@ -152,6 +152,30 @@ func TestAFreshSessionIsContinuedWhileItIsUnderTheThreshold(t *testing.T) {
 	}
 }
 
+// A continuation that fails transiently still grew its session, and the next
+// candidate's run reads the size it grew to: over the threshold, it is not
+// continued.
+func TestASessionThatGrewInAFailedRunIsNotContinued(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.FreshAt = 1000
+	f.model.lastInput = 10
+	f.model.then(commit("attempt"), func(dir string) error {
+		f.model.lastInput = 5000
+		return fail(first)(dir)
+	}, commit("ok"))
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 3 {
+		t.Fatalf("the model was asked %d times, want 3", len(f.model.asked))
+	}
+	if got := []string{f.model.asked[1].Session, f.model.asked[2].Session}; got[0] != "ses_1" || got[1] != "" {
+		t.Errorf("the retries ran in sessions %q, want ses_1 and then a fresh one", got)
+	}
+	f.loggedFresh("ses_1", "5000", "1000")
+}
+
 // loggedFresh fails the test unless the log says once that session was not
 // continued, with its size and the threshold.
 func (f *fixture) loggedFresh(session string, want ...string) {

@@ -53,9 +53,10 @@ func (t Tier) Choose(ctx context.Context, in transition.In, deferred string) (re
 // Run runs one candidate's session, req. With a reply, ok is true. Without
 // one, ok is false and the result is what the job does instead: stay, which
 // moves the next run to the next candidate, or defer to deferred when the
-// tier has none left. The reply then holds what the failed run spent and
-// nothing else, which the caller counts as it would a reply's (#22): a run
-// that failed was still paid for.
+// tier has none left. The reply then holds what the failed run spent, which
+// the caller counts as it would a reply's (#22): a run that failed was still
+// paid for. It holds the failed run's last input too, which the caller keeps
+// for a session it continued: the next continuation starts from there.
 //
 // A session gone with opencode's data - a rebuilt host, say - is run again as
 // a fresh one, with the prompt fresh gives. The retry is weaker without it,

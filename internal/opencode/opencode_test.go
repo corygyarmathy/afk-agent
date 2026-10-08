@@ -381,7 +381,9 @@ func TestFailuresOpencodeReportsAreTransient(t *testing.T) {
 
 // A run that failed was still paid for as far as it got (#22): the failure
 // comes with what its steps and its sub-agents spent, and with no text, which
-// is not a reply.
+// is not a reply. It comes with its last step's input too: the steps went into
+// the session it continued, and the next continuation starts from there
+// (#192).
 func TestAFailedRunSaysWhatItSpent(t *testing.T) {
 	task := strings.Split(strings.TrimSpace(readFixture(t, "task.jsonl")), "\n")
 	var lines []string
@@ -407,6 +409,9 @@ func TestAFailedRunSaysWhatItSpent(t *testing.T) {
 	}
 	if got.Tokens.Input != 12306+10730 || got.SubAgents != 1 || got.Unread != 0 {
 		t.Errorf("tokens %+v over %d sub-agents with %d unread, want the step's and the sub-agent's", got.Tokens, got.SubAgents, got.Unread)
+	}
+	if want := 12306 + 1792; got.LastInput != want {
+		t.Errorf("last input %d, want the step that finished's, %d", got.LastInput, want)
 	}
 	if got.Text != "" || got.Session != "" {
 		t.Errorf("text %q in session %q came with a failure, want only what it spent", got.Text, got.Session)

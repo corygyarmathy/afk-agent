@@ -1,9 +1,11 @@
 package revise_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 )
 
@@ -71,5 +73,34 @@ func TestARevisionSessionAtTheThresholdIsContinued(t *testing.T) {
 	}
 	if len(f.model.asked) != 2 || f.model.asked[1].Session != "ses_1" {
 		t.Errorf("requests = %+v, want the fix in the revision's session, ses_1", f.model.asked)
+	}
+}
+
+// A fix that fails transiently still grew the revision's session, and the next
+// candidate's run reads the size it grew to: over the threshold, it is not
+// continued.
+func TestARevisionSessionThatGrewInAFailedRunIsNotContinued(t *testing.T) {
+	f := setupRevision(t)
+	f.deps.FreshAt = 1000
+	f.model.lastInput = 10
+	f.model.then(
+		reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."),
+		func(string) error {
+			f.model.lastInput = 5000
+			return &opencode.TransientError{Model: refFirst, Err: errors.New("429 Too Many Requests")}
+		},
+		reviseOn("fix.txt", "## Points\n\n- \"Rename Foo\" done, and fixed."),
+	)
+	var first string
+	f.tr.checks = redOn(&first)
+
+	if job := f.drive(); job.State != revise.Replying {
+		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
+	}
+	if len(f.model.asked) != 3 {
+		t.Fatalf("the model was asked %d times, want 3", len(f.model.asked))
+	}
+	if got := []string{f.model.asked[1].Session, f.model.asked[2].Session}; got[0] != "ses_1" || got[1] != "" {
+		t.Errorf("the fixes ran in sessions %q, want ses_1 and then a fresh one", got)
 	}
 }
