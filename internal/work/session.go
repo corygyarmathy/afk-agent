@@ -26,6 +26,11 @@ type Tier struct {
 	// exhausted, and Wait how long an exhausted tier defers. Parameters.
 	Bound int
 	Wait  time.Duration
+
+	// FreshAt is the last-turn input over which a session is not continued,
+	// and a fresh one takes over (Run). Zero continues every session. A
+	// parameter.
+	FreshAt int
 }
 
 // Choose is the candidate this run of the job uses. With no candidate to run
@@ -48,21 +53,36 @@ func (t Tier) Choose(ctx context.Context, in transition.In, deferred string) (re
 // Run runs one candidate's session, req. With a reply, ok is true. Without
 // one, ok is false and the result is what the job does instead: stay, which
 // moves the next run to the next candidate, or defer to deferred when the
-// tier has none left. The reply then holds what the failed run spent and
-// nothing else, which the caller counts as it would a reply's (#22): a run
-// that failed was still paid for.
+// tier has none left. The reply then holds what the failed run spent, which
+// the caller counts as it would a reply's (#22): a run that failed was still
+// paid for. It holds the failed run's last input too, which the caller keeps
+// for a session it continued: the next continuation starts from there.
 //
 // A session gone with opencode's data - a rebuilt host, say - is run again as
 // a fresh one, with the prompt fresh gives. The retry is weaker without it,
 // but the job carries on (ADR 0001 §6). fresh is also where the kind forgets
 // the session it had recorded.
 //
+// So is a session whose last turn's input, last, was over FreshAt, without
+// being asked to continue at all (#192). Every continuation - a gate retry, a
+// fix, a cut - comes through here, and the rule is the same for each: a long
+// session costs more for every turn, re-sending its whole context, and does
+// worse work. The fresh session has the issue, the branch's commits, and the
+// failure fresh's prompt gives, as one after a session gone does.
+//
 // A transient failure is logged, because nothing else keeps it once the next
 // candidate runs. It stays rather than returning an error: an error is an
 // attempt, and every other error here is one that is not the model's (ADR 0001
 // §10). A tier with no candidate left defers with the failure that ran it out
 // (#98).
-func (t Tier) Run(ctx context.Context, in transition.In, m Model, req opencode.Request, fresh func() (string, error), stay, deferred string, logf func(format string, a ...any)) (reply opencode.Reply, res transition.Result, ok bool, err error) {
+func (t Tier) Run(ctx context.Context, in transition.In, m Model, req opencode.Request, last int, fresh func() (string, error), stay, deferred string, logf func(format string, a ...any)) (reply opencode.Reply, res transition.Result, ok bool, err error) {
+	if req.Session != "" && t.FreshAt > 0 && last > t.FreshAt {
+		logf("%s: session %s's last turn had %d tokens in, over %d, so a fresh session takes over", in.Job.ID, req.Session, last, t.FreshAt)
+		if req.Prompt, err = fresh(); err != nil {
+			return opencode.Reply{}, transition.Result{}, false, err
+		}
+		req.Session = ""
+	}
 	reply, err = m.Run(ctx, req)
 	var gone *opencode.SessionGoneError
 	if errors.As(err, &gone) {

@@ -109,6 +109,13 @@ type Reply struct {
 	// asked for them.
 	Tokens Tokens
 
+	// LastInput is the input of the run's last step, cached reads and writes
+	// included: how much context the session's next turn starts from. Its
+	// own session's alone, whatever the request asked for, because that is
+	// the session a continuation runs in (#192). Zero for a run that
+	// finished no step.
+	LastInput int
+
 	// SubAgents is how many sub-agents' sessions the run started, theirs
 	// included, when the request asked for their cost.
 	SubAgents int
@@ -241,9 +248,11 @@ func (c Command) Run(ctx context.Context, req Request) (Reply, error) {
 	}
 
 	// A run that failed was still paid for, as far as it got (#22): what it
-	// spent comes back with the failure, and nothing else of the reply does.
+	// spent comes back with the failure. So does its last step's input: the
+	// steps went into the session it ran in, which a continuation starts from
+	// (#192). Nothing else of the reply does.
 	failed := func(err *TransientError) (Reply, error) {
-		spent := Reply{Cost: reply.Cost, Tokens: reply.Tokens}
+		spent := Reply{Cost: reply.Cost, Tokens: reply.Tokens, LastInput: reply.LastInput}
 		if req.Cost {
 			c.subAgents(bounded, req.Dir, &spent, children)
 		}
@@ -479,6 +488,7 @@ func decode(r io.Reader) (Reply, []string, error, error) {
 			reply.Cost += ev.Part.Cost
 			if t := ev.Part.Tokens; t != nil {
 				reply.Tokens.add(*t)
+				reply.LastInput = t.Input + t.Cache.Read + t.Cache.Write
 			}
 		case "tool_use":
 			if id := ev.Part.child(); id != "" {

@@ -207,6 +207,11 @@ type Deps struct {
 	Bound    int
 	TierWait time.Duration
 
+	// FreshAt is the last-turn input tokens over which a session is not
+	// continued, and a fresh one takes over; zero continues every session
+	// (work.Tier). A parameter.
+	FreshAt int
+
 	// Rounds is how many times something owed is made before one that never
 	// appears is an error. A parameter.
 	Rounds int

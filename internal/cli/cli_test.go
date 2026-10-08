@@ -89,6 +89,12 @@ func TestMain_ExitCodes(t *testing.T) {
 			stdoutIs: "--size-signal <n>     AFK_SIZE_SIGNAL",
 		},
 		{
+			name:     "help lists the fresh session threshold",
+			args:     []string{"help"},
+			want:     ExitOK,
+			stdoutIs: "AFK_FRESH_SESSION_AT",
+		},
+		{
 			name:     "help lists the replay bound",
 			args:     []string{"help"},
 			want:     ExitOK,
@@ -1015,7 +1021,7 @@ func TestReviewIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) 
 // Implementing an issue is read from its parameters, and reaches the tracker
 // through the one the command built.
 func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.T) {
-	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_REVIEW_PROCEDURE", "AFK_SENSITIVE", "AFK_EFFECT_ROUNDS", "AFK_REPLAYS",
+	for _, env := range []string{"AFK_BRANCH_PREFIX", "AFK_GATE", "AFK_GATE_ATTEMPTS", "AFK_IMPLEMENT_TIER", "AFK_IMPLEMENT_NEEDS", "AFK_HAND_BACK_LABEL", "AFK_HAND_OFF_LABEL", "AFK_LEASE", "AFK_DENYLIST", "AFK_CI_WAIT", "AFK_CI_CEILING", "AFK_CI_FIXES", "AFK_SIZE_SIGNAL", "AFK_FRESH_SESSION_AT", "AFK_REVIEW_PROCEDURE", "AFK_SENSITIVE", "AFK_EFFECT_ROUNDS", "AFK_REPLAYS",
 		"AFK_BUDGET_KEY", "AFK_BUDGET_AGE", "AFK_BUDGET_AT", "AFK_CATALOGUE_AGE", "AFK_OPENCODE", "AFK_ENROLMENT", "AFK_MODEL_ATTEMPTS", "AFK_TIER_WAIT", "AFK_MODEL_TIMEOUT"} {
 		t.Setenv(env, "")
 	}
@@ -1041,6 +1047,8 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		sizeSignal:    "400",
 		effectRounds:  "4",
 
+		freshSessionAt: "150000",
+
 		reviewProcedure: "https://github.com/o/skills/blob/main/docs/operators-review.md",
 		sensitive:       "job store schema = internal/store/**, cmd/migrate/*.go; CI=.github/workflows/**;",
 	}
@@ -1055,7 +1063,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Remote.Token == nil ||
 		d.HandOffLabel != "needs-review" || d.AskReview == nil ||
-		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIFixes != 2 || d.SizeSignal != 400 ||
+		d.CIWait != 5*time.Minute || d.CICeiling != 2*time.Hour || d.CIFixes != 2 || d.SizeSignal != 400 || d.FreshAt != 150000 ||
 		d.ReviewProcedure != full.reviewProcedure || d.Repo != "o/n" ||
 		d.Bound != 3 || d.Rounds != 4 || d.TierWait != 30*time.Minute || d.Remote.URL != "https://github.com/o/n.git" || d.StateDir != filepath.Dir(full.store) {
 		t.Errorf("deps = %+v, want them read from the parameters", d)
@@ -1078,6 +1086,12 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	none.sensitive = ""
 	if d, err := implementDeps(context.Background(), none, nil, tr); err != nil || len(d.Sensitive) != 0 {
 		t.Errorf("without sensitive paths: deps %+v, err %v; want none and no error", d, err)
+	}
+	// Zero is a threshold an operator may set: every session is continued.
+	always := full
+	always.freshSessionAt = "0"
+	if d, err := implementDeps(context.Background(), always, nil, tr); err != nil || d.FreshAt != 0 {
+		t.Errorf("at zero: deps %+v, err %v; want zero and no error", d, err)
 	}
 	// The procedure is optional: without it the reminder says it has no link.
 	unset := full
@@ -1106,6 +1120,9 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		{func(p *params) { p.ciFixes = "0" }, "--ci-fixes"},
 		{func(p *params) { p.sizeSignal = "" }, "--size-signal is required"},
 		{func(p *params) { p.sizeSignal = "big" }, "--size-signal"},
+		{func(p *params) { p.freshSessionAt = "" }, "--fresh-session-at is required"},
+		{func(p *params) { p.freshSessionAt = "-1" }, "--fresh-session-at"},
+		{func(p *params) { p.freshSessionAt = "lots" }, "--fresh-session-at"},
 		{func(p *params) { p.effectRounds = "" }, "--effect-rounds is required"},
 		{func(p *params) { p.denylist = "src/[a" }, "--denylist"},
 		{func(p *params) { p.reviewProcedure = "docs/operators-review.md" }, "--review-procedure"},
@@ -1131,7 +1148,7 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 		t.Fatal(err)
 	}
 	if rd.Replays != 2 || rd.Gate != "go test ./..." || fmt.Sprint(rd.Remote.Untrusted) != fmt.Sprint(d.Remote.Untrusted) ||
-		rd.SizeSignal != d.SizeSignal || rd.AskReview == nil {
+		rd.SizeSignal != d.SizeSignal || rd.FreshAt != d.FreshAt || rd.AskReview == nil {
 		t.Errorf("revise deps = %+v, want them read from the parameters", rd)
 	}
 	for _, tc := range []struct {

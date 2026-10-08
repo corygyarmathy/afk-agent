@@ -107,6 +107,8 @@ func TestAReplyIsReadFromARecordedRun(t *testing.T) {
 		Cost:    0.000644486,
 		Session: "ses_f65d00bbeffecf7REGDTBMqK4o",
 		Tokens:  opencode.Tokens{Input: 6367, Output: 11, Reasoning: 14, CacheRead: 1393},
+
+		LastInput: 6367 + 1393,
 	}
 	if got != want {
 		t.Errorf("got %+v\nwant %+v", got, want)
@@ -137,6 +139,12 @@ func TestASubAgentsCostIsCounted(t *testing.T) {
 	}
 	if got.SubAgents != 1 || got.Unread != 0 {
 		t.Errorf("%d sub-agents with %d unread, want 1 with none", got.SubAgents, got.Unread)
+	}
+	// The last step's alone, and the run's own: a continuation runs in the
+	// run's session, not the sub-agent's, and starts from where its last
+	// step left it.
+	if want := 188 + 14080; got.LastInput != want {
+		t.Errorf("last input %d, want %d", got.LastInput, want)
 	}
 	if got.Text != "pong" || got.Session != "ses_f1815410dffe1YAxJ0v1eQ7qFL" {
 		t.Errorf("text %q in %s, want the run's own reply in its own session", got.Text, got.Session)
@@ -373,7 +381,9 @@ func TestFailuresOpencodeReportsAreTransient(t *testing.T) {
 
 // A run that failed was still paid for as far as it got (#22): the failure
 // comes with what its steps and its sub-agents spent, and with no text, which
-// is not a reply.
+// is not a reply. It comes with its last step's input too: the steps went into
+// the session it continued, and the next continuation starts from there
+// (#192).
 func TestAFailedRunSaysWhatItSpent(t *testing.T) {
 	task := strings.Split(strings.TrimSpace(readFixture(t, "task.jsonl")), "\n")
 	var lines []string
@@ -399,6 +409,9 @@ func TestAFailedRunSaysWhatItSpent(t *testing.T) {
 	}
 	if got.Tokens.Input != 12306+10730 || got.SubAgents != 1 || got.Unread != 0 {
 		t.Errorf("tokens %+v over %d sub-agents with %d unread, want the step's and the sub-agent's", got.Tokens, got.SubAgents, got.Unread)
+	}
+	if want := 12306 + 1792; got.LastInput != want {
+		t.Errorf("last input %d, want the step that finished's, %d", got.LastInput, want)
 	}
 	if got.Text != "" || got.Session != "" {
 		t.Errorf("text %q in session %q came with a failure, want only what it spent", got.Text, got.Session)
@@ -524,8 +537,8 @@ func TestFailuresThisProcessCanSeeAreFatal(t *testing.T) {
 }
 
 // Text written before the last step is narration between tool calls. The
-// reply is what the model wrote once it stopped calling them, and the cost is
-// every step's.
+// reply is what the model wrote once it stopped calling them, the cost is
+// every step's, and the last input is the final step's, cache included.
 func TestTheReplyIsTheFinalStep(t *testing.T) {
 	c := fake(t, "replay", map[string]string{envExit: "0", envStream: stream(t,
 		`{"type":"step_start","part":{}}`,
@@ -535,7 +548,7 @@ func TestTheReplyIsTheFinalStep(t *testing.T) {
 		`{"type":"step_start","part":{}}`,
 		`{"type":"text","part":{"text":"The change is sound."}}`,
 		`{"type":"text","part":{"text":"One nit: a missing test."}}`,
-		`{"type":"step_finish","part":{"reason":"stop","cost":0.5,"tokens":{"input":200,"output":20,"reasoning":3,"cache":{"read":7,"write":0}}}}`,
+		`{"type":"step_finish","part":{"reason":"stop","cost":0.5,"tokens":{"input":200,"output":20,"reasoning":3,"cache":{"read":7,"write":2}}}}`,
 	)})
 
 	got, err := c.Run(context.Background(), request(t))
@@ -545,7 +558,9 @@ func TestTheReplyIsTheFinalStep(t *testing.T) {
 	want := opencode.Reply{
 		Text:   "The change is sound.\nOne nit: a missing test.",
 		Cost:   0.75,
-		Tokens: opencode.Tokens{Input: 300, Output: 30, Reasoning: 3, CacheRead: 12, CacheWrite: 1},
+		Tokens: opencode.Tokens{Input: 300, Output: 30, Reasoning: 3, CacheRead: 12, CacheWrite: 3},
+
+		LastInput: 200 + 7 + 2,
 	}
 	if got != want {
 		t.Errorf("got %+v\nwant %+v", got, want)

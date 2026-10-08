@@ -48,6 +48,12 @@ type Progress struct {
 	// continue with a failure. Empty until a run succeeds.
 	Session string `json:"session,omitempty"`
 
+	// LastInput is how much context that session's last turn had, which
+	// decides whether the next run continues it or starts a fresh one
+	// (Tier.Run). Zero is unknown, and a session of unknown size is
+	// continued.
+	LastInput int `json:"last_input,omitempty"`
+
 	// Attempts is how many times the gate has failed on this branch.
 	Attempts int `json:"attempts"`
 

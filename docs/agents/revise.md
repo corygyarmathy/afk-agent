@@ -45,7 +45,7 @@ A closed pull request's commands are claimed and nothing more.
 | --- | --- | --- |
 | `revise` | `start` | Reacts 👀 to every unanswered `/revise`, comment or review (the claim), replies to each that cannot be revised, and, when there are points, takes the hand-off label off. |
 | `revise-claimed` | `claiming` | Reads the claims, replies and label back, and makes any that are missing again. Once all are there, on to the revision, or rests. |
-| `revise-run` | `revising` | Clones the repository, brings in the send-back's head through the relay, and runs one enrolled model of the implement tier on the points. After a gate or CI failure it continues the session that wrote the commits, with the failure. Hands back if the branch was deleted, or pushed over, since the send-back. |
+| `revise-run` | `revising` | Clones the repository, brings in the send-back's head through the relay, and runs one enrolled model of the implement tier on the points. After a gate or CI failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](implement.md#a-session-too-long-to-continue). Hands back if the branch was deleted, or pushed over, since the send-back. |
 | `revise-gate` | `gating` | The agent runs the local gate itself, as implement does. A session that rewrote the head the send-back was written against hands back. |
 | `revise-push` | `pushing` | The denylist, then the size and the [sensitive paths](implement.md#sensitive-paths) measured against the base branch's current tip, then the push under a lease pinned to the head the revision was built on. |
 | `revise-pushed` | `pushed` | Reads the push back from the remote, and brings the description's sensitive line up to it. Someone else's push during the revision sends it to be replayed. |
@@ -146,7 +146,8 @@ back if the send-back went too. Lost after it, the revision is handed back.
 `afk help` lists them, and the NixOS module sets them
 ([`domain.md`](domain.md)). A revision runs on implement's parameters
 ([`implement.md`](implement.md#parameters)): the same gate, attempts,
-denylist, sensitive paths, size signal, CI bounds, hand-off label and tier.
+denylist, sensitive paths, size signal, CI bounds, fresh session threshold,
+hand-off label and tier.
 There is no revise tier of its own. It requires one parameter of its own:
 
 - `--replays` is how many times a revision is replayed onto a push someone
