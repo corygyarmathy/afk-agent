@@ -40,18 +40,22 @@ func TestTheDescriptionsFirstLineIsTheTitle(t *testing.T) {
 	}
 }
 
-// The implement skill names the headings the prompt does. The skill is
-// vendored rather than written here, and it is the copy a host runs when the
-// implemented repository carries none, so a re-vendor that renames one would
-// set the skill against the prompt.
+// The pr skill names the headings the prompt does: implement's closing report
+// takes its shape from it. The skill is vendored rather than written here, and
+// it is the copy a host runs when the implemented repository carries none, so
+// a re-vendor that renames one would set the skill against the prompt.
 func TestTheSkillNamesEverySection(t *testing.T) {
-	skill, err := os.ReadFile("../../.agents/skills/implement/SKILL.md")
+	skill, err := os.ReadFile("../../.agents/skills/pr/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
+	lines := map[string]bool{}
+	for _, l := range strings.Split(string(skill), "\n") {
+		lines[strings.TrimSpace(l)] = true
+	}
 	for _, s := range sections {
-		if !strings.Contains(string(skill), "`## "+s+"`") {
-			t.Errorf("the implement skill does not name the section %q", s)
+		if !lines["## "+s] {
+			t.Errorf("the pr skill does not name the section %q", s)
 		}
 	}
 }
