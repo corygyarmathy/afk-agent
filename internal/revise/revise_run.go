@@ -152,10 +152,11 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, func() (string, error) {
-		// The session went with opencode's data: the revision carries on
-		// in a new session, given the failure.
-		p.Session = ""
+	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, p.LastInput, func() (string, error) {
+		// The session went with opencode's data, or grew too long to
+		// continue: the revision carries on in a new session, given the
+		// failure.
+		p.Session, p.LastInput = "", 0
 		if err := d.save(in.Job.ID, p); err != nil {
 			return "", err
 		}
@@ -175,7 +176,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return res, nil
 	}
 
-	p.Session = reply.Session
+	p.Session, p.LastInput = reply.Session, reply.LastInput
 	if p.Reply, err = work.ReadGitFile(ws, replyFile); err != nil {
 		p.Reply = ""
 		d.logf("%s: the reply file could not be read, so a hand-back says the session did not say: %v", in.Job.ID, err)
@@ -556,7 +557,7 @@ func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
 
 // tier is the candidates a revision runs on.
 func (d *Deps) tier() work.Tier {
-	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait}
+	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait, FreshAt: d.FreshAt}
 }
 
 // work is the shared machinery this kind works through.

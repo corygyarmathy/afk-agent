@@ -46,6 +46,9 @@ type coder struct {
 	// and a hundred out, whether its turn failed or not. Zero reports
 	// nothing.
 	cost float64
+
+	// lastInput is the last-turn input each run that succeeds reports.
+	lastInput int
 }
 
 func (m *coder) spent() opencode.Reply {
@@ -83,7 +86,7 @@ func (m *coder) Run(_ context.Context, req opencode.Request) (opencode.Reply, er
 		}
 	}
 	reply := m.spent()
-	reply.Text, reply.Session = "Done.", session
+	reply.Text, reply.Session, reply.LastInput = "Done.", session, m.lastInput
 	return reply, nil
 }
 

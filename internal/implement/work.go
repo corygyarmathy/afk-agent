@@ -161,10 +161,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return transition.Result{}, err
 	}
 
-	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, func() (string, error) {
-		// The session went with opencode's data: the next run is a new
-		// session, given the failure.
-		p.Session = ""
+	reply, res, ok, err := d.tier().Run(ctx, in, d.Model, req, p.LastInput, func() (string, error) {
+		// The session went with opencode's data, or grew too long to
+		// continue: the next run is a new session, given the failure.
+		p.Session, p.LastInput = "", 0
 		if err := d.save(in.Job.ID, p); err != nil {
 			return "", err
 		}
@@ -184,7 +184,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		return res, nil
 	}
 
-	p.Session = reply.Session
+	p.Session, p.LastInput = reply.Session, reply.LastInput
 	p.Cutting = false
 	// What is left is read only before the push: after it, the rest is
 	// filed from what the work was pushed with, or not at all. Asked for
@@ -477,7 +477,7 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 // and the remote its checkouts and pushes reach.
 // tier is the candidates implementing runs on.
 func (d *Deps) tier() work.Tier {
-	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait}
+	return work.Tier{Resolve: d.Resolve, Bound: d.Bound, Wait: d.TierWait, FreshAt: d.FreshAt}
 }
 
 func (d *Deps) work() work.Workspace {

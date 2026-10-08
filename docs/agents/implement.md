@@ -30,7 +30,7 @@ label, when `afk` is given `--eligibility-label`
 | --- | --- | --- |
 | `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
-| `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure. |
+| `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](#a-session-too-long-to-continue). |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
 | `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line and the spend footer up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
@@ -295,7 +295,7 @@ non-test lines the work may have before its size needs a decision. The code is
 The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
-(branch, base, session, the session's description and what it says is left,
+(branch, base, session and its last turn's input tokens, the session's description and what it says is left,
 whether the work was cut and the commit kept on `<branch>-whole`, the rest's issue and whether it was blocked, the sensitive line, gate attempts
 and fixes, the last failure, the pushed head, what its sessions have spent), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
@@ -303,14 +303,33 @@ review request or a label, for the hand-back to quote). All of it is disposable.
 Lost after it, the pull request is handed back rather than fixed on a new
 branch.
 
+## A session too long to continue
+
+A gate retry, a fix and a cut each continue the session that wrote the
+commits, so it sees what it is retrying against. A session grows with every
+turn, and a long one costs more for each - its whole context is sent again,
+mostly as cache reads, and some models price a long context in a dearer band -
+and does worse work
+([#192](https://github.com/corygyarmathy/afk-agent/issues/192)).
+
+So before a continuation the agent reads the input tokens of the session's
+last turn: its last step's input, cached reads and writes included, kept in
+the job's progress when the run finished. Over `--fresh-session-at`, a fresh
+session takes over instead, given the issue, the branch's commits and the
+failure or the cut, as one does after a session gone with opencode's data. It
+is one rule for every continuation, and for `/revise` too. Each time it
+applies is a log line naming the session, its size and the threshold. `0`
+continues every session, and so does one whose size is unknown: a progress
+written before the size was kept.
+
 ## Parameters
 
 `afk help` lists them, and the NixOS module sets them
 ([`domain.md`](domain.md)). Without `--branch-prefix`, `afk work` neither runs
 implement jobs nor answers `/implement`. With it, all of these are required:
 `--gate`, `--gate-attempts`, `--implement-tier`, `--hand-off-label`,
-`--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes` and `--size-signal`,
-plus model choice,
+`--denylist`, `--ci-wait`, `--ci-ceiling`, `--ci-fixes`, `--size-signal` and
+`--fresh-session-at`, plus model choice,
 `--effect-rounds` and `--hand-back-label` as for review. `--implement-needs`,
 `--review-procedure` and `--sensitive` are optional. `/revise` runs on the same
 parameters, and one of its own: [`revise.md`](revise.md#parameters).
@@ -329,6 +348,8 @@ parameters, and one of its own: [`revise.md`](revise.md#parameters).
   it before the agent's first push, is handed back at once rather than made
   again: every later push would be refused the same way.
 - `--ci-wait` is also how often a review not yet posted is looked for.
+- `--fresh-session-at` is the input tokens of a session's last turn over which
+  it is not continued: [A session too long to continue](#a-session-too-long-to-continue).
 - `--model-timeout` bounds each model run. One still going when it runs out is
   killed with everything it started, and is a transient failure: the job
   stays, and its next run tries the next candidate. Each transient failure is

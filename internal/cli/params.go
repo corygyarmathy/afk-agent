@@ -118,6 +118,10 @@ Implementing an issue, for afk run and afk work:
   --ci-fixes <n>        AFK_CI_FIXES         red runs sent back to the session, then a hand-back
   --size-signal <n>     AFK_SIZE_SIGNAL      changed non-test lines a pull request may have; over it,
                                              the branch is pushed and handed back unopened
+  --fresh-session-at <n>
+                        AFK_FRESH_SESSION_AT input tokens of a session's last turn over which a
+                                             gate retry, fix or cut starts a fresh session rather
+                                             than continuing it; 0 always continues
   --review-procedure <url>
                         AFK_REVIEW_PROCEDURE the operator's review procedure, which each pull
                                              request's description links
@@ -230,6 +234,7 @@ type params struct {
 	ciCeiling      string
 	ciFixes        string
 	sizeSignal     string
+	freshSessionAt string
 	replays        string
 
 	reviewProcedure string
@@ -883,6 +888,7 @@ func (p *params) bindImplement(fs *flag.FlagSet) {
 	fs.StringVar(&p.ciCeiling, "ci-ceiling", "", "how long after a push CI may take before a hand-back (AFK_CI_CEILING)")
 	fs.StringVar(&p.ciFixes, "ci-fixes", "", "times a red CI run goes back to the session before a hand-back (AFK_CI_FIXES)")
 	fs.StringVar(&p.sizeSignal, "size-signal", "", "changed non-test lines a pull request may have before a hand-back (AFK_SIZE_SIGNAL)")
+	fs.StringVar(&p.freshSessionAt, "fresh-session-at", "", "last-turn input tokens over which a session is not continued, 0 for never (AFK_FRESH_SESSION_AT)")
 	fs.StringVar(&p.reviewProcedure, "review-procedure", "", "the operator's review procedure, which each pull request's description links (AFK_REVIEW_PROCEDURE)")
 	fs.StringVar(&p.sensitive, "sensitive", "", "paths whose pull requests say so, as <label>=<globs>, semicolon-separated (AFK_SENSITIVE)")
 }
@@ -955,6 +961,9 @@ type implementParams struct {
 	ciFixes      int
 	sizeSignal   int
 
+	// freshSessionAt is required, and zero continues every session.
+	freshSessionAt int
+
 	// reviewProcedure is optional. It is a URL: the description links it
 	// as written.
 	reviewProcedure string
@@ -1021,6 +1030,14 @@ func (p *params) implement() (implementParams, error) {
 	if ip.sizeSignal, err = count(v, "size-signal"); err != nil {
 		return implementParams{}, err
 	}
+	if v, err = required(p.freshSessionAt, "fresh-session-at", "AFK_FRESH_SESSION_AT"); err != nil {
+		return implementParams{}, err
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return implementParams{}, usagef("--fresh-session-at: %q is not a whole number", v)
+	}
+	ip.freshSessionAt = n
 	if v = optional(p.reviewProcedure, "AFK_REVIEW_PROCEDURE"); v != "" {
 		if u, err := url.Parse(v); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return implementParams{}, usagef("--review-procedure: %q is not an http or https URL", v)
