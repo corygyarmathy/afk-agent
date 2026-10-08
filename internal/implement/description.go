@@ -13,6 +13,10 @@ import (
 // part of the pull request's description.
 const descriptionFile = "afk-description.md"
 
+// unmetFile is where, in the workspace's .git, the session lists the
+// acceptance criteria the work cannot meet by itself (#199).
+const unmetFile = "afk-unmet.md"
+
 // titleLimit is the most characters GitHub takes in a pull request's title.
 // It is GitHub's, not the operator's to set.
 const titleLimit = 256
@@ -38,6 +42,16 @@ func readDescription(ws string) (string, error) {
 // a file that says only "none".
 func readRemainder(ws string) (string, error) {
 	text, err := work.ReadGitFile(ws, remainderFile)
+	if err != nil || empty([]string{text}) {
+		return "", err
+	}
+	return strings.TrimSpace(strings.TrimPrefix(text, "\uFEFF")), nil
+}
+
+// readUnmet is the criteria the session says the work cannot meet by itself,
+// or nothing, which includes a file that says only "none".
+func readUnmet(ws string) (string, error) {
+	text, err := work.ReadGitFile(ws, unmetFile)
 	if err != nil || empty([]string{text}) {
 		return "", err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/notify"
+	"github.com/corygyarmathy/afk-agent/internal/premise"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -762,6 +763,16 @@ func (t *tracker) Login(ctx context.Context) (string, error) {
 		t.login = login
 	}
 	return t.login, nil
+}
+
+// reader is how a premise in repo is read (#199): through the agent's own
+// client for its own repository, and for another as the App on its
+// installation there, or as anyone where it has none (ADR 0005 §4).
+func (t *tracker) reader(repo string) premise.Reader {
+	if strings.EqualFold(repo, t.client.Repo) {
+		return t.client
+	}
+	return &github.Client{Repo: repo, Credential: t.app.On(repo), BaseURL: t.client.BaseURL, HTTP: t.client.HTTP}
 }
 
 // tracker resolves the tracker, or nil if no repository is configured.

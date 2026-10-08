@@ -66,8 +66,10 @@ A first piece of an issue too big for one pull request links it with the
 implement kind's link line instead, `Part of #7. The rest is #9.`, straight
 after its marker (#127): the spec then holds #7, headed as only partly done by
 the piece, and #9, the issue filed for the rest, headed as out of scope, so
-that what the piece leaves for later is not reported as missing. `Part of`
-anywhere else in a description links nothing.
+that what the piece leaves for later is not reported as missing. Work with an
+acceptance criterion it cannot meet by itself links its issue with `Refs #7`
+there instead (#199): the spec holds #7, headed as not closed by the pull
+request. `Part of` or `Refs` anywhere else in a description links nothing.
 A description the agent wrote goes without its sensitive line
 ([`implement.md`](implement.md#sensitive-paths)), so a pull request that
 touches a sensitive path is reviewed as any other, and without its spend

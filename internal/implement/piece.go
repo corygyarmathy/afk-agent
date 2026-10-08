@@ -26,14 +26,22 @@ func (p progress) piece() bool {
 }
 
 // linkLine is the description's link line: the issue the pull request closes,
-// or the one it is the first piece of, and the issue filed for the rest. The
-// advisory review reads a first piece's line back (review.PartOf), so the two
-// are spelled alike.
-func linkLine(n int, piece bool, rest int) string {
-	if !piece {
-		return fmt.Sprintf("Closes #%d", n)
+// or the one it is the first piece of, and the issue filed for the rest, or the
+// one it refers to without closing. The advisory review reads the line back
+// (review.PartOf, review.Refs), so they are spelled alike.
+//
+// Work with an acceptance criterion it cannot meet by itself - one that needs
+// a deploy or a hand run - refers to its issue rather than closing it, so that
+// merging it does not close an issue with a check still to do (#199). A first
+// piece does not close its issue either way.
+func linkLine(n int, piece, unmet bool, rest int) string {
+	switch {
+	case piece:
+		return fmt.Sprintf("Part of #%d. The rest is #%d.", n, rest)
+	case unmet:
+		return fmt.Sprintf("Refs #%d", n)
 	}
-	return fmt.Sprintf("Part of #%d. The rest is #%d.", n, rest)
+	return fmt.Sprintf("Closes #%d", n)
 }
 
 // unblockedNote is what a first piece's description says under its link line
