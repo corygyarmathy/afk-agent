@@ -313,6 +313,23 @@ func (c *Client) Comment(ctx context.Context, number int, body string) (Comment,
 	return w.comment(), nil
 }
 
+// EditComment replaces a conversation comment's body with body. Making the
+// same edit twice is the same as making it once. Only the comment's author
+// can: the agent edits its own advisory review once a correction is done with
+// it (#193).
+func (c *Client) EditComment(ctx context.Context, commentID int64, body string) error {
+	u, err := c.repoURL("/issues/comments/%d", commentID)
+	if err != nil {
+		return err
+	}
+	resp, err := c.send(ctx, http.MethodPatch, u, mediaJSON, map[string]string{"body": body})
+	if err != nil {
+		return err
+	}
+	drain(resp.Body)
+	return nil
+}
+
 // React adds a reaction to a conversation comment. Content is the API's
 // spelling of the reaction: `eyes`, `+1`, and so on.
 //

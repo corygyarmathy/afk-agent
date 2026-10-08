@@ -195,3 +195,43 @@ func (f *fixture) loggedFresh(session string, want ...string) {
 		}
 	}
 }
+
+// A correction is a continuation too: a fresh session is given the findings,
+// as the session that wrote the branch would have been (#193).
+func TestAnOutgrownSessionIsNotContinuedForACorrection(t *testing.T) {
+	f := setup(t, newTracker())
+	f.deps.FreshAt = 1000
+	f.model.lastInput = 1001
+	f.model.then(commit("ok"))
+	f.tr.checks = green
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	f.postFindings()
+	var given string
+	f.model.then(correcting(&given, "regression", "Corrects: advisory 2"))
+
+	f.at = f.at.Add(f.deps.CIWait)
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(f.model.asked) != 2 {
+		t.Fatalf("the model was asked %d times, want the work and its correction", len(f.model.asked))
+	}
+	fix := f.model.asked[1]
+	if fix.Session != "" {
+		t.Errorf("the correction continued session %q, want a fresh one", fix.Session)
+	}
+	for _, want := range []string{"implement` skill", ".git/afk-issue.md", "an earlier session's commits are on this branch", ".git/afk-findings.md", "Corrects: advisory 3"} {
+		if !strings.Contains(fix.Prompt, want) {
+			t.Errorf("the fresh session's prompt does not say %q:\n%s", want, fix.Prompt)
+		}
+	}
+	if !strings.Contains(given, "advisory 2 (Correctness)") {
+		t.Errorf("the fresh session was not given the findings:\n%s", given)
+	}
+	if j := f.now(); j.State != implement.Start {
+		t.Errorf("job in %q, want it handed off", j.State)
+	}
+	f.loggedFresh("ses_1", "1001", "1000")
+}

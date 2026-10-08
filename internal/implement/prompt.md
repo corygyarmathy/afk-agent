@@ -33,6 +33,14 @@ This is not the first attempt: an earlier session's commits are on this branch.
 
 {{template "cut" .}}
 {{- end}}
+{{- if .Correcting}}
+{{- if not .Failed}}
+
+This is not the first attempt: an earlier session's commits are on this branch.
+{{- end}}
+
+{{template "correct" .}}
+{{- end}}
 
 {{template "unattended" .}}
 {{- if not .Opened}}

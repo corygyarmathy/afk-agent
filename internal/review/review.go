@@ -642,13 +642,20 @@ func (d *Deps) reviewed(comments []github.Comment, head string) bool {
 // Reviewed reports whether login, the agent's account, has posted a review of
 // head among comments.
 func Reviewed(comments []github.Comment, login, head string) bool {
+	_, ok := Review(comments, login, head)
+	return ok
+}
+
+// Review is the review of head that login, the agent's account, posted among
+// comments, if there is one.
+func Review(comments []github.Comment, login, head string) (github.Comment, bool) {
 	marker := Marker(head)
 	for _, c := range comments {
 		if strings.EqualFold(c.Login, login) && strings.Contains(c.Body, marker) {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return github.Comment{}, false
 }
 
 // already is the reply to a command for a head that has its review.
@@ -665,9 +672,11 @@ func already(n int, c github.Comment, head string) owed.Item {
 // it, it says which: the implement job for its issue, or the revise job,
 // linking the reply it claimed.
 //
-// It is posted once and never edited or deleted: a send-back cites a finding
-// by its number in the latest review before it (#123), so a review of a new
-// head is a new comment, numbered from 1 again.
+// It is posted once and never deleted: a send-back cites a finding by its
+// number in the latest review before it (#123), so a review of a new head is a
+// new comment, numbered from 1 again. The one edit is a correction's, on the
+// agent's own pull request (package correction), which keeps every finding's
+// number and this head's marker.
 func (d *Deps) body(n int, since, head string, reply opencode.Reply, a request, spent spend.Spent) string {
 	asked := ""
 	switch {

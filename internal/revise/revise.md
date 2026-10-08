@@ -24,6 +24,16 @@ This is not the first attempt: an earlier session's commits are on this branch.
 Then the local gate or CI failed: {{.Why}} The output is in
 `.git/afk-gate.log`. Read it first, and fix the cause.
 {{- end}}
+{{- if .Correcting}}
+{{- if not .Failed}}
+
+This is not the first attempt: an earlier session's commits are on this branch.
+{{- end}}
+
+The revision's reply is posted already, and is not posted again.
+
+{{template "correct" .}}
+{{- end}}
 
 When you finish, write your part of the reply to `.git/afk-reply.md`, in
 GitHub-flavoured markdown: the agent posts it on the pull request as its answer

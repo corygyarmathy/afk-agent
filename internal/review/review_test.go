@@ -1432,8 +1432,9 @@ func TestWithoutAFloorOrAFoldCutThePromptLeavesTheSkillsDefaults(t *testing.T) {
 	}
 }
 
-// An advisory review is append-only (#123): once posted it is never edited or
-// deleted. A replayed transition - here verify, its commit lost after the
+// The review job never edits or deletes a review it posted (#123): only a
+// correction edits one, and that is the asking job's (package correction). A
+// replayed transition - here verify, its commit lost after the
 // review landed - runs the model again, and a different reply leaves the
 // posted review as it was.
 func TestAReplayedTransitionDoesNotRewriteAPostedReview(t *testing.T) {

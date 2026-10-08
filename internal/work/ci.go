@@ -76,6 +76,11 @@ type CIResult struct {
 	// said.
 	Reason string
 	Output string
+
+	// Moved is a hand-back because someone else pushed to the branch: not
+	// anything the agent's own work did, which a correction tells apart
+	// from its own failure (package correction).
+	Moved bool
 }
 
 // Watch is CI's reading of the head the agent pushed to pull request pr, which
@@ -105,7 +110,7 @@ func (w Workspace) Watch(ctx context.Context, in transition.In, c CI, pr int, p 
 		return CIResult{}, err
 	}
 	if at != p.Pushed {
-		return CIResult{State: CIHandBack, Reason: fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed))}, nil
+		return CIResult{State: CIHandBack, Moved: true, Reason: fmt.Sprintf("Someone else pushed to `%s` while CI ran: it is at `%s`, not at `%s` where the agent left it, and the agent does not push over anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed))}, nil
 	}
 
 	runs, err := c.Checks.CheckRuns(ctx, p.Pushed)

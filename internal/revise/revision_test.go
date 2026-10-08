@@ -201,6 +201,9 @@ type revFixture struct {
 	reg    *transition.Registry
 	runner *transition.Runner
 
+	// review is the review job's deps, beside the revision's.
+	review *review.Deps
+
 	// at is the runner's clock, and logs what the kind logged.
 	at   time.Time
 	logs []string
@@ -273,7 +276,7 @@ func revisionFixture(t *testing.T) *revFixture {
 	}
 	d.AskReview = handoff.Asker(transition.Armer{Store: s, Holder: "ask-review", LeaseTTL: time.Minute})
 	reg := transition.MustRegistry(append(revise.Transitions(d), review.Transitions(rd)...)...)
-	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, at: now}
+	f := &revFixture{t: t, tr: tr, model: m, deps: d, remote: remote, feature: "feature", head: head, store: s, reg: reg, review: rd, at: now}
 	d.Log = func(msg string) { f.logs = append(f.logs, msg) }
 	f.runner = &transition.Runner{Store: s, Registry: reg, Holder: "test", LeaseTTL: time.Minute, Clock: func() time.Time { return f.at }}
 	return f

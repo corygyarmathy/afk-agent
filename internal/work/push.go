@@ -32,9 +32,13 @@ func (u Unlanded) Said(head, branch string) string {
 // made it. The lease is p.Pushed, the commit the agent last saw its own push
 // land at, or the head the work started from: a push anyone else made since is
 // never overwritten.
-func (w Workspace) PushRound(ctx context.Context, s store.Store, rounds int, jobID string, p Progress, head string) (transition.Effect, *Unlanded, error) {
+//
+// The rounds count from from: 0, except for a head pushed a second time - a
+// failed correction's push back to the head it started from - whose rounds
+// count from where its first push's ended (PushFrom).
+func (w Workspace) PushRound(ctx context.Context, s store.Store, rounds int, jobID string, p Progress, head string, from int) (transition.Effect, *Unlanded, error) {
 	stem := pushStem(p.Branch, head)
-	key, err := transition.Round(ctx, s, stem, 0, rounds)
+	key, err := transition.Round(ctx, s, stem, from, rounds)
 	if spent, ok := transition.Spent(err); ok {
 		return transition.Effect{}, &Unlanded{Rounds: spent.Rounds, Note: transition.Noted(w.NotePath(jobID), stem)}, nil
 	}
@@ -51,6 +55,12 @@ func (w Workspace) PushRound(ctx context.Context, s store.Store, rounds int, job
 // hand-back to quote.
 func (w Workspace) PushNote(jobID string, p Progress) string {
 	return transition.Noted(w.NotePath(jobID), pushStem(p.Branch, p.Head))
+}
+
+// PushFrom is where a new allowance of rounds for pushing head to branch again
+// starts (transition.Next): after every round its earlier pushes reserved.
+func PushFrom(ctx context.Context, s store.Store, branch, head string) (int, error) {
+	return transition.Next(ctx, s, pushStem(branch, head))
 }
 
 func pushStem(branch, head string) string {

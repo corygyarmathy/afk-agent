@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/corygyarmathy/afk-agent/internal/correction"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
@@ -154,6 +155,12 @@ func Sections(text string) string {
 // awaitReview is `revise-review`: ask for the advisory review of the green
 // head, wait for it, and hand the pull request off once it is there (package
 // handoff). The review job claims the reply this job posted as its request.
+//
+// On the agent's own pull request, a review of the revision's delta with a
+// Correctness or Standards finding drives one correction first, as
+// implement's does (package correction). The reply stays as it was posted,
+// for the head the review read; the review is edited once the correction is
+// done with, and then the pull request is handed off.
 func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Result, error) {
 	n := in.Job.Subject.Number
 	pr, err := d.Tracker.PullRequest(ctx, n)
@@ -171,12 +178,22 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if p.Correction != nil {
+		return d.corrected(ctx, in, p)
+	}
 	r, err := d.handOffDeps().AwaitReview(ctx, in, n, p.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	switch r.State {
 	case handoff.Done:
+		// Only on the agent's own pull request: a revision of anyone
+		// else's is advised, never corrected.
+		if strings.EqualFold(pr.Login, d.Login) {
+			if c, ok := correction.Begin(r.Review, p.Pushed); ok {
+				return d.correct(ctx, in, p, c)
+			}
+		}
 		return transition.Result{State: HandingOff, RunAt: in.Now}, nil
 	case handoff.HandedBack:
 		return d.rest(in.Job.ID)

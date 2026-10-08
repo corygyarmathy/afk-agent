@@ -225,6 +225,18 @@ func Reset(ctx context.Context, dir, base string) error {
 	return err
 }
 
+// Restore puts the workspace back on branch at commit, whatever branch it has
+// checked out, with nothing untracked: a failed correction's way back to the
+// head that was reviewed (package correction), which may follow a session that
+// switched branches.
+func Restore(ctx context.Context, dir, branch, commit string) error {
+	if _, err := inWorkspace(ctx, dir, "checkout", "--quiet", "--force", "-B", branch, commit); err != nil {
+		return err
+	}
+	_, err := inWorkspace(ctx, dir, "clean", "--quiet", "--force", "-d")
+	return err
+}
+
 // BranchOf is the branch the workspace has checked out, or HEAD if none is.
 func BranchOf(ctx context.Context, dir string) (string, error) {
 	return inWorkspace(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")

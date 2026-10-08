@@ -1468,6 +1468,7 @@ func (closedTracker) RequiredChecks(context.Context, string) ([]string, error) {
 }
 
 func (closedTracker) EditPullRequest(context.Context, int, string) error { return nil }
+func (closedTracker) EditComment(context.Context, int64, string) error   { return nil }
 func (closedTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
 	return nil, nil
 }

@@ -98,6 +98,10 @@ type Result struct {
 
 	Reason string
 	Output string
+
+	// Review is the review of the pushed head, when AwaitReview finds it
+	// Done: what a correction of its findings reads (package correction).
+	Review github.Comment
 }
 
 // AwaitReview asks for the review of the head the agent pushed to pull request
@@ -118,8 +122,8 @@ func (d Deps) AwaitReview(ctx context.Context, in transition.In, pr int, p work.
 	if err != nil {
 		return Result{}, err
 	}
-	if review.Reviewed(comments, d.Login, p.Pushed) {
-		return Result{State: Done}, nil
+	if r, ok := review.Review(comments, d.Login, p.Pushed); ok {
+		return Result{State: Done, Review: r}, nil
 	}
 	if review.HandedBack(comments, d.Login, p.Pushed) {
 		return Result{State: HandedBack}, nil
