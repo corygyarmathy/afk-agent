@@ -27,7 +27,7 @@ Describe **what** the system should do, not **how** to implement it. The agent w
 
 ### Complete acceptance criteria
 
-The agent needs to know when it's done. Every agent brief must have concrete, testable acceptance criteria. Each criterion should be independently verifiable.
+The agent needs to know when it's done. Every agent brief must have concrete, testable acceptance criteria. Each criterion should be independently verifiable, by the pull request itself: a test, behaviour the diff shows, a check CI runs. A check that needs a deploy, a hand run on a host, or anything else after merge goes in an **After merge** note instead, so that the pull request which meets the criteria can close the issue.
 
 - **Good:** "Running `gh issue list --label needs-triage` returns issues that have been through initial classification"
 - **Bad:** "Triage should work correctly"
@@ -63,6 +63,9 @@ Be specific about edge cases and error conditions.
 - [ ] Specific, testable criterion 1
 - [ ] Specific, testable criterion 2
 - [ ] Specific, testable criterion 3
+
+**After merge:**
+Each check only a deploy or hand run can make. Omit when there are none.
 
 **Out of scope:**
 

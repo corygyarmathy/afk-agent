@@ -28,13 +28,24 @@ Each finding carries one severity, and the floor cuts between them in the same p
 - **should-fix**: works today, but a concrete cost follows if it merges: an untested failure path, a documented standard broken, a design that makes the next change harder. The finding names that cost; a finding that can't name one is `consider`.
 - **consider**: a matter of taste or a possible improvement. Merging without it costs nothing concrete.
 
+## Evidence
+
+Every finding the reader gets is a decision, so each one carries the evidence its axis requires. A finding without it is dropped, never downgraded:
+
+- **Correctness**: a reproduction that ran at the reviewed head: its **source** (the failing test, or the command and any file it needs) and its output. The source is complete enough to run again from a clean checkout of the reviewed head, so the code's author can rerun it and keep it as a regression test. For an untested failure path, the reproduction is a command that breaks the path and shows the tests still pass, and its source is that break as a diff plus the command. A failure scenario written down but not run is not a finding.
+- **Spec**: the quoted spec line, plus the hunk that fails it. A requirement missing from both the diff and the context diff has no hunk; the quoted line alone is its evidence.
+- **Standards**: the cited rule (file + the rule), plus the hunk that breaks it.
+- **Approach**: something pointable: the caller or dependent left un-updated, the existing code duplicated, or the simpler sketch written out. A pre-mortem that can't name a concrete cost in this repo is dropped.
+
+A **question** asks about intent: something only the author or operator can answer, such as a case the spec doesn't decide. Behaviour ("does this break on empty input?") is the reviewer's to settle by reading or running the code, and once settled it is a finding or nothing.
+
 ## Process
 
 ### 1. Pin the fixed point
 
 Use the fixed point the caller gave (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If none was given, use the merge-base with the default branch, and state that assumption in the report.
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). This covers committed work only; if the working tree is dirty, say so in the report. Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). This covers committed work only; if the working tree is dirty, say so in the report. Also note the list of commits via `git log <fixed-point>..HEAD --oneline`, and the **reviewed head**, `git rev-parse HEAD`, where Correctness runs its reproductions.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside four parallel sub-agents.
 
@@ -73,15 +84,16 @@ Where the harness runs no sub-agents, work each axis in turn from the same input
 
 Every sub-agent prompt carries the same inputs and nothing else:
 
-- The diff command and commit list, or the diff file's path.
+- The diff command, commit list and reviewed head, or the diff file's path and the reviewed head.
 - The context diff, when one was given: its path, or for a range the command `git diff <base>...<head>`, with this line: "The context diff is a wider diff this change sits in, for reading, not for review. Read it where judging a hunk needs it, and anchor every finding in a change the diff makes."
 - The spec, pasted verbatim or as a path to it, never as your summary of it.
 - The severity floor, with the severity definitions above.
+- From _Evidence_ above, the bullet for each axis it reports, and the paragraph defining a question.
 - The inputs specific to its axis, below.
 
 Leave out any explanation of why the change was made the way it was. Each reviewer judges the code cold; the reasons it needs are in the spec and the code. Tell each one that commit messages are the author's claims, to be checked against the code rather than taken as reasons.
 
-Every brief ends with the same output rules: "The floor is `<floor>`: report nothing below it. Rank findings most severe first. Each finding is at most about 3 lines: its severity, `path:line` (or `path:first-last`, the path from the repository root), what's wrong, and a one-line fix, with a short code suggestion when one fits. Read beyond the diff wherever judging a hunk needs it. Under 400 words; if the cap bites, drop the least severe findings."
+Every brief ends with the same output rules: "The floor is `<floor>`: report nothing below it. Rank findings most severe first. Each finding is at most about 3 lines: its severity, `path:line` (or `path:first-last`, the path from the repository root), what's wrong, and a one-line fix, with a short code suggestion when one fits, plus the evidence its axis requires. List questions after the findings. Read beyond the diff wherever judging a hunk needs it. Under 400 words; if the cap bites, drop the least severe findings."
 
 A folded sub-agent writes two headings, and the ranking and the cap apply to each one alone, so no axis is ranked against the other: its brief says "Rank findings most severe first within each heading" and "Under 400 words per heading; if the cap bites, drop that heading's least severe findings."
 
@@ -93,7 +105,7 @@ At a `consider` floor, paste [`SMELLS.md`](SMELLS.md) in full as well (the sub-a
 
 **Spec** brief: "Report (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. When there is a context diff, judge (a) against the diff and the context diff together: a requirement the context diff implements is not missing, and one missing from both is a finding even though no change in the diff anchors it. (b) and (c) stay anchored in the diff." Skipped when there is no spec.
 
-**Correctness** brief: "Find the ways this change produces wrong output, crashes, loses data, or breaks an existing caller: edge cases, error paths, concurrency, resource cleanup, and the invariants the surrounding code relies on. Every finding states a **failure scenario**: the inputs and state, and the wrong result they produce. A suspicion you cannot turn into a failure scenario is listed separately as a question." Folded, see step 4.
+**Correctness** brief: "Find the ways this change produces wrong output, crashes, loses data, or breaks an existing caller: edge cases, error paths, concurrency, resource cleanup, and the invariants the surrounding code relies on. Prove each suspicion with a **reproduction** at the reviewed head. Work in a worktree of your own at that commit (the harness's isolated worktree, or `git worktree add --detach <dir> <head>`) and write one test or command per suspicion. Fix it until it runs; once it runs, its result stands, and one that doesn't show the failure drops the suspicion. Leave the worktree in place and commit nothing from it. Every finding states its **failure scenario** (the inputs and state, and the wrong result they produce), and where its reproduction lives: the worktree, the test's path and the command. Below the finding, put the reproduction's source and output, each fenced, in a `<details><summary>Reproduction</summary>` block; leave a blank line after `</summary>` and before `</details>`, or the fences won't render. The block falls outside the word cap. If nothing in this repo can be run, say so in place of findings." Folded, see step 4.
 
 **Approach** brief: "Judge the approach the change takes, not its details. Work in this order:
 
@@ -104,11 +116,15 @@ At a `consider` floor, paste [`SMELLS.md`](SMELLS.md) in full as well (the sub-a
 
 ### 6. Aggregate
 
-Present the reports under `## Standards`, `## Spec`, `## Correctness` and `## Approach` headings, lightly cleaned. Keep the axes separate: do not merge or rerank findings across them (see _Why separate axes_). An axis with no findings collapses to one line under its heading.
+First the **evidence check**: each finding carries its axis's evidence from _Evidence_, checked against the source it cites. The quoted line is in the spec, the rule is in the cited file, the reproduction's source, its command and the output showing the failure are present, the Approach finding's caller or duplicate exists at the cited path or its sketch is written out. Drop every finding that fails. This is a mechanical check, not a second review: it re-judges nothing and runs no further model.
 
-Next to the scope notes (an assumed fixed point, a dirty working tree, no spec), one line names each fold from step 4 that happened, e.g. "Standards reviewed with Spec; Approach with Correctness." It tells an empty heading apart from one nobody looked at. When nothing folded, there is no such line.
+Then merge **duplicates**: findings from two axes at the same location with the same cause. Keep one, under the axis whose evidence is strongest, in this order: Correctness, Spec, Standards, Approach. It takes the higher severity of the two and is tagged with the other axis, e.g. `(also Spec)`. The same line with a different cause is two findings.
 
-Number the findings `1…n` continuously across the whole report, so any one can be cited alone ("advisory 3"). Each keeps the about-3-line shape from the output rules; a Correctness finding's "what's wrong" is its failure scenario. After the findings, list the questions (suspicions with no failure scenario) as `Q1…Qn`.
+Present the reports under `## Standards`, `## Spec`, `## Correctness` and `## Approach` headings, lightly cleaned. Rank within each axis only, never across them (see _Why separate axes_). An axis with no findings collapses to one line under its heading.
+
+Next to the scope notes (an assumed fixed point, a dirty working tree, no spec), one line names each fold from step 4 that happened, e.g. "Standards reviewed with Spec; Approach with Correctness." It tells an empty heading apart from one nobody looked at. When nothing folded, there is no such line. When Correctness could run nothing in the repo, a scope note says so too.
+
+Number the findings `1…n` continuously across the whole report, so any one can be cited alone ("advisory 3"). Each keeps the about-3-line shape from the output rules, plus its evidence; a Correctness finding's "what's wrong" is its failure scenario, and its reproduction stays folded in its `<details>` block. After the findings, list the questions as `Q1…Qn`, leaving out any that the spec, the commit messages, or the pull request's description (when the change has one) already answers.
 
 A review with nothing at or above the floor still reports, and says so, naming the floor.
 
@@ -123,4 +139,4 @@ A change can pass one axis and fail another:
 - Code that meets the spec and the standards but fails on an empty input → **Correctness fail.**
 - Code that is correct and on-spec but rebuilds a helper the repo already has, or bolts a special case onto a module that should have been reshaped → **Approach fail.**
 
-Reporting them separately stops one axis from masking another.
+Reporting them separately stops one axis from masking another. A merged duplicate keeps that: it sits under one axis with that axis's evidence, and its tag shows the reader that a second axis reached the same point.

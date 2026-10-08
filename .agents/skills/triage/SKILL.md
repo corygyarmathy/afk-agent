@@ -30,7 +30,7 @@ Two **category** roles:
 
 Six **state** roles:
 
-- `needs-triage`: maintainer needs to evaluate, or a ticket from `/to-tickets` waits on its blocker to confirm a premise
+- `needs-triage`: maintainer needs to evaluate, or a ticket from `/to-tickets` waits on its blocker to confirm a premise, or on the maintainer to settle a choice
 - `needs-info`: waiting on reporter for more information
 - `ready-for-agent`: fully specified, ready for an AFK agent
 - `ready-for-human`: needs human implementation
@@ -62,7 +62,7 @@ Query the issue tracker and present three buckets, oldest first:
 2. **`needs-triage`**: evaluation in progress.
 3. **`needs-info` with reporter activity since the last triage notes**: needs re-evaluation.
 
-Tag each `needs-triage` ticket with a waiting premise (see below) `[waiting]` while any blocker it marks is open, and `[confirm]` once all have closed.
+Tag each `needs-triage` ticket with a waiting premise (see below) `[waiting]` while any blocker it marks is open, and `[confirm]` once all have closed. Tag one with a choice to settle `[settle]`.
 
 When PRs are in scope, include external PRs in these buckets and tag each line `[PR]` or `[issue]`. Discovery surfaces only _external_ PRs (the tracker config defines who counts as external), so a collaborator's in-flight PR is not triage work. This filter is discovery-only; an explicitly named PR is always triaged regardless of author.
 
@@ -70,11 +70,12 @@ Show counts and a one-line summary per item. Let the maintainer pick.
 
 ## Triage a specific issue or PR
 
-A ticket from `/to-tickets` whose Premises mark one "confirm once <blocker> closes" has a **waiting premise**. It is already specified, so it skips the steps below:
+A ticket from `/to-tickets` is already specified, so it skips the steps below when it waits on one of these:
 
-1. While any marked blocker is open, say which and leave the ticket as it is.
-2. Once all have closed, read what each blocker landed and report each marked premise as held, with a permalink to its source, or broken, with what landed instead.
-3. If every premise held, recommend the edit: each mark replaced by its permalink, and the ticket moved to the role it would otherwise carry, `recipe-ticket` if its What to build asks for one `/implement` as one PR, otherwise `ready-for-agent`. Wait for direction, then apply it. A broken premise means the ticket needs rewriting: leave it `needs-triage` and say so.
+- A **waiting premise**: its Premises mark one "confirm once <blocker> closes". While a premise's blocker is open, say which and leave that premise as it is. Once it has closed, read what the blocker landed and report the premise as held, with a permalink to its source, or broken, with what landed instead. A broken premise means the ticket needs rewriting: leave it `needs-triage` and say so.
+- A **choice to settle**: its Open choices mark one "settle first". Put each to the maintainer as its own question, with a recommended answer.
+
+Recommend an edit for whatever this pass settled, so the next pass doesn't ask it again: each held premise's mark replaced by its permalink, and each answered choice moved out of Open choices into the ticket as a decision, stated as the outcome the change must meet. Once no mark is left, the edit also moves the ticket to the role it would otherwise carry, `recipe-ticket` if its What to build asks for one `/implement` as one PR, otherwise `ready-for-agent`. Wait for direction, then apply it.
 
 Every other issue or PR goes through these steps:
 

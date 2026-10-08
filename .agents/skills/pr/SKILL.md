@@ -160,11 +160,11 @@ Before and after for behaviour the checks don't show: a screenshot of a visual c
 
 ### Where the ticket didn't decide
 
-Choices you made where the spec was silent or out of date, including each one made because nobody was there to ask, and any that bears on security.
+Choices you made where the spec was silent, including each one made because nobody was there to ask, and any that bears on security. List too each choice the ticket marked the implementer's, with the answer you took, and each gap the user or the request settled, with its answer.
 
 ### Not verified
 
-What you could not check, and behaviour the diff cannot show, such as what only a run on the host would.
+What you could not check, and behaviour the diff cannot show, such as what only a run on the host would. Carry over each check in the ticket's After merge. An acceptance criterion listed here keeps the ticket open: refer to the ticket without a closing keyword such as `Closes`.
 
 ### Merge danger
 

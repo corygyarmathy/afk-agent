@@ -4,14 +4,14 @@
     "repo": "corygyarmathy/skills",
     "url": "https://github.com/corygyarmathy/skills.git",
     "prefix": "skills",
-    "rev": "e5d771e20bc847e819e7dcec69adc9ac099306ce"
+    "rev": "f3fcacf7631d4549b3c3315cf73fbc8a5bdcef0f"
   },
   "vendorPath": ".agents/skills",
   "linkPath": ".claude/skills",
   "skills": {
     "ask-cory": {
       "path": "skills/ask-cory",
-      "hash": "c512e74bd38394b2f05e03a310cd6f6c9bcbc7f3b41be547d9dfa2debe16d920"
+      "hash": "a1d82daa65650ae0c4a3e2c9bfdfc60a330a1c3729dde2970ccba4fa6291d066"
     },
     "codebase-design": {
       "path": "skills/codebase-design",
@@ -43,7 +43,7 @@
     },
     "implement": {
       "path": "skills/implement",
-      "hash": "6bba45315872955325316fbd6d67c837e32e0fa501e96fe4c9f6ae63c1bdadbb"
+      "hash": "4c27870a3c0f9daeeaf7db2fa2f11dfad35ff93456eb99b5dc0836ee0bd23cf3"
     },
     "improve-codebase-architecture": {
       "path": "skills/improve-codebase-architecture",
@@ -51,7 +51,7 @@
     },
     "pr": {
       "path": "skills/pr",
-      "hash": "2fb29d468ff431bff0c48cd4f5249c4c4763cdad8c8811dc69caac828ad3be3a"
+      "hash": "3e7bc5e1b8db0a55843ece84fa3d71c038ee7de9e8091328fc1504226b748bf0"
     },
     "prototype": {
       "path": "skills/prototype",
@@ -63,11 +63,11 @@
     },
     "reviewing-changes": {
       "path": "skills/reviewing-changes",
-      "hash": "8a9b42193b7d478bf1dc8b13ab291f7b62ef9f39588cb47f9809a0dc45ecb9e1"
+      "hash": "e838d7203e5aa87d9b7c5fc719d5f382b139e3f5f04b3bf9391b45f1bd101971"
     },
     "setup-cory-gyarmathy-skills": {
       "path": "skills/setup-cory-gyarmathy-skills",
-      "hash": "7a12af2cb1318f83a5e0351889e5f82f8d9f2f55c9144678599232e535a3fd84"
+      "hash": "2d138c14ee5b5797a23e2b5e0daa4b12eaf715aa543fc7fb86a24f23f423c9ca"
     },
     "tdd": {
       "path": "skills/tdd",
@@ -87,11 +87,11 @@
     },
     "to-tickets": {
       "path": "skills/to-tickets",
-      "hash": "5894273ed91bf84da66ddc0edbaf5b63c9d3f55c32fa80b1aae92893f5d546f1"
+      "hash": "5b501fdecdb34d399f4040aece0748766a4ec1f9087a34f8201090e03756fc2c"
     },
     "triage": {
       "path": "skills/triage",
-      "hash": "e8797d1e989bd39fc6d6e36a25f108946b70aef05ff0659383bb34c1ea99c91d"
+      "hash": "8b484c300b5d5b5ef89fb98896f5fdc4e924ec76213029a8e7e04c6cb6664f9a"
     },
     "wait-what": {
       "path": "skills/wait-what",
