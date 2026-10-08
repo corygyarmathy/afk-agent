@@ -2,7 +2,8 @@
 
 Research for [#194](https://github.com/corygyarmathy/afk-agent/issues/194),
 part of the map [#182](https://github.com/corygyarmathy/afk-agent/issues/182).
-Gathered 2026-10-08, read-only, from GitHub alone. Extends
+Gathered 2026-10-08, read-only, from GitHub and the operator's local Claude
+Code session transcripts. Extends
 [Operator load on the Go-era pull requests](operator-load-go-era.md).
 
 **Question.** On the Go-era pull requests, how often did the issue the work
@@ -13,82 +14,91 @@ left a choice open that the implementer had to make), **wrong** (the issue
 asked for something that did not hold) or **too big** (more than one concern,
 or more than one sitting). This is evidence, not a recommendation.
 
-There are two populations, and they are reported separately:
+There are two populations, reported separately:
 
-- **A. dotfiles**: `corygyarmathy/dotfiles` pull requests that the afk agent
-  reviewed (and, in one case, wrote), from four tickets. These are written
+- **A. dotfiles.** `corygyarmathy/dotfiles` pull requests that the afk agent
+  reviewed (and in one case wrote), from 4 tickets. These are written
   `dotfiles#N`.
-- **B. afk-agent**: this repository's own pull requests. An interactive
-  Claude Opus session implemented each ticket, and a fresh session reviewed
-  it with the `reviewing-changes` skill. 22 pull requests, from 22 tickets.
+- **B. afk-agent.** This repository's own pull requests: 43, from 46
+  tickets. An interactive Claude Opus session implemented each ticket, and a
+  separate Opus session reviewed it with `reviewing-changes`. The reviews
+  were never posted to GitHub. They were recovered from the operator's
+  session transcripts (`~/.claude/projects/-home-coryg-git-afk-agent/`).
   Bare `#N` means this repository.
 
 ## Short answer
 
-1. **The tickets fell short in both populations, but differently.**
-   dotfiles: 15 shortfalls on 4 tickets, spread across the kinds (stale 5,
-   under-decided 5, too big 3, wrong 2). afk-agent: 23 on 22 tickets, nearly
-   all under-decided (stale 1, under-decided 15, wrong 5, too big 2). Eight
-   of the 22 afk-agent tickets had no shortfall that cost anything beyond a
-   line in the description.
-2. **The ticket's share of the review's findings was about twice as high on
-   dotfiles.**
+1. **The tickets fell short in both populations, in different ways.**
+   - dotfiles: 15 shortfalls on 4 tickets, spread across the kinds (stale 5,
+     under-decided 5, too big 3, wrong 2).
+   - afk-agent: 37 shortfalls on 43 pull requests, mostly under-decided
+     (stale 2, under-decided 21, wrong 10, too big 4).
+2. **The ticket caused about one finding in five on afk-agent, against two in
+   five on dotfiles.** Compared on reviews of the same shape (the full
+   four-axis report, answered finding by finding):
 
    | | Ticket-caused findings | Ticket-caused questions |
    |---|---|---|
-   | dotfiles | 14 of 32 (44%), or 11 (34%) strictly | 2 of 4 |
-   | afk-agent | 23 of 114 (20%), or 16 (14%) without the three close calls | 0 of 14 |
-   | Combined | 37 of 146 (25%), or 27 (18%) strictly | 2 of 18 |
+   | dotfiles (3 reviews) | 14 of 32 (44%); 11 (34%) strictly | 2 of 4 |
+   | afk-agent (25 reviews) | 26 of 147 (18%); 23 (16%) strictly | 4 of 59 |
+   | Combined | 40 of 179 (22%); 34 (19%) strictly | 6 of 63 |
 
-   On afk-agent the findings are counted as the operator's follow-up comments
-   record them, because the reviews themselves were never posted. So the
-   afk-agent numbers are counts of recorded points, not of numbered findings,
-   and no word share can be given for them.
-3. **Staleness was a dotfiles problem.** Of the 6 stale shortfalls, 5 were on
-   dotfiles, where tickets depended on afk-agent and waited days for it to
-   move. On afk-agent, most tickets were filed in batches from a resolved
-   map and implemented within hours. The one stale case (#22, priced "from
-   the catalogue") sat for three weeks while #152 changed what the review
-   reported.
-4. **On afk-agent, the gap usually reached the operator as a question during
-   the session, not as a finding.** Six pull requests record 19 decisions
-   "agreed before building" or "confirmed with the operator". The
-   unattended agent on dotfiles had nobody to ask ("No user to ask"), so the
-   same gaps arrived as description bullets and findings.
-5. **The biggest afk-agent cost crossed repositories.** #132 asked for "the
-   whole PR as context" in a skill that could not take a context diff. That
-   cost a review point, skills#19 (278 words), and a re-vendor pull request
-   (#179). On dotfiles, the biggest cost was the checks-matrix exception,
-   decided four times (below).
-6. **Almost every shortfall was catchable when the ticket was written.** On
-   afk-agent, 20 of 23 were, from text the ticket's writer already had or the
-   code it changes. One was caught before implementing (#149, rewritten 14
-   minutes after filing), one during it (#128, edited 4 minutes before its
-   pull request), and one needed a check when the work was taken (#22). On
-   dotfiles, 7 of 15 were catchable when written and 5 needed that check.
+   Across every afk-agent review shape, including the earlier ones that
+   counted `consider` findings and the stack review, it is 43 of about 340
+   (13%).
+3. **On afk-agent, the operator let nothing go silently.** In the 25
+   two-step reviews, the operator answered every one of 147 findings by
+   number, in the review session, before any follow-up reached GitHub. 141
+   were fixed as recommended or in a variant the operator named. 6 (4%) were
+   declined, deferred or found wrong on checking. The GitHub follow-up
+   comments record fewer than that. #141's follow-up names 3 of its 8
+   findings, and #70's names 1 of its 12.
+4. **"Agreed before building" means at the start, before any code.** In the
+   six implementing sessions read, the operator's prompt invited questions.
+   The session asked 1 to 3 questions within 1 to 3 minutes of that prompt,
+   before its first edit. The gaps were caught while the operator was still
+   present, not mid-implementation.
+5. **Staleness was a dotfiles problem.** Of the 7 stale shortfalls, 5 were on
+   dotfiles, where tickets rested on afk-agent and waited days for it to
+   move. afk-agent tickets were mostly filed in batches and taken within
+   hours. The two stale cases there are #22, three weeks old by the time it
+   was taken, and #40, whose decisions #49 had reversed.
+6. **"Wrong" was more common on afk-agent once the reviews were read.** The
+   GitHub record showed 5 wrong shortfalls; the transcripts show 10. Several
+   are a ticket asking for something the reviewer pushed back on and the
+   operator then agreed to drop:
+   - #126's "default 400" broke the no-defaults rule.
+   - #168 asked for a `checks/` convention, which the operator declined in
+     favour of an attribute.
+   - #127's link order did not hold.
+   - #72's premise about imports was false.
+7. **The biggest afk-agent costs crossed repositories.**
+   - **#132** assumed a skill input that did not exist. That cost three
+     findings, skills#19 and a re-vendor.
+   - **#168 and #126** each needed a dotfiles change first: dotfiles#358 and
+     dotfiles#329, the latter set by dotfiles#339.
+   - **#63's review** flagged that the dotfiles module did not yet set the
+     new required flags. The operator left that to dotfiles#321, which then
+     went stale against it (S1).
 
 ## Side by side
 
 | | A. dotfiles | B. afk-agent | Combined |
 |---|---|---|---|
-| Pull requests (tickets) | 5 (4) + 1 hand-back | 22 (22) | 27 (26) |
-| Implementer | the afk agent (1), the operator's own sessions (4) | interactive Opus session | |
-| Reviewer | afk agent on an enrolled model (`deepseek-v4-pro`) | fresh Opus session, `reviewing-changes` | |
-| Shortfalls | 15 | 23 | 38 |
-| stale | 5 | 1 | 6 |
-| under-decided | 5 | 15 | 20 |
-| wrong | 2 | 5 | 7 |
-| too big | 3 | 2 | 5 |
-| Shortfalls per ticket | 3.8 | 1.0 | 1.5 |
-| Ticket-caused findings | 14 / 32 (44%) | 23 / 114 (20%) | 37 / 146 (25%) |
-| Ticket-caused questions | 2 / 4 | 0 / 14 | 2 / 18 |
-| Decisions asked during implementation | 0 recorded | 19, on 6 pull requests | |
-| Issues rewritten or amended after work began | 2 (dotfiles#332 edited, dotfiles#344 two comments) | 2 (#128 edited, #145 amended by comment) | 4 |
-| Follow-up issues the shortfall caused | 3 (skills#23, dotfiles#360, dotfiles#356) | 2 (skills#19, #139) | 5 |
-| Catchable when written / when taken / not before / other | 7 / 5 / 1 / 2 | 20 / 1 / 0 / 2 | 27 / 6 / 1 / 4 |
-
-"Other" is S4 and S13 for dotfiles, and #149 and #128 for afk-agent, which
-were caught before or during the work.
+| Pull requests (tickets) | 5 (4) + 1 hand-back | 43 (46) | 48 (50) |
+| Implementer | the afk agent (1), the operator's own sessions (4) | interactive Opus session that asked first | |
+| Reviewer | afk agent on `deepseek-v4-pro`, posted | Opus with `reviewing-changes`, not posted | |
+| Shortfalls | 15 | 37 | 52 |
+| stale | 5 | 2 | 7 |
+| under-decided | 5 | 21 | 26 |
+| wrong | 2 | 10 | 12 |
+| too big | 3 | 4 | 7 |
+| Ticket-caused findings (same-shape reviews) | 14 / 32 (44%) | 26 / 147 (18%) | 40 / 179 (22%) |
+| Ticket-caused questions | 2 / 4 | 4 / 59 | 6 / 63 |
+| Findings let go with no answer | unknown on 2 of 4 PRs | 0 of 147 | |
+| Decisions asked before implementing | 0 (unattended) | 20 recorded, on 7 PRs | |
+| Issues rewritten or amended because of a shortfall | 2 | 4 (#128, #145, #72, #149) | 6 |
+| Follow-up issues the shortfall caused | 3 | 4 (skills#19, #139, #154, dotfiles#358) | 7 |
 
 ## A. dotfiles: the afk agent's reviews
 
@@ -250,189 +260,294 @@ itself flags (S3, S7).
 
 ### Sources and method
 
-The data comes from `gh` against `corygyarmathy/afk-agent` (and
-`corygyarmathy/skills` for one follow-up). I listed every merged or closed
-pull request, 87 in all from #11 to #191 (all merged; none closed unmerged), with its closing references,
-comments, submitted reviews, files and body.
+**GitHub.** I listed every pull request in this repository: 87 of them, all
+merged, numbered #11 to #191. For each I read its closing references, comments,
+submitted reviews, body and files. For each issue it closes, I read the body,
+edit history, comments, blockers and cross-references.
 
-**Selection.** A pull request qualifies when both of these hold:
+**Transcripts.** I also read the operator's Claude Code session transcripts
+in `~/.claude/projects/-home-coryg-git-afk-agent/`. That is 153 top-level
+sessions from 2026-09-12 on; no worktree sessions sit in sibling
+directories. Today's two wayfinder sessions were left out. I used `jq` and
+scripts, never whole files.
 
-- it closes an issue (`closingIssuesReferences`);
-- it records a review on GitHub. That is either a comment answering an
-  advisory review ("Review follow-up", "Changes after review", "Applied the
-  review"), or a passage in the description saying what a review changed
-  ("The last two commits address an advisory four-axis review", "After
-  review").
+**Finding the reviews.** A review session is one that runs
+`reviewing-changes`, either as a skill call or as the `/reviewing-changes`
+command, or that is asked to "review PR #N". Its report is the session's
+longest assistant text with the four axis headings. The operator's
+answers are the messages typed after it.
 
-**None of the 87 has the review itself posted.** No comment or review body
-is in the four-axis shape. The reviews were run in separate sessions and only
-their consequences reached GitHub. So the second condition is the closest
-thing GitHub holds to "has a review on the pull request".
+**Matching a session to a pull request:**
+- Most sessions name the pull request in the command arguments.
+- The reviews of #140–#144 and #150 ran on the branch before the pull request
+  was opened. They name the starting commit and the issue, and the same
+  session then opened the pull request.
+- #159 has two sessions. The first stopped before reviewing anything, because
+  of a tool fault; the second is the review.
 
-**22 qualify.** The pull requests are #13, #19, #20, #70, #84, #92, #140,
-#141, #142, #144, #150, #153, #155, #156, #157, #159, #163, #164, #166, #167,
-#171 and #175. In the same order, they close #9, #2, #4, #60, #65, #85,
-#125, #128, #129, #139, #127, #145, #39, #146, #148, #147, #149, #160, #165,
-#133, #22 and #132. The reviews of #13 and #19 are two-axis (Standards and
-Spec), from before the skill had four. Of the rest, those that name their
-axes name four.
+Every match below is high confidence: the session names the pull request, or
+the branch and issue, and goes on to push to that pull request.
 
-**Excluded:**
+**What I take from a review.** I counted its numbered findings and their
+severities, its questions and its words. For each finding I asked whether
+its stated cause is the issue's text or the code. I then checked the
+operator's typed answer to each finding: fixed, fixed differently, declined,
+deferred, or not mentioned. "Let go" means not mentioned. Findings and
+transcript text are paraphrased here, never quoted beyond a few words.
 
-- **No closing issue (22):** #11, #25, #38, #42, #43, #45, #55, #56, #57,
-  #114–#118, #121, #122, #174, #181, #187–#189 and #191. These include the
-  glossary and research pull requests. #56, #57 and #174 do record a review.
-- **Closing an issue, but no review recorded (43):** #12, #14–#16, #21, #23,
-  #30–#33, #35, #46, #48, #54, #59, #69, #71, #75, #77–#83, #89, #90,
-  #94–#97, #101, #137, #138, #143, #151, #152, #158, #162 and #177–#180.
-  #81's description has a section titled "The first acceptance
-  criterion is not met". It is a ticket shortfall with no review to measure it
-  by, so it is not counted.
-- Docs-only research pull requests and wayfinder maps: none of them close an
-  issue, so they fall out under the first rule.
+**What I did not read.** I did not read sub-agent transcripts, or tool
+results beyond the report.
 
-**Counting.** The classification and the "caught by" column are the same as
-for dotfiles, with three differences:
+### The population
 
-- **Findings are the review's points as the follow-up records them.** Where
-  the follow-up gives the review's own count or numbering (#155, #156, #157,
-  #159, #166, #167), that count is used. Otherwise it is one per item the
-  follow-up lists, or one per item in the description's "before them" list.
-  This undercounts any finding that was let go without being mentioned.
-- **No review words.** The reviews are not on GitHub.
-- **Description-only gaps are not rows.** A "Where the ticket didn't decide"
-  or "Judgement calls" bullet that cost nothing past its line is tallied
-  separately (about 27 across the 22), because those sections run to three or
-  four small choices on most of these pull requests. A gap gets a row when it
-  also caused a finding, a decision asked during the session, a rewrite or a
-  follow-up issue. On dotfiles, every such bullet already had a cost, so this
-  rule changes nothing there.
+**Selection.** A pull request qualifies when it closes an issue and either
+GitHub or the transcripts hold a review of it.
+
+**43 qualify:**
+- **19 of the earlier 22**, with their review now read from a transcript:
+  #20, #70, #84, #92, #140–#142, #144, #150, #155–#157, #159, #163, #164,
+  #166, #167, #171 and #175.
+- **2 of the earlier 22 with no review session:** #19 and #153. They keep
+  their GitHub-only counts.
+- **22 of the 43 that previously showed no review trace,** because a review
+  session exists for them: #54, #59, #71, #75, #77, #78, #81, #90, #95–#97,
+  #101, #137, #138, #143, #151, #152, #158, #162, #177, #178 and #180.
+
+**#13 leaves the population.** Its session shows that the "review" its
+follow-up answered was the operator's own reading, typed into the
+implementing session. No advisory review was run. Its row from the GitHub
+pass (5 points on `AGENTS.md`) was the operator's own points, not a
+reviewer's.
+
+The other 21 issue-closing pull requests have neither a review session nor a
+review trace.
+
+**Also reviewed, but outside the population.** #55–#57 were reviewed in the
+stack review with #54 and #59, but they close no issue. #174 also closes no
+issue. One #56 finding is a clear stale ticket: #51 still said "a plain
+push" after #40 and ADR 0001 had moved to a leased push. It is not counted.
+
+**Four review shapes:**
+
+| Shape | PRs | What the transcript holds | Comparable to dotfiles? |
+|---|---|---|---|
+| **Two-step** (2026-09-28 onward) | 25 | The full four-axis report at a `should-fix` floor. The operator then answers each finding by number, and the session applies the answers. | Yes. This is the shape used for the headline. |
+| **Review-and-fix** (09-26 and 09-27) | 13 | The reviewer was told to fix what clearly needed it and hand back the judgement calls. Severities include `consider`. The text read is often the post-fix summary, so counts are approximate. | No. The operator delegated the findings. |
+| **Stack review** (09-25) | 2 (#54, #59) | One report for #54–#59. The operator's answers are not in the session; the findings became issues #58 and #60–#65. | Counts yes, answers no. |
+| **Plain review** (09-12) | 1 (#20) | "Review this PR", with no skill. The same session fixed what the operator approved. | Partly. |
+
+### Per pull request
+
+| PR | Ticket | Review | Date | Findings (blockers) | Questions | Words | Ticket-caused findings / questions | Answered by the operator |
+|---|---|---|---|---|---|---|---|---|
+| #13 | #9 | none (operator's own reading) | 09-12 | - | - | - | - | left the population |
+| #19 | #2 | two-axis, not in transcripts | 09-12 | 11 | 0 | - | 1 / 0 | GitHub follow-up only |
+| #20 | #4 | plain review, reviewer fixed | 09-12 | 5 | 0 | 828 | 0 / 0 | all fixed on request |
+| #54 | #49 | stack review (#54–#59) | 09-25 | 14 | 2 | 2869 (#54–#59) | 2 / 0 | not in session; became issues |
+| #59 | #50–#53 | stack review (#54–#59) | 09-25 | 18 | 1 | (with #54) | 2 / 0 | not in session; became issues |
+| #70 | #60 | review-and-fix | 09-26 | 12 | 1 | 962 | 5 / 0 | delegated |
+| #71 | #61 | review-and-fix | 09-26 | 11 | 1 | 967 | 0 / 0 | delegated |
+| #75 | #62 | review-and-fix | 09-26 | 14 | 0 | 797 | 0 / 0 | delegated |
+| #77 | #63 | review-and-fix | 09-26 | 19 | 0 | 667 | 1 / 0 | 6 calls answered |
+| #78 | #64 | review-and-fix | 09-26 | 8 | 0 | 485 | 0 / 0 | delegated |
+| #81 | #72 | review-and-fix | 09-26 | 8 (1) | 0 | 568 | 3 / 0 | 2 calls answered |
+| #84 | #65 | review-and-fix | 09-26 | 16 | 3 | 704 | 0 / 0 | delegated |
+| #90 | #76 | review-and-fix | 09-26 | 15 | 0 | 607 | 0 / 0 | delegated |
+| #92 | #85 | review-and-fix | 09-26 | 13 | 0 | 564 | 0 / 0 | delegated |
+| #95 | #87 | review-and-fix (partial report) | 09-26 | 4 | 0 | 610 | 0 / 0 | delegated |
+| #96 | #91 | review-and-fix | 09-26 | 11 | 1 | 604 | 0 / 0 | delegated |
+| #97 | #93 | review-and-fix | 09-26 | 8 | 0 | 577 | 1 / 0 | 3 calls answered |
+| #101 | #98 | review-and-fix | 09-27 | not countable | 0 | 638 | 0 / 0 | 4 calls answered |
+| #137 | #126 | two-step | 09-28 | 9 | 3 | 889 | 2 / 0 | 9/9 (1 deferred, 1 disagreed) |
+| #138 | #124 | two-step | 09-28 | 4 | 2 | 563 | 0 / 0 | 4/4 |
+| #140 | #125 | two-step | 09-28 | 8 | 2 | 886 | 0 / 0 | 8/8 |
+| #141 | #128 | two-step | 09-28 | 8 | 2 | 903 | 2 / 0 | 8/8 |
+| #142 | #129 | two-step | 09-28 | 7 | 1 | 884 | 0 / 0 | 7/7 |
+| #143 | #130 | two-step | 09-28 | 9 | 3 | 1004 | 1 / 1 | 9/9 |
+| #144 | #139 | two-step | 09-28 | 3 | 2 | 550 | 0 / 1 | 3/3 |
+| #150 | #127 | two-step | 09-28 | 10 (1) | 3 | 1018 | 1 / 0 | 10/10 |
+| #151 | #86 | two-step | 09-28 | 8 | 5 | 990 | 0 / 0 | 8/8 |
+| #152 | #99 | two-step | 09-28 | 6 | 4 | 763 | 1 / 0 | 6/6 (1 to a follow-up) |
+| #153 | #145 | not in transcripts | 09-28 | 6 | 4 | - | 2 / 0 | GitHub follow-up only |
+| #155 | #39 | two-step | 09-28 | 9 (3) | 1 | 822 | 3 / 0 | 9/9 |
+| #156 | #146 | two-step | 09-28 | 13 (1) | 3 | 1155 | 2 / 0 | 13/13 |
+| #157 | #148 | two-step | 09-28 | 5 | 4 | 994 | 1 / 1 | 5/5 |
+| #158 | #134 | two-step | 09-29 | 9 (3) | 1 | 793 | 2 / 0 | 9/9 |
+| #159 | #147 | two-step | 09-29 | 3 | 4 | 937 | 0 / 0 | 3/3 |
+| #162 | #161 | two-step | 09-29 | 1 | 2 | 632 | 0 / 0 | 1/1 |
+| #163 | #149 | two-step | 09-29 | 6 | 3 | 828 | 0 / 0 | 6/6 |
+| #164 | #160 | two-step | 09-29 | 1 | 2 | 557 | 0 / 0 | 1/1 |
+| #166 | #165 | two-step | 09-30 | 4 | 0 | 750 | 2 / 0 | 4/4 |
+| #167 | #133 | two-step | 09-30 | 6 (1) | 2 | 932 | 2 / 0 | 6/6 (blocker found wrong) |
+| #171 | #22 | two-step | 10-03 | 10 (1) | 2 | 952 | 2 / 0 | 10/10 |
+| #175 | #132 | two-step | 10-04 | 5 | 3 | 835 | 3 / 0 | 5/5 |
+| #177 | #169 | two-step | 10-04 | 0 | 2 | 561 | 0 / 0 | - |
+| #178 | #168 | two-step | 10-04 | 3 (2) | 1 | 636 | 2 / 1 | 3/3 (2 declined) |
+| #180 | #176 | two-step | 10-04 | 0 | 2 | 674 | 0 / 0 | - |
+
+On the 25 two-step reviews: 147 findings (12 blockers, 135 should-fix) and 59
+questions, in 20,508 words, about 820 per review. The ticket caused 26
+findings (18%) and 4 questions. Across all shapes, the ticket caused 43 of
+about 340 findings (13%). The review-and-fix shape counts `consider`
+findings, which makes its denominator larger.
+
+### What the operator let go
+
+**On the 25 two-step reviews, nothing was let go silently.** Every finding
+got a typed answer, usually "Fix as recommended", within minutes of the
+report and in the same session. That session then fixed them and wrote the
+GitHub follow-up. Of 147 findings:
+- 141 were fixed as recommended, or in a variant the operator named;
+- 2 were declined (#178's two blockers, which the operator answered by
+  asking for an attribute rather than a convention);
+- 2 were deferred (#137's flag default, to a dotfiles pull request; #152's
+  sub-agent models, to #154);
+- 1 was disagreed with in favour of a different home for the reasoning
+  (#137's finding 5);
+- 1 was found wrong on checking (#167's blocker about the reaction login).
+
+**The GitHub follow-up undercounts.** It records what changed, not what was
+raised. Against the transcripts, the earlier GitHub-only counts were a floor:
+
+| PR | GitHub follow-up | Review |
+|---|---|---|
+| #70 | 1 point | 12 findings |
+| #92 | 1 point | 13 findings |
+| #84 | 4 points | 16 findings |
+| #142 | 4 points | 7 findings |
+| #140 | 4 points | 8 findings |
+| #141 | 3 points | 8 findings |
+| #171 | 7 points | 10 findings |
+
+**Questions were answered too, but less decisively.** The operator often
+asked the session to check, or asked what the question meant. "What's the
+question here?" comes up on #151, #152 and #157.
+
+**The review-and-fix shape** delegated what was clear to the reviewer, so a
+let-go rate cannot be read off it. The judgement calls it handed back were
+all answered (#77, #81, #97, #101). **The stack review's** answers happened
+outside the session, as issues.
+
+### When the decisions were made
+
+The pull requests' "agreed before building" and "confirmed with the
+operator" decisions were all taken at the start of the implementing
+session. I read the implementing sessions for #132, #22, #133, #149, #160
+and #145:
+
+- The operator's prompt asked the session to "ask me for any significant
+  decisions or judgement calls".
+- The session asked 1 to 3 questions, 1 to 3 minutes after that prompt,
+  before its first edit.
+- Where recorded, the first edit followed 2 to 11 minutes later.
+
+So the operator met these gaps while still at the keyboard, at planning
+time, and not as interruptions mid-implementation. #160's open choice ("Choosing between them is the
+task") was also put this way, as one question, which makes it a decision
+rather than a description line (B23). I did not read the implementing
+sessions for #146, or for the 22 pull requests that joined.
 
 ### The shortfalls
 
-| # | Ticket → PR | Kind | What fell short | Decisions it asked | Rewrites and follow-ups | Catchable before implementing, by |
+| # | Ticket → PR | Kind | What fell short | What it asked of the operator | Rewrites and follow-ups | Catchable before implementing, by |
 |---|---|---|---|---|---|---|
-| B1 | #132 → #175 | under-decided | It never said what a delta review's spec is. The review would have judged the delta against the whole issue, and reported most of it missing. | 1 review point, fixed (`66299af`): the spec is the send-back. | None to #132 (0 edits). | The operator when writing. |
-| B2 | #132 → #175 | wrong | "With the whole PR as context" assumed `reviewing-changes` could take a context diff. Its step 5 gives each reviewer "the same inputs and nothing else". | 1 review point. | skills#19 filed (278 words). #179 re-vendored the skills once it landed. | The operator when writing, by reading the skill's inputs. |
-| B3 | #132 → #175 | under-decided | 3 choices "agreed before building": how the review learns the send-back head, how the whole PR is passed, and where the delta comes from. | 3, during the session. | None. | The operator when writing. |
-| B4 | #22 → #171 | stale | "Price comes from the catalogue (`model.Price`)", written 2026-09-12. By 10-03 the review already used opencode's reported cost (#152, merged 09-28). The session switched to opencode's figure. | A session decision, then 1 review point. The operator restored the catalogue as the fallback (`67b5dcf`). | The description was left out of date on 3 points, by the operator's own note. | A check when taken. The ticket was 3 weeks old. |
-| B5 | #22 → #171 | under-decided | Three "Open design questions" (where the record lives, what the harness reports, hand-backs). | 5, "agreed before building". | None. | When writing. The ticket said they were open. |
-| B6 | #22 → #171 | under-decided | "A test should be able to say so" did not say how. | 1 review point, rewritten as kind-by-kind tests (`a24dc4a`). | None. | When writing. |
-| B7 | #133 → #167 | under-decided | Nothing covered a review written on a head the pull request has since left. | Advisories 4 and 5 (one point), fixed (`a444cb0`). | None. | When writing. |
-| B8 | #133 → #167 | under-decided | How the two send-back forms order together, and how "in flight" reads across them. | 2, "agreed before building". | None. | When writing. |
-| B9 | #133 → #167 | too big | 740 added non-test lines, over the size signal. "One PR" was agreed with the operator, and the commits were split by layer. | 1, during the session. | None. | At planning. |
-| B10 | #165 → #166 | wrong | Step 3's premise that the watch replays onto someone else's push and posts a second reply was false. `work.Watch` hands back. | Findings 2 and 3 (one point), and finding 1 in part. | #165 not edited. The follow-up says it "has the same wrong premise". | When writing, by reading `work.Watch`. |
-| B11 | #149 → #163 | under-decided | "Where the review's request is claimed: to decide before this is built." | None after the rewrite. | Rewritten 14 minutes after filing, before any work (542 → 685 words, and the title changed), with a 270-word comment on #113. | Caught before implementing, by the operator. |
-| B12 | #149 → #163 | under-decided | 4 choices "confirmed with the operator": strict reply sections, a hand-back linking the reply, when `afk work` builds revise, and the shared wait. | 4, during the session. | None. | When writing. |
-| B13 | #146 → #156 | under-decided | It never said which tier a revision draws from. | A Spec finding: it runs on the implement tier, with no revise tier. | None. This is the fact dotfiles#332 later went stale against (S6). | When writing. |
-| B14 | #146 → #156 | under-decided | "The denylist runs before every push" left the range open. | A Spec finding: only `Read..head`, so a human's commits can't block. | None. | When writing. |
-| B15 | #39 → #155 | under-decided | It flagged that `resetsAt` moves by up to a second, and left how a waiver matches its period undecided. | Findings 3, 6 and 7 (one point), fixed with a 2s drift rule. | None. | When writing. The ticket names the problem. |
-| B16 | #145 → #153 | wrong | "Claiming takes the hand-off label off" did not hold for a refusal, which must keep the pull request in the review queue. | Findings 2 and 6 (one point). | Amended by a 131-word comment on #145 ("because the issue does not move"). | When writing. |
-| B17 | #145 → #153 | under-decided | What "in flight" means, whether several commands make one send-back, and what "a branch the App can push to" means. A fourth was the session's own call. | 3, "confirmed with the operator". | None. | When writing. |
-| B18 | #127 → #150 | under-decided (close call) | A cut that fails its gate is not covered. The first version threw away work that had passed the gate. | 1 review point: keep `<branch>-whole` first. | None. | When writing. |
-| B19 | #128 → #141 | too big | The ticket also covered a revision's push. | None. | The issue was edited 4 minutes before the PR to move that to #131 (286 → 303 words). It became #148. | During implementation. |
-| B20 | #125 → #140 | under-decided (close call) | The ticket did not carry #111's rule that a `Part of` title is the description file's first line. #125's parsing dropped that line. | None numbered. | #139 filed (246 words, "Found reviewing #125"), and added as a blocker of #127. | When writing, from #111. |
-| B21 | #60 → #70 | wrong | The issue's fix ("a subject whose `updated_at` has not moved is not read again") misses a comment posted in the same second. | 1 review point: settle on a second read. | None. | When writing, by probing `updated_at`. |
-| B22 | #2 → #19 | under-decided (close call) | "Nothing sleeps holding a job" did not say how a wait for a resource token fits. | 1 Spec point. The bounded wait under a live lease was kept. | None. | When writing. |
-| B23 | #9 → #13 | wrong (close call) | It asked `AGENTS.md` to state "the conventions this codebase will hold to". The result restated ADR 0001. | 5 review points with one root. `AGENTS.md` went from 150 lines to 66. | None. | When writing. |
+| B1 | #132 → #175 | under-decided | It never said what a delta review's spec is. | Finding 4; the operator chose the send-back as the spec. | None. | When writing. |
+| B2 | #132 → #175 | wrong | "The whole PR as context" assumed `reviewing-changes` takes a context diff. | Findings 3 and 5. | skills#19 filed; #179 re-vendored. | When writing, from the skill's inputs. |
+| B3 | #132 → #175 | under-decided | Three design choices. | 3 questions at the start. | None. | When writing. |
+| B4 | #22 → #171 | stale | "Price comes from the catalogue". By 10-03 the review used opencode's reported cost. | The session's own choice, then finding 5; the operator chose the catalogue as the fallback. | Description left out of date on 3 points. | A check when taken (3 weeks old). |
+| B5 | #22 → #171 | under-decided | Its three "Open design questions". | 3 questions at the start (5 decisions per the description). | None. | When writing; the ticket said they were open. |
+| B6 | #22 → #171 | under-decided | "A test should be able to say so" said nothing about how. | Finding 10. | None. | When writing. |
+| B7 | #133 → #167 | under-decided | Nothing covered a review written on an old head. | Findings 4 and 5. | None. | When writing. |
+| B8 | #133 → #167 | under-decided | How the two forms order, and "in flight" across them. | 2 questions at the start. | None. | When writing. |
+| B9 | #133 → #167 | too big | Over the size signal. | 1 question at the start ("one PR"). | None. | At planning. |
+| B10 | #165 → #166 | wrong | Step 3's premise (a replay and a second reply) was false. | Findings 2 and 3, and finding 1 in part. | #165 not edited. | When writing, from `work.Watch`. |
+| B11 | #149 → #163 | under-decided | Where the review's request is claimed. | None after the rewrite. | Rewritten 14 minutes after filing, before any work. | Caught before implementing. |
+| B12 | #149 → #163 | under-decided | Reply strictness, a hand-back after the reply, and when `afk work` builds revise. | 3 questions at the start (4 per the description). | None. | When writing. |
+| B13 | #146 → #156 | under-decided | Which tier a revision draws from. | Finding 7: implement's tier, no revise tier. | None. It is the fact dotfiles#332 went stale against (S6). | When writing. |
+| B14 | #146 → #156 | under-decided | The range "the denylist runs before every push" covers. | Finding 3. | None. | When writing. |
+| B15 | #39 → #155 | under-decided | It flagged the `resetsAt` drift but left the matching rule open. | Findings 3, 6 and 7, all three blockers. | None. | When writing; the ticket names the problem. |
+| B16 | #145 → #153 | wrong | "Claiming takes the hand-off label off" did not hold for a refusal. | Findings 2 and 6 (GitHub only). | Amended by a comment on #145. | When writing. |
+| B17 | #145 → #153 | under-decided | "In flight", several commands, and "a branch the App can push to". | 3 questions at the start. | None. | When writing. |
+| B18 | #127 → #150 | wrong | Its order (the rest issue links the PR) forced an open-then-edit with a third set of rounds. | Finding 10, which pushes back on the spec; the operator agreed. | #127 not edited; the PR followed the new order. | When writing. |
+| B19 | #128 → #141 | too big | It also covered a revision's push, which did not exist yet. | Findings 3 and 8. | #128 edited to move that to #131; it became #148. | When writing; caught during review, before the PR opened. |
+| B20 | #125 → #140 | under-decided (close call) | It did not carry #111's first-line title rule. | A below-floor note. | #139 filed and made #127's blocker. | When writing, from #111. |
+| B21 | #60 → #70 | wrong | Its fix (skip a subject whose `updated_at` has not moved) misses same-second comments, reactions and later collaborators. | 5 findings, 2 of them should-fix (one root). | None. | When writing, by probing `updated_at`. |
+| B22 | #2 → #19 | under-decided (close call) | "Nothing sleeps holding a job" against a token wait. | 1 Spec point (GitHub only). | None. | When writing. |
+| B23 | #160 → #164 | under-decided | It left the fix open on purpose. | 1 question at the start. | None. | When writing; deliberate. |
+| B24 | #148 → #157 | wrong (close call) | It designed for "a point may ask for a rebase", which #146 hands back. | Finding 3 and Q4; the operator kept the fresh fetch. | None. | When writing, from #146. |
+| B25 | #139 → #144 | under-decided (close call) | Whether title length is #139's job or #127's. | Q2; answered "here". | None. | When writing. |
+| B26 | #49 → #54 | too big | "Claims every unanswered `/implement` … after a kill" needs #58's fix. | A Spec should-fix. | Turned into issues. | At planning. |
+| B27 | #40 → #54 | stale | #40's "Decisions already taken" still named the read #49 had reversed. | A Spec pushback (consider). | None recorded. | A check when taken. |
+| B28 | #50–#53 → #59 | too big | The stack closes #40, whose kill criterion waits on #58. | A Spec should-fix. | None recorded. | At planning. |
+| B29 | #53 → #59 | under-decided (close call) | A job-made request contradicted the glossary's "only imperative channel". | A Standards should-fix. | None traced. | When writing. |
+| B30 | #63 → #77 | wrong | An immediate hand-back on a 403 cannot be done as written: the error arrives after the commit. | A judgement call; the operator accepted the rounds-then-hand-back. | None. | When writing. |
+| B31 | #72 → #81 | wrong | The premise that `implement` imports `intake` only for `Armer` was false. | A literal-reading blocker and 2 should-fix; a judgement call. | #72's acceptance amended (3 edits). | When writing, by grepping the imports. |
+| B32 | #93 → #97 | under-decided | Where the bound lives, and that it is not tied to the lease. | A judgement call (ADR or not). | Noted in ADR 0001. | When writing. |
+| B33 | #126 → #137 | wrong | "`--size-signal` exists (default 400)" broke the no-defaults rule. | Findings 1 and 8; deferred to the module. | dotfiles#329. | When writing, from `AGENTS.md`. |
+| B34 | #130 → #143 | under-decided | Its queue left out revisions in flight, and was unclear on parked jobs. | Finding 8 and Q2. | None. | When writing. |
+| B35 | #99 → #152 | under-decided | A 35-word question as the ticket. | Finding 6 (pushback on the spec). | #154 filed. | When writing. |
+| B36 | #134 → #158 | under-decided (close call) | It misses a push that landed but reads as unpushed. | Findings 5 and 8. | None. | When writing. |
+| B37 | #168 → #178 | wrong | It asked for `checks/` in the test-directory list, which the operator then declined in favour of an attribute. | Findings 1 and 2 (blockers, declined), and Q1. | dotfiles#358 filed. | When writing. |
 
 #### By kind
 
 | Kind | Count | Rows | Ticket-caused findings |
 |---|---|---|---|
-| stale | 1 | B4 | 1 |
-| under-decided | 15 | B1, B3, B5–B8, B11–B15, B17, B18, B20, B22 | 10 (B1 1, B6 1, B7 2, B13 1, B14 1, B15 3, B18 1, B22 1) |
-| wrong | 5 | B2, B10, B16, B21, B23 | 11 (B2 1, B10 2, B16 2, B21 1, B23 5) |
-| too big | 2 | B9, B19 | 0 |
-| **All** | **23** | | **23 of 114. No question was caused by a ticket (0 of 14).** |
+| stale | 2 | B4, B27 | 2 |
+| under-decided | 21 | B1, B3, B5–B8, B11–B15, B17, B20, B22, B23, B25, B29, B32, B34–B36 | 16 |
+| wrong | 10 | B2, B10, B16, B18, B21, B24, B30, B31, B33, B37 | 21 |
+| too big | 4 | B9, B19, B26, B28 | 4 |
+| **All** | **37** | | **43 findings, and 4 questions** |
 
-Three close calls carry 7 of the 23 findings: B18 (1), B22 (1) and B23 (5).
-Without them it is 16 of 114 (14%).
-
-#### By pull request
-
-| PR | Ticket | Shortfalls | Ticket-caused findings / recorded | Questions recorded | Decisions in session |
-|---|---|---|---|---|---|
-| #175 | #132 | 3 | 2 / 5 | 0 | 3 |
-| #171 | #22 | 3 | 2 / 7 | 0 | 5 |
-| #167 | #133 | 3 | 2 / 6 | 2 | 3 |
-| #166 | #165 | 1 | 2 / 4 | 0 | 0 |
-| #164 | #160 | 0 | 0 / 1 | 0 | 0 |
-| #163 | #149 | 2 | 0 / 7 | 0 | 4 |
-| #159 | #147 | 0 | 0 / 3 | 4 | 0 |
-| #157 | #148 | 0 | 0 / 5 | 0 | 0 |
-| #156 | #146 | 2 | 2 / 12 | 3 | 1 |
-| #155 | #39 | 1 | 3 / 9 | 1 | 0 |
-| #153 | #145 | 2 | 2 / 6 | 4 | 3 |
-| #150 | #127 | 1 | 1 / 8 | 0 | 0 |
-| #144 | #139 | 0 | 0 / 4 | 0 | 0 |
-| #142 | #129 | 0 | 0 / 4 | 0 | 0 |
-| #141 | #128 | 1 | 0 / 3 | 0 | 0 |
-| #140 | #125 | 1 | 0 / 4 | 0 | 0 |
-| #92 | #85 | 0 | 0 / 1 | 0 | 0 |
-| #84 | #65 | 0 | 0 / 4 | 0 | 0 |
-| #70 | #60 | 1 | 1 / 1 | 0 | 0 |
-| #20 | #4 | 0 | 0 / 3 | 0 | 0 |
-| #19 | #2 | 1 | 1 / 11 | 0 | 0 |
-| #13 | #9 | 1 | 5 / 6 | 0 | 0 |
-| **All** | | **23** | **23 / 114** | **14** | **19** |
-
-Several tickets left a choice open on purpose and said so. #160 ("Choosing
-between them is the task"), #65 ("What needs designing") and #22 ("Open
-design questions") are examples. They are classified as under-decided
-because they meet the definition, but the ticket's author knew the choice
-was open. Those choices cost decisions during the session (B5) or a line in
-the description (#160, #65), not findings.
+The ticket-caused finding counts per row add to 43. They come from the
+per-pull-request table, summed over the rows each pull request's findings
+belong to.
 
 ### What differs between the populations
 
 These differences could bias any comparison of A and B:
 
-- **Someone could answer.** On afk-agent the implementing session could ask
-  the operator, and recorded 19 decisions taken that way. The afk agent on
-  dotfiles runs unattended. dotfiles#346 says "No user to ask", so a gap there
-  surfaces later, as a finding or a description bullet. This alone moves cost
-  from findings to session decisions in B, and lowers B's ticket-caused
-  share.
-- **Who implemented.** In B every implementer was Opus, driven interactively.
-  In A only dotfiles#346 was the agent; the other four were the operator's own
-  sessions. A has one agent-implemented pull request, so it says little about
-  the agent's implementer.
-- **Who reviewed, and what survives.** B's reviews ran on Opus with the
-  `reviewing-changes` skill, and only the operator's follow-ups survive. A's
-  reviews ran on `deepseek-v4-pro` through the agent, and are posted whole.
-  B's findings are therefore what the operator chose to record. Silently
-  dropped findings, and every word count, are missing. The operator's
-  follow-up also decides what counts as one point. The prior study found
-  numbered findings over-count distinct points by about a quarter, so B's
-  per-point counts and A's numbered counts are not the same unit.
-- **Who wrote the review prompt.** In B the operator ran the review session
-  (two early ones were two-axis). In A the agent's prompt and severity floor
-  applied, after dotfiles#324.
+- **The implementer asked first.** In B the operator's prompt invited
+  questions, and the session asked them before any code. That turned 20 ticket
+  gaps into decisions at the start, which never became findings. The afk
+  agent on dotfiles runs unattended, so the same gaps arrive as findings and
+  description bullets.
+- **The operator answered the review in the same sitting.** In B the operator
+  read the four-axis report in a terminal and answered by number. In A the
+  review is a GitHub comment, owed no answer, and on 2 of 4 pull requests
+  nothing records what was done with it.
+- **Who reviewed.** B's reviewer was Opus running `reviewing-changes` in a
+  separate session that the operator started. A's was the afk agent on
+  `deepseek-v4-pro`. Both use the same skill family. B's reviews average 820
+  words, against 800 on A.
+- **Review shape changed over time in B.** Only the 25 two-step reviews are
+  like A's. The earlier shapes either delegated the findings or reviewed a
+  stack at once.
 - **How far the work was from its ticket.** Most B tickets were filed in
-  batches from a resolved map (#102's children on 2026-09-28 between 02:50
-  and 11:00) and taken within hours, in the repository whose code they
-  describe. A's tickets were dotfiles tickets resting on afk-agent facts, and
-  waited days (dotfiles#332: 5 days; dotfiles#301: 8) while afk-agent moved.
-  That is where A's staleness came from.
-- **Selection.** B counts only pull requests whose review left a trace on
-  GitHub: 22 of the 65 that close an issue. A counts every Go-era
-  dotfiles pull request with an agent review. Neither is a random sample.
-- **Size.** B's pull requests are larger (median about +940 added lines) and
-  mostly Go code with tests. A's are Nix and docs. More code gives a review
-  more code-caused findings to raise, which also lowers the ticket's share.
+  batches from a resolved map and taken within hours, in the repository whose
+  code they describe. A's tickets rested on afk-agent facts and waited days.
+- **Size.** B's pull requests are larger (median about +940 lines) and are
+  Go with tests. More code gives a review more code-caused findings to raise,
+  which lowers the ticket's share.
+- **Selection.** B now includes every issue-closing pull request with a
+  review on GitHub or in a transcript: 43 of 65. A includes every Go-era
+  dotfiles pull request with an agent review.
 
 ### What I could not determine (afk-agent)
 
-- **The reviews themselves.** None was posted, so the findings that were
-  raised and let go without a mention, their severities and their words are
-  unknown. The counts above are a floor on recorded points.
-- **What was asked during the sessions beyond what the descriptions record.**
-  "Agreed before building" and "confirmed with the operator" are the
-  session's own summaries. The transcripts are not on GitHub.
-- **Whether "agreed before building" happened before or after the
-  implementer read the code.** That decides whether it was a planning step
-  or a mid-implementation interruption.
-- **Why 43 of the 65 issue-closing pull requests have no review trace.**
-  Possibly no review was run, or it was run and nothing changed. GitHub
-  cannot tell these apart.
+- **Reviews of #19 and #153.** Neither is in the transcripts, in this
+  project's directory or any other. Their counts remain the GitHub floor.
+- **Sub-agent findings below the floor.** The reports aggregate what each
+  axis found above the floor. Findings the sub-agents dropped, and the
+  orchestrator's merging of duplicates, sit in sub-agent transcripts I did
+  not read.
+- **What happened to the stack review's findings** outside the session,
+  beyond the issues filed afterwards.
+- **The review-and-fix shape's full finding lists.** Several of those
+  sessions report after fixing, so their counts are approximate, and #101's
+  is not countable.
+- **The implementing sessions for #146 and the 22 joined pull requests.** I
+  did not read them, so their start-of-session questions are not counted
+  (the 20 above are a floor).
+- **The 21 issue-closing pull requests with no review session.** It is not
+  known whether they were reviewed some other way, or not at all.
