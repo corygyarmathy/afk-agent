@@ -98,6 +98,10 @@ type Result struct {
 
 	Reason string
 	Output string
+
+	// Review is the review of the pushed head, when AwaitReview finds it
+	// Done: what a correction of its findings reads (package correction).
+	Review github.Comment
 }
 
 // AwaitReview asks for the review of the head the agent pushed to pull request
@@ -106,20 +110,16 @@ type Result struct {
 // Someone else's push is theirs, as it is while CI runs: the review job
 // reviews the pull request's head, so a review of the agent's would never come.
 func (d Deps) AwaitReview(ctx context.Context, in transition.In, pr int, p work.Progress) (Result, error) {
-	at, err := work.RemoteHead(ctx, d.Work.Remote, p.Branch)
-	if err != nil {
-		return Result{}, err
-	}
-	if at != p.Pushed {
-		return Result{State: HandBack, Reason: fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed))}, nil
+	if r, err := d.Kept(ctx, p); err != nil || r.State == HandBack {
+		return r, err
 	}
 
 	comments, err := d.Tracker.Comments(ctx, pr)
 	if err != nil {
 		return Result{}, err
 	}
-	if review.Reviewed(comments, d.Login, p.Pushed) {
-		return Result{State: Done}, nil
+	if r, ok := review.Review(comments, d.Login, p.Pushed); ok {
+		return Result{State: Done, Review: r}, nil
 	}
 	if review.HandedBack(comments, d.Login, p.Pushed) {
 		return Result{State: HandedBack}, nil
@@ -158,6 +158,21 @@ func (d Deps) AwaitReview(ctx context.Context, in transition.In, pr int, p work.
 		return d.Ask(ctx, subject, now)
 	})}}
 	return wait, nil
+}
+
+// Kept is HandBack if someone else pushed to the branch after CI went green on
+// the agent's last push, and Done if the branch is still where the agent left
+// it: the agent does not hand off anyone else's work. A kind that hands off
+// without awaiting the review again, as a correction does, reads it itself.
+func (d Deps) Kept(ctx context.Context, p work.Progress) (Result, error) {
+	at, err := work.RemoteHead(ctx, d.Work.Remote, p.Branch)
+	if err != nil {
+		return Result{}, err
+	}
+	if at != p.Pushed {
+		return Result{State: HandBack, Reason: fmt.Sprintf("Someone else pushed to `%s` after CI went green: it is at `%s`, not at `%s` where the agent left it, and the agent does not hand off anyone else's work.", p.Branch, git.Short(at), git.Short(p.Pushed))}, nil
+	}
+	return Result{State: Done}, nil
 }
 
 // HandOff applies the hand-off label to pull request pr, reviewed at pushed,

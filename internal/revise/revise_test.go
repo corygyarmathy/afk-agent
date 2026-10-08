@@ -255,6 +255,20 @@ func (tr *tracker) Unlabel(_ context.Context, n int, label string) error {
 	return nil
 }
 
+func (tr *tracker) EditComment(_ context.Context, id int64, body string) error {
+	tr.writes["edit-comment"]++
+	for n, cs := range tr.comments {
+		for i := range cs {
+			if cs[i].ID == id {
+				tr.comments[n][i].Body = body
+				tr.events = append(tr.events, "edit-comment")
+				return nil
+			}
+		}
+	}
+	return &github.StatusError{Code: 404, Status: "404 Not Found"}
+}
+
 func (tr *tracker) EditPullRequest(_ context.Context, n int, body string) error {
 	tr.writes["edit"]++
 	if tr.editFails != nil {

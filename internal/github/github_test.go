@@ -497,6 +497,25 @@ func TestEditPullRequestSendsOnlyTheBody(t *testing.T) {
 	}
 }
 
+func TestEditCommentSendsOnlyTheBody(t *testing.T) {
+	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if !expect(t, w, r, "PATCH", "/repos/o/n/issues/comments/900", "application/vnd.github+json") {
+			return
+		}
+		var in map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"body": "Corrected."}; fmt.Sprint(in) != fmt.Sprint(want) {
+			t.Errorf("sent %v, want %v", in, want)
+		}
+		fmt.Fprint(w, `{"id":900}`)
+	})
+	if err := c.EditComment(context.Background(), 900, "Corrected."); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReactionsOnAPullRequestItself(t *testing.T) {
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

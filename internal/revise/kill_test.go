@@ -221,6 +221,10 @@ func (ft *fileTracker) PullRequest(_ context.Context, n int) (github.PullRequest
 	return github.PullRequest{Number: n, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, Labels: f.Labels}, err
 }
 
+func (ft *fileTracker) EditComment(context.Context, int64, string) error {
+	return errors.New("PATCH comment: this test edits no comment")
+}
+
 func (ft *fileTracker) EditPullRequest(context.Context, int, string) error {
 	return errors.New("the claim never edits a pull request's description")
 }

@@ -786,6 +786,10 @@ func (ft *killTracker) CreatePullRequest(_ context.Context, req github.NewPullRe
 }
 
 // Nothing here names a sensitive path, so no description is ever edited.
+func (ft *killTracker) EditComment(context.Context, int64, string) error {
+	return errors.New("PATCH comment: this test edits no comment")
+}
+
 func (ft *killTracker) EditPullRequest(context.Context, int, string) error {
 	return errors.New("no description is edited without a sensitive path")
 }

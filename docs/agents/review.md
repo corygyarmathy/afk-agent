@@ -118,13 +118,27 @@ and `--review-fold-cut` ([Parameters](#parameters)). Findings are numbered
 across the advisory review, from 1 in each, so a send-back can cite one
 ("advisory 3").
 
-An advisory review is append-only. Once posted it is never edited or deleted,
-and each advisory review is a new comment, so a citation resolves to the latest
-advisory review before the send-back that cites it. A finding from an earlier
-review, on code a revision did not change, is not in the latest one: a
-send-back quotes it rather than cite it by number. The tracker the review job
-writes through can only add a comment, and a replayed transition finds the
-advisory review of its head already there and posts nothing.
+An advisory review is never deleted, and each advisory review is a new
+comment, so a citation resolves to the latest advisory review before the
+send-back that cites it. A finding from an earlier review, on code a revision
+did not change, is not in the latest one: a send-back quotes it rather than
+cite it by number. The tracker the review job writes through can only add a
+comment, and a replayed transition finds the advisory review of its head
+already there and posts nothing.
+
+It is edited once, and only on the agent's own pull request: when the
+implement or revise job that asked for it has made a
+[correction](implement.md#the-correction) of its Correctness and Standards
+findings. Every finding keeps its number, so a send-back still cites it, and
+the review's `head=` marker keeps meaning the head it reviewed. Corrected, the
+summary names both heads, "Advisory review of `abc1234`; corrected to
+`def5678`, checked by reproductions and CI, not re-reviewed", each corrected
+finding collapses to one line linking its commit, and the citations stay at
+the reviewed head. A correction CI passed whose commits named no finding says
+so in the summary instead of "corrected to". Failed, the pull request is back at the reviewed head, and
+the findings are marked as advice a correction failed on. Nothing reviews the
+corrected head again. A review that `/review` asked for on someone else's pull
+request is never corrected, and never edited.
 
 A review is recognised on the tracker by a hidden `<!-- afk:review head=<sha> -->`
 line in the agent's comment, and a command as answered by the agent's 👀

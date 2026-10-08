@@ -11,6 +11,8 @@
 //	gating       --implement-gate--------->  pushing       the local gate passed
 //	                                         implementing  it failed: back to the session that wrote it
 //	                                         handing-back  hand-back on the issue
+//	                                         reviewing     a correction failed, with nothing of it pushed
+//	                                         pushing       a correction failed after its push: back to the head the review read
 //	pushing      --implement-push--------->  opening       the denylist, then the push
 //	                                         pushing       over the size signal: the work as it is to its whole branch, under the next key
 //	                                         implementing  ... and seen there: back to the session, once, to be cut
@@ -26,8 +28,13 @@
 //	                                         watching      not finished: again after the CI wait
 //	                                         implementing  red: back to the session, with what CI said
 //	                                         handing-back  out of fixes, or past the ceiling: hand-back on the pull request
-//	reviewing    --implement-review------->  handing-off   the review is on the pull request
+//	                                         pushing       ... in a correction: it failed, back to the head the review read
+//	                                         reviewing     a failed correction back at the head the review read: not watched again
+//	reviewing    --implement-review------->  handing-off   the review is on the pull request, with nothing to correct
+//	                                         implementing  its Correctness or Standards findings: back to the session, once, to be corrected
 //	                                         reviewing     the review job made due, or still on its way
+//	                                         reviewing     a correction green or failed: the review edited to say so, under the next key
+//	                                         handing-off   ... and read back, or given up on
 //	                                         handing-back  someone else pushed, the review job failed, or out of rounds
 //	handing-off  --implement-hand-off----->  start         the hand-off label is on the pull request: at rest
 //	                                         handing-off   applied under the next key
@@ -108,6 +115,7 @@ type Tracker interface {
 	AddBlockedBy(ctx context.Context, n int, blocker int64) error
 	CheckRuns(ctx context.Context, sha string) ([]github.CheckRun, error)
 	RequiredChecks(ctx context.Context, branch string) ([]string, error)
+	EditComment(ctx context.Context, commentID int64, body string) error
 }
 
 // Model runs one model. opencode.Command is one.

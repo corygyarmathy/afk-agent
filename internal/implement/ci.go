@@ -31,6 +31,12 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		// work, and there is nothing to say about it.
 		return transition.Result{State: Start}, d.clear(in.Job.ID)
 	}
+	if r, ok := over(in, p); ok {
+		// A failed correction: put back at the head the review read, where
+		// CI was green before the review was asked for and is not watched
+		// again, or failed here and the move that followed lost.
+		return r, nil
+	}
 	r, err := d.work().Watch(ctx, in, d.ci(), pr.Number, &p.Progress)
 	if err != nil {
 		return transition.Result{}, err
@@ -41,6 +47,9 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 	case work.CIGreen:
 		return transition.Result{State: Reviewing, RunAt: in.Now}, nil
 	case work.CIHandBack:
+		if p.Correction.Running() && !r.Moved {
+			return d.failCorrection(ctx, in, p, r.Reason)
+		}
 		return d.handBackPR(ctx, in, p, pr.Number, p.Nonce, r.Reason, r.Output)
 	}
 	if err := d.save(in.Job.ID, p); err != nil {

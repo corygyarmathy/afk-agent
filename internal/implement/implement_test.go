@@ -78,6 +78,11 @@ type tracker struct {
 	// description fail, without landing.
 	failEdits int
 
+	// failCommentEdits is how many of the next edits of a comment fail,
+	// without landing, and commentEdits how many have landed.
+	failCommentEdits int
+	commentEdits     int
+
 	// filed is the issues the agent filed, and blocked the issues' native
 	// blockers, by number.
 	filed   []github.Issue
@@ -96,8 +101,9 @@ type tracker struct {
 const issueID = 7007
 
 var (
-	errEdit  = errors.New("PATCH pull request: 502 Bad Gateway")
-	errBlock = errors.New("POST blocked_by: 502 Bad Gateway")
+	errEdit        = errors.New("PATCH pull request: 502 Bad Gateway")
+	errCommentEdit = errors.New("PATCH comment: 502 Bad Gateway")
+	errBlock       = errors.New("POST blocked_by: 502 Bad Gateway")
 )
 
 func newTracker(comments ...github.Comment) *tracker {
@@ -319,6 +325,23 @@ func (tr *tracker) EditPullRequest(_ context.Context, n int, body string) error 
 		}
 	}
 	return errors.New("PATCH pull request: 404 Not Found")
+}
+
+func (tr *tracker) EditComment(_ context.Context, id int64, body string) error {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.failCommentEdits > 0 {
+		tr.failCommentEdits--
+		return errCommentEdit
+	}
+	for i := range tr.comments {
+		if tr.comments[i].ID == id {
+			tr.comments[i].Body = body
+			tr.commentEdits++
+			return nil
+		}
+	}
+	return errors.New("PATCH comment: 404 Not Found")
 }
 
 // byAgent is the comments the agent wrote.

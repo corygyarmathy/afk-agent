@@ -402,6 +402,10 @@ func (dt *diskTracker) Unlabel(ctx context.Context, n int, label string) error {
 	return dt.with(func(tr *tracker) error { return tr.Unlabel(ctx, n, label) })
 }
 
+func (dt *diskTracker) EditComment(context.Context, int64, string) error {
+	return errors.New("PATCH comment: this test edits no comment")
+}
+
 func (dt *diskTracker) EditPullRequest(context.Context, int, string) error {
 	return fmt.Errorf("the description has no sensitive line to edit here")
 }

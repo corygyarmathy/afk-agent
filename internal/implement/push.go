@@ -40,18 +40,34 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 		// it never happened. The work is still uncut, and is not pushed.
 		return transition.Result{State: Implementing, RunAt: in.Now}, nil
 	}
+	if r, ok := over(in, p); ok && r.State != Pushing {
+		// A failed correction already at the head the review read, failed
+		// here and the move that followed lost. One that is not there yet
+		// is what this push sends back.
+		return r, nil
+	}
 
 	relayDir := d.work().RelayDir(in.Job.ID)
 	head, err := work.Relay(ctx, ws, relayDir, p.Branch)
 	if err != nil {
 		return transition.Result{}, err
 	}
+	// A correction adds to the head the review read, and never rewrites it:
+	// the gate checked that in the workspace, and this is the check on the
+	// commit that is sent.
+	if c := p.Correction; c.Running() {
+		if kept, err := work.Ancestor(ctx, relayDir, c.Reviewed, head); err != nil {
+			return transition.Result{}, err
+		} else if !kept {
+			return d.stop(ctx, in, p, rewrote(c), "")
+		}
+	}
 	paths, err := work.Touched(ctx, relayDir, p.Base, head)
 	if err != nil {
 		return transition.Result{}, err
 	}
 	if bad := work.Denied(d.Denylist, paths); len(bad) > 0 {
-		return d.handBack(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", work.Quoted(bad)), "")
+		return d.stop(ctx, in, p, fmt.Sprintf("The work touches %s, which the denylist does not let the agent push.", work.Quoted(bad)), "")
 	}
 
 	// Measured here, on the commit the push sends and in the relay, where
@@ -93,12 +109,12 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 
 	// Out of rounds, the work is handed back, and a later command starts it
 	// over on a new branch.
-	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head)
+	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head, p.Correction.PushFrom(head))
 	if err != nil {
 		return transition.Result{}, err
 	}
 	if unlanded != nil {
-		return d.handBack(ctx, in, p, unlanded.Said(head, p.Branch), unlanded.Note)
+		return d.stop(ctx, in, p, unlanded.Said(head, p.Branch), unlanded.Note)
 	}
 	p.Head = head
 	if err := d.save(in.Job.ID, p); err != nil {

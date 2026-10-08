@@ -28,6 +28,12 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok && r.State != Pushing {
+		// A failed correction already at the head the review read, failed
+		// here and the move that followed lost. One that is not there yet
+		// is what this push sends back.
+		return r, nil
+	}
 
 	relayDir := d.work().RelayDir(in.Job.ID)
 	head, err := work.Relay(ctx, d.work().Dir(in.Job.ID), relayDir, p.Branch)
@@ -40,10 +46,10 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 	// compare link starts from it. The gate checked it too; this is the
 	// check on the commit that is sent. The revision's own commits after it
 	// may be rewritten, under the lease.
-	if kept, err := work.Ancestor(ctx, relayDir, p.Read, head); err != nil {
+	if kept, err := work.Ancestor(ctx, relayDir, p.kept(), head); err != nil {
 		return transition.Result{}, err
 	} else if !kept {
-		return d.handBack(ctx, in, p, p.rewrote(), "")
+		return d.stop(ctx, in, p, p.rewrote(), "")
 	}
 
 	// The denylist is checked on what the push sends, commit by commit:
@@ -69,7 +75,7 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 		return transition.Result{}, err
 	}
 	if bad := work.Denied(d.Denylist, paths); len(bad) > 0 {
-		return d.handBack(ctx, in, p, fmt.Sprintf("The revision touches %s, which the denylist does not let the agent push.", work.Quoted(bad)), "")
+		return d.stop(ctx, in, p, fmt.Sprintf("The revision touches %s, which the denylist does not let the agent push.", work.Quoted(bad)), "")
 	}
 
 	// Measured here, on the commit the push sends and in the relay, where
@@ -85,12 +91,12 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 		p.Measured, p.Lines, p.Tests, p.Sensitive = false, 0, 0, nil
 	}
 
-	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head)
+	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head, p.Correction.PushFrom(head))
 	if err != nil {
 		return transition.Result{}, err
 	}
 	if unlanded != nil {
-		return d.handBack(ctx, in, p, unlanded.Said(head, p.Branch), unlanded.Note)
+		return d.stop(ctx, in, p, unlanded.Said(head, p.Branch), unlanded.Note)
 	}
 	p.Head = head
 	if err := d.save(in.Job.ID, p); err != nil {
@@ -122,6 +128,10 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 	case err != nil:
 		return transition.Result{}, err
 	case landing == work.Moved && at == "":
+		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress))
+	case landing == work.Moved && p.Correction != nil:
+		// Someone else pushed after the review: the correction is of the
+		// head the review read, and is not replayed onto anything else.
 		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress))
 	case landing == work.Moved:
 		// Someone else pushed: the revision goes on top of their push.

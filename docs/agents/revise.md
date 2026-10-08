@@ -28,8 +28,9 @@ line or below it, in the operator's own words. It comes in two forms:
 Both are claimed with a 👀 on the command itself: on the comment, or on the
 review. Each is answered at most once, keyed on its own id. It produces commits on top of
 the head the send-back was written against, one reply answering it, an
-advisory review of the new head that claims the reply, and then the hand-off
-label again, in that order. The agent never merges, and never rewrites what
+advisory review of the new head that claims the reply, a
+[correction](#the-correction) of that review's findings on the agent's own pull
+request, and then the hand-off label again, in that order. The agent never merges, and never rewrites what
 the operator read.
 
 Every unanswered `/revise` with points, in either form, is part of one
@@ -50,9 +51,9 @@ A closed pull request's commands are claimed and nothing more.
 | `revise-push` | `pushing` | The denylist, then the size and the [sensitive paths](implement.md#sensitive-paths) measured against the base branch's current tip, then the push under a lease pinned to the head the revision was built on. |
 | `revise-pushed` | `pushed` | Reads the push back from the remote, and brings the description's sensitive line up to it. Someone else's push during the revision sends it to be replayed. |
 | `revise-replay` | `replaying` | The revision's own commits, on top of the other push, gated again and pushed under a lease pinned to it, up to `--replays` times. |
-| `revise-watch` | `watching` | Reads CI on the pushed head, as implement does. Red goes back to the revision's session, until `--ci-fixes` runs out. Green owes [the reply](#the-reply). |
+| `revise-watch` | `watching` | Reads CI on the pushed head, as implement does. Red goes back to the revision's session, until `--ci-fixes` runs out. Green owes [the reply](#the-reply), or in a correction goes on to the review's edit. |
 | `revise-replied` | `replying` | Reads the reply back, and posts it again under the next key if it is not there. Once it is, on to the review. |
-| `revise-review` | `reviewing` | Makes the pull request's `review` job due, and waits for its review of the new head, as implement does. Hands back if someone else pushed, or the review job parked. Rests if the review job handed its review back: that hand-back is the pull request's. |
+| `revise-review` | `reviewing` | Makes the pull request's `review` job due, and waits for its review of the new head, as implement does. Hands back if someone else pushed, or the review job parked. Rests if the review job handed its review back: that hand-back is the pull request's. On the agent's own pull request, a review with a Correctness or Standards finding goes back to `revising`, once, for a [correction](#the-correction); once that is green or has failed, edits the review to say so. |
 | `revise-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. Out of rounds, hands back. |
 | `revise-handed-back` | `handing-back` | Reads the hand-back's comment and label back, and makes whichever is missing again. Once both are there, the job rests. |
 | `revise-resume` | `deferred` | Tries the tier again from its first model. |
@@ -96,6 +97,20 @@ never a `/review` comment (ADR 0001 §14). It reviews the revision's delta
 which the revise job posted, never on the description. The review links the
 reply it claimed. The hand-off label goes back on once the review is there.
 
+### The correction
+
+On a pull request the agent opened, the review of the revision's delta drives
+a correction the same way implement's review does
+([`implement.md`](implement.md#the-correction)): the revision's session,
+continued, given the review's Correctness and Standards findings; the gate,
+the push and CI as for any push; and then the review edited to say what
+corrected each finding, or that the correction failed. The reply is posted as
+it is today, for the head the review read, and is not edited or posted again.
+A failed correction goes back to that head, the revision's reviewed head, and
+is handed off. Someone else's push during a correction is handed back rather
+than replayed onto: the correction is of the head the review read. A revision
+of a pull request someone else opened is never corrected.
+
 A **hand-back** is a comment saying what stopped the revision, and the
 hand-back label. The pull request stays open, with the branch as the revision
 left it. Before the reply, the hand-back lists the points done so far, from the
@@ -134,8 +149,8 @@ The state directory is the directory holding `--store`. Beside the store, a
 revision keeps `send-backs/<job>.json` (the head, branch and points the claim
 took), `workspaces/<job>` and `relays/<job>.git`, `progress/<job>.json` (the
 head read, the head pushed, the session and its reply file, gate attempts,
-fixes and replays, the size and sensitive paths at the last push, and what
-its sessions have spent),
+fixes and replays, the size and sensitive paths at the last push, the
+correction and its findings, and what its sessions have spent),
 `owed/<job>.json` (what is being read back) and `notes/<job>.json` (the last
 error of a push, a review request or a label). All of it is disposable. Lost
 before the push, the revision starts over from the send-back, or is handed
@@ -175,6 +190,10 @@ afk run revise-replied  --pr 12   # -> reviewing, once the reply is read back
 afk run revise-review   --pr 12   # makes review-pr-12 due; run the review, then again
 afk run revise-hand-off --pr 12   # -> start, not scheduled: done
 ```
+
+A review with something to correct sends `revise-review` back to `revising`
+instead, and the correction runs `revise-run` to `revise-watch` again, which
+then goes straight back to `revise-review` for the review's edit.
 
 The review in between is the review job's own transitions, from `afk run
 review --pr 12` ([`review.md`](review.md)). A hand-back moves the job to

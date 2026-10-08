@@ -14,6 +14,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/corygyarmathy/afk-agent/internal/correction"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -33,6 +34,12 @@ var (
 	prompt = template.Must(template.New("revise").Parse(promptText))
 	_      = template.Must(prompt.New("unattended").Parse(work.Unattended))
 	retry  = template.Must(template.New("retry").Parse(retryText))
+
+	// correctPrompt continues the session that wrote the revision with the
+	// advisory review's findings to correct. The prompt for a new session
+	// carries them too, for a correction whose session is gone or too long.
+	_             = template.Must(prompt.New("correct").Parse(correction.Prompt))
+	correctPrompt = template.Must(prompt.New("correcting").Parse(`{{template "correct" .}}`))
 )
 
 // sendBackFile is where, in the workspace's .git, the revision's session reads
@@ -84,6 +91,12 @@ type progress struct {
 	// Sensitive is the sensitive paths the pull request touches at that
 	// head, which its description's sensitive line names.
 	Sensitive []sensitive.Touched `json:"sensitive,omitempty"`
+
+	// Correction is the correction of the findings of the advisory review of
+	// the revision's head, from the review that asks for one until the
+	// hand-off (#193). Nil for a revision whose review asked for none, or
+	// that has not been reviewed.
+	Correction *correction.Correction `json:"correction,omitempty"`
 }
 
 // run is `revise-run`: one candidate model does the send-back's points in the
@@ -136,14 +149,23 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 			return transition.Result{}, err
 		}
 	}
+	if p.Correction.Running() {
+		if err := correction.Write(ws, *p.Correction); err != nil {
+			return transition.Result{}, err
+		}
+	}
 
 	// Cost, so the footer counts what the session's sub-agents spent too.
 	req := opencode.Request{Model: ref, Dir: ws, Cost: true}
+	correcting := p.Correction.Running() && !p.Correction.Given
 	switch {
-	case p.Session == "" || p.Failure == "":
+	case p.Session == "" || (p.Failure == "" && !correcting):
 		// The first run is a fresh session, as the fresh diff deserves; a
 		// retry whose session was never recorded starts one too.
 		req.Prompt, err = d.render(prompt, n, p)
+	case correcting:
+		req.Session = p.Session
+		req.Prompt, err = d.render(correctPrompt, n, p)
 	default:
 		req.Session = p.Session
 		req.Prompt, err = d.render(retry, n, p)
@@ -183,6 +205,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 
 	p.Session, p.LastInput = reply.Session, reply.LastInput
+	if p.Correction.Running() {
+		p.Correction.Given = true
+	}
 	if p.Reply, err = work.ReadGitFile(ws, replyFile); err != nil {
 		p.Reply = ""
 		d.logf("%s: the reply file could not be read, so a hand-back says the session did not say: %v", in.Job.ID, err)
@@ -204,16 +229,22 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok {
+		// Failed here, and the move that followed lost.
+		return r, nil
+	}
 	// Before the gate runs, and before an attempt is counted: a session that
 	// rewrote the head the send-back was written against has broken the one
 	// history rule there is, and a retry to make the gate pass is not what
 	// would put that right. A workspace on another branch is Check's to say.
+	// A correction keeps the head its review read as well, which is on top of
+	// the one the send-back was written against.
 	ws := d.work().Dir(in.Job.ID)
 	if branch, err := work.BranchOf(ctx, ws); err == nil && branch == p.Branch {
-		if kept, err := work.Ancestor(ctx, ws, p.Read, "HEAD"); err != nil {
+		if kept, err := work.Ancestor(ctx, ws, p.kept(), "HEAD"); err != nil {
 			return transition.Result{}, err
 		} else if !kept {
-			return d.handBack(ctx, in, p, p.rewrote(), "")
+			return d.stop(ctx, in, p, p.rewrote(), "")
 		}
 	}
 	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress, d.Gate, d.Attempts)
@@ -227,13 +258,13 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		}
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	case work.GateSwitched:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
+		return d.stop(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
 	case work.GateEmpty:
-		return d.handBack(ctx, in, p, p.empty(), "")
+		return d.stop(ctx, in, p, p.empty(), "")
 	case work.GateExhausted:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
+		return d.stop(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
 	case work.GateDirty:
-		return d.handBack(ctx, in, p, p.Why, r.Output)
+		return d.stop(ctx, in, p, p.Why, r.Output)
 	default: // GateFailed
 		if err := d.save(in.Job.ID, p); err != nil {
 			return transition.Result{}, err
@@ -264,6 +295,11 @@ func (d *Deps) handedBack(ctx context.Context, in transition.In) (transition.Res
 // rewritten what was read. The reply so far goes with it, which is the points
 // done so far.
 func (d *Deps) handBack(ctx context.Context, in transition.In, p progress, reason, output string) (transition.Result, error) {
+	if p.Correction != nil {
+		// Past the reply, which a correction follows: the hand-back links
+		// it rather than say the points again.
+		return d.handBackReplied(ctx, in, p, reason, output)
+	}
 	return d.handBackOn(ctx, in, p, p.Nonce, reason, p.Reply, output)
 }
 
@@ -442,6 +478,9 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 // of the lease: the head the send-back was written against, or after a red CI
 // run the revision's own last push.
 func (p progress) empty() string {
+	if p.Correction.Running() {
+		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the review read, so nothing was corrected.", git.Short(p.Pushed))
+	}
 	if p.Pushed == p.Read {
 		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed))
 	}
@@ -449,9 +488,23 @@ func (p progress) empty() string {
 }
 
 // rewrote is the hand-back's words for a session that rewrote the head the
-// send-back was written against.
+// send-back was written against, or a correction's for one that rewrote the
+// head its review read.
 func (p progress) rewrote() string {
+	if p.Correction.Running() {
+		return fmt.Sprintf("The correction rewrote `%s`, the head the review read, which a correction never does.", git.Short(p.Correction.Reviewed))
+	}
 	return fmt.Sprintf("The revision rewrote `%s`, the head the send-back was written against, which a revision never does. Nothing was pushed.", git.Short(p.Read))
+}
+
+// kept is the head the revision's commits must stay on top of: the one the
+// send-back was written against, or while a correction runs the one its review
+// read, which is on top of that.
+func (p progress) kept() string {
+	if p.Correction.Running() {
+		return p.Correction.Reviewed
+	}
+	return p.Read
 }
 
 // answered is the send-back's comment commands' ids and its review commands',
@@ -557,7 +610,11 @@ func (d *Deps) render(t *template.Template, n int, p progress) (string, error) {
 		Gate   string
 		Failed bool
 		Why    string
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why})
+		// Correcting is a revision whose advisory review's findings are
+		// being corrected, and Reviewed the head the review read.
+		Correcting bool
+		Reviewed   string
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, p.Correction.Running(), reviewed(p)})
 	return b.String(), err
 }
 

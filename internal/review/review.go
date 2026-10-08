@@ -642,13 +642,20 @@ func (d *Deps) reviewed(comments []github.Comment, head string) bool {
 // Reviewed reports whether login, the agent's account, has posted a review of
 // head among comments.
 func Reviewed(comments []github.Comment, login, head string) bool {
+	_, ok := Review(comments, login, head)
+	return ok
+}
+
+// Review is the review of head that login, the agent's account, posted among
+// comments, if there is one.
+func Review(comments []github.Comment, login, head string) (github.Comment, bool) {
 	marker := Marker(head)
 	for _, c := range comments {
 		if strings.EqualFold(c.Login, login) && strings.Contains(c.Body, marker) {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return github.Comment{}, false
 }
 
 // already is the reply to a command for a head that has its review.
@@ -665,9 +672,11 @@ func already(n int, c github.Comment, head string) owed.Item {
 // it, it says which: the implement job for its issue, or the revise job,
 // linking the reply it claimed.
 //
-// It is posted once and never edited or deleted: a send-back cites a finding
-// by its number in the latest review before it (#123), so a review of a new
-// head is a new comment, numbered from 1 again.
+// It is posted once and never deleted: a send-back cites a finding by its
+// number in the latest review before it (#123), so a review of a new head is a
+// new comment, numbered from 1 again. The one edit is a correction's, on the
+// agent's own pull request (package correction), which keeps every finding's
+// number and this head's marker.
 func (d *Deps) body(n int, since, head string, reply opencode.Reply, a request, spent spend.Spent) string {
 	asked := ""
 	switch {
@@ -686,8 +695,27 @@ func (d *Deps) body(n int, since, head string, reply opencode.Reply, a request, 
 	if since != "" {
 		of = git.Short(since) + ".." + of
 	}
-	return fmt.Sprintf("<details>\n<summary>Advisory review of <code>%s</code>. Open it after your own reading.</summary>\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
-		of, Marker(head), asked, strings.TrimSpace(reply.Text), footer)
+	return fmt.Sprintf("<details>\n%s\n\n%s\nThis review does not gate or block merging.%s\n\n%s%s\n\n</details>\n",
+		summary(of, ""), Marker(head), asked, strings.TrimSpace(reply.Text), footer)
+}
+
+// summary is the line a review is folded under: of, what it reviewed, and
+// after, what followed the review, which nothing says until a correction does
+// (Followed).
+func summary(of, after string) string {
+	return "<summary>Advisory review of <code>" + of + "</code>" + after + ". Open it after your own reading.</summary>"
+}
+
+// posted is the summary line as body writes it, whatever it reviewed.
+var posted = regexp.MustCompile(`(?m)^` + strings.Replace(regexp.QuoteMeta(summary("\x00", "")), "\x00", `([^<]*)`, 1) + `$`)
+
+// Followed is body, a review as this package posts it, with its summary
+// saying what followed the review: after, read straight after what it
+// reviewed. A correction says it (package correction), and keeps the rest.
+func Followed(body, after string) string {
+	return posted.ReplaceAllStringFunc(body, func(line string) string {
+		return summary(posted.FindStringSubmatch(line)[1], after)
+	})
 }
 
 // spend counts a run of ref, failed or not, into what the review has spent

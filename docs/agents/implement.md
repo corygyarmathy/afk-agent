@@ -17,8 +17,9 @@ both too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 `/implement` on an open issue, from an account with write access that is not
 the agent's, produces one branch, one pull request that closes the issue, and
-one advisory review of the pull request's head. Then the pull request gets the
-hand-off label. Any text after the word, on the same line or below it, reaches
+one advisory review of the pull request's head. A review with a Correctness or
+Standards finding is [corrected](#the-correction) first. Then the pull request
+gets the hand-off label. Any text after the word, on the same line or below it, reaches
 the model as instructions. The agent never merges.
 
 The same job is made with nobody asking for an issue carrying the eligibility
@@ -31,11 +32,11 @@ label, when `afk` is given `--eligibility-label`
 | `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](#a-session-too-long-to-continue). |
-| `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. |
-| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
+| `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. In a [correction](#the-correction), each of those fails the correction instead, and so does one that rewrote the head the review read. |
+| `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back, or fails a correction. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
 | `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line and the spend footer up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
-| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failed and timed-out checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. A cancelled check goes back for the fix but is not logged. [`afk caught`](#what-ci-caught) counts the same catches from GitHub, with the differences listed there. |
-| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. |
+| `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failed and timed-out checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. A cancelled check goes back for the fix but is not logged. [`afk caught`](#what-ci-caught) counts the same catches from GitHub, with the differences listed there. In a [correction](#the-correction), every hand-back but someone else's push fails the correction instead; a failed correction back at the head the review read is not watched again. |
+| `implement-review` | `reviewing` | Makes the pull request's `review` job due, and waits for the review of the head. Hands back if someone else pushed to the branch, or the review job parked. Rests if the review job handed back this head: that hand-back is the pull request's. A review with a Correctness or Standards finding goes back to the session, once, for a [correction](#the-correction). Once the correction is green, or has failed, edits the review to say so, and reads the edit back. |
 | `implement-hand-off` | `handing-off` | Applies the hand-off label, and reads it back until it is there. |
 | `implement-handed-back` | `handing-back` | Reads the hand-back's comment and label back, each on its own, and makes whichever is missing again. Once both are there, the job rests. |
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |
@@ -62,6 +63,63 @@ The review is a `review` job the implement job makes due, never a `/review`
 comment (ADR 0001 §14). The review claims the request with a 👀 on the pull request's
 description, and says the implement job asked for it
 ([`review.md`](review.md)).
+
+## The correction
+
+On the agent's own pull request, the Correctness and Standards findings of the
+advisory review are the agent's to make right before the hand-off, not advice
+([#193](https://github.com/corygyarmathy/afk-agent/issues/193)). Making them
+right is a **correction**: one pass, checked by the local gate and CI, and
+never by a second advisory review. The code is
+[`internal/correction`](../../internal/correction), and where it leaves the job
+is [`internal/implement/correct.go`](../../internal/implement/correct.go).
+
+- **Which findings.** Every finding under the review's `## Correctness` or
+  `## Standards` heading, of any severity. A merged duplicate sits under the
+  axis whose evidence is strongest, so it counts when that is one of the two.
+  A review with none is handed off as it is.
+- **Who.** The session that wrote the branch, continued, unless it has [grown
+  too long](#a-session-too-long-to-continue): then a fresh session, given the
+  issue, the branch's commits and the findings. The findings are in
+  `.git/afk-findings.md`, each as the review wrote it, numbered as the review
+  numbers it, a Correctness finding with its reproduction's source.
+- **What it is asked.** To commit each reproduction as a regression test and
+  make it pass, to make the code meet each cited standard, and to leave alone a
+  finding it finds mistaken. Its commits go on top of the head the review read,
+  which it never rewrites, and each names the findings it corrects with a
+  `Corrects: advisory <n>` trailer.
+- **Then, as for any push**: the local gate and its attempts, the denylist, the
+  leased push, the size and the sensitive line recomputed, and CI with
+  `--ci-fixes`. The gate's attempts and the fixes start afresh for it. The size
+  signal never cuts it, as it never cuts a fix.
+- **Corrected**: CI green. The advisory review is edited. Each finding a commit
+  names collapses to one line linking the newest commit that names it, with
+  the finding folded beneath it. A correctable finding no commit names stays,
+  marked as advice a correction was attempted on. The summary names both heads:
+  reviewed at A, corrected to B, checked by reproductions and CI, not
+  re-reviewed. When no commit names any finding, the summary names both heads
+  but says the correction named none, so the findings are advice. The citations
+  stay permalinks at A, and the review's `head=` marker keeps meaning A. The
+  trailers are read from the commits in the relay the correction was pushed
+  from, never in the workspace.
+- **Failed**: the gate red at its last attempt, nothing committed, a rewrite of
+  the reviewed head, a denied path, a push that never landed, or CI red past
+  `--ci-fixes`, past `--ci-ceiling` or waiting for an approval. It is not a
+  hand-back. The branch goes back to the head the review read, under the
+  lease, if the correction had pushed past it. That head is not watched again,
+  as CI was green on it before the review. The review is edited to say the
+  correction failed and why, and each correctable finding is marked "correction
+  attempted, failed": advice. Then the hand-off. Each failure is a log line too.
+- **Someone else's push**, or a record lost with the state directory, hands
+  back as at any other time, and the review is left as it was posted. The
+  branch is read again before the review is edited, so a push during a
+  correction that failed without pushing hands back too.
+- **A failed correction replayed**, after a process killed between the
+  failure and its move, goes where the failure sent it: back to the reviewed
+  head, then the edit and the hand-off. It is never handed back for the work
+  it already failed on.
+- **An edit that never lands** after `--effect-rounds`, or a review that has
+  gone, is a log line. The hand-off goes on: the review is advice.
 
 ## The push
 
@@ -277,7 +335,7 @@ non-test lines the work may have before its size needs a decision. The code is
   | permission | level | for | |
   | --- | --- | --- | --- |
   | Contents | write | the push, and the clone and every read of the remote's branches (write includes read) | the grant confirmed on the App by the operator, 2026-09-25; a read of a private repository not observed |
-  | Pull requests | write | opening the pull request, its labels | confirmed on the App by the operator, 2026-09-25 |
+  | Pull requests | write | opening the pull request, its labels; editing the advisory review once a correction is done with | confirmed on the App by the operator, 2026-09-25; the edit not verified |
   | Issues | write | the claim, replies, hand-backs and labels on the issue; filing a first piece's rest, and its native dependency | by GitHub's documentation for the claim and the rest; the dependency endpoints' documentation names no permission; not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
   | Actions | read | [`afk caught`](#what-ci-caught)'s workflow runs and their jobs | not verified: the endpoints' documentation names no permission |
@@ -297,7 +355,7 @@ implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session and its last turn's input tokens, the session's description and what it says is left,
 whether the work was cut and the commit kept on `<branch>-whole`, the rest's issue and whether it was blocked, the sensitive line, gate attempts
-and fixes, the last failure, the pushed head, what its sessions have spent), `requests/<job>.json` (which command the job's claim took, for its
+and fixes, the last failure, the pushed head, the correction and its findings, what its sessions have spent), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.
 Lost after it, the pull request is handed back rather than fixed on a new
@@ -305,15 +363,15 @@ branch.
 
 ## A session too long to continue
 
-A gate retry, a fix and a cut each continue the session that wrote the
-commits, unless it has grown too long
+A gate retry, a fix, a cut and a correction each continue the session that
+wrote the commits, unless it has grown too long
 ([#192](https://github.com/corygyarmathy/afk-agent/issues/192)).
 
 Before a continuation the agent reads the input tokens of the session's last
 turn: its last step's input, cached reads and writes included, kept in the
 job's progress when the run finished, or failed. Over `--fresh-session-at`, a
 fresh session takes over instead, given the issue, the branch's commits and the
-failure or the cut, as one does after a session gone with opencode's data. It
+failure, the cut or the findings, as one does after a session gone with opencode's data. It
 is one rule for every continuation, and for `/revise` too. Each time it applies
 is a log line naming the session, its size and the threshold. `0` continues
 every session, and so does one whose size is unknown: a progress written before
@@ -378,6 +436,11 @@ afk run implement-watch    --issue 7   # -> reviewing, once CI is green
 afk run implement-review   --issue 7   # makes review-pr-<m> due; run the review, then again
 afk run implement-hand-off --issue 7   # -> start, not scheduled: done
 ```
+
+A review with something to correct sends `implement-review` back to
+`implementing` instead, and the correction runs `implement-run` to
+`implement-watch` again. Once it is green, or has failed, `implement-review`
+edits the review and moves on to `handing-off`.
 
 A hand-back moves the job to `handing-back`, and `afk run implement-handed-back
 --issue 7` rests it once the comment and the label are both there.

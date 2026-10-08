@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/corygyarmathy/afk-agent/internal/correction"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -40,6 +41,12 @@ var (
 	// cutPrompt continues the session that wrote the work. The prompt for a
 	// new session carries it too, for a cut whose session is gone.
 	cutPrompt = template.Must(prompt.New("cut").Parse(cutText))
+
+	// correctPrompt continues the session that wrote the branch with the
+	// advisory review's findings to correct. The prompt for a new session
+	// carries them too, for a correction whose session is gone or too long.
+	_             = template.Must(prompt.New("correct").Parse(correction.Prompt))
+	correctPrompt = template.Must(prompt.New("correcting").Parse(`{{template "correct" .}}`))
 )
 
 // progress is how far the work in a workspace has got. It lives beside the
@@ -93,6 +100,11 @@ type progress struct {
 	// says. Either way the dependency is not made again.
 	Blocked   bool `json:"blocked,omitempty"`
 	Unblocked bool `json:"unblocked,omitempty"`
+
+	// Correction is the correction of the advisory review's findings, from
+	// the review that asks for one until the hand-off (#193). Nil for work
+	// whose review asked for none, or that has not been reviewed.
+	Correction *correction.Correction `json:"correction,omitempty"`
 }
 
 // run is `implement-run`: one candidate model does the work in the workspace,
@@ -120,10 +132,15 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	if p.Session == "" && p.Failure == "" && !p.Cut {
 		// No session has finished here, so anything in the workspace is one
 		// that failed before it did, and whose id went with it. The next
-		// starts from the base rather than inherit it unannounced. Work
-		// sent back to be cut had a session finish, whether or not its id
-		// survived.
-		if err := work.Reset(ctx, ws, p.Base); err != nil {
+		// starts from the base rather than inherit it unannounced, or from
+		// the agent's last push for a correction, which is all that is
+		// past it. Work sent back to be cut had a session finish, whether
+		// or not its id survived.
+		from := p.Base
+		if p.Pushed != "" {
+			from = p.Pushed
+		}
+		if err := work.Reset(ctx, ws, from); err != nil {
 			return transition.Result{}, err
 		}
 		for _, name := range []string{descriptionFile, remainderFile} {
@@ -142,18 +159,26 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 			return transition.Result{}, err
 		}
 	}
+	if p.Correction.Running() {
+		if err := correction.Write(ws, *p.Correction); err != nil {
+			return transition.Result{}, err
+		}
+	}
 
 	// Cost, so the footer counts what the session's sub-agents spent too.
 	req := opencode.Request{Model: ref, Dir: ws, Session: p.Session, Cost: true}
+	correcting := p.Correction.Running() && !p.Correction.Given
 	switch {
-	case p.Session == "" || (p.Failure == "" && !p.Cutting):
-		// Only a failure or a cut is worth continuing a session for. The
-		// first run is a new session, and so is a retry whose session was
-		// never recorded.
+	case p.Session == "" || (p.Failure == "" && !p.Cutting && !correcting):
+		// Only a failure, a cut or a correction is worth continuing a
+		// session for. The first run is a new session, and so is a retry
+		// whose session was never recorded.
 		req.Session = ""
 		req.Prompt, err = d.render(prompt, n, p, whole)
 	case p.Cutting:
 		req.Prompt, err = d.render(cutPrompt, n, p, whole)
+	case correcting:
+		req.Prompt, err = d.render(correctPrompt, n, p, whole)
 	default:
 		req.Prompt, err = d.render(retry, n, p, whole)
 	}
@@ -192,6 +217,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 
 	p.Session, p.LastInput = reply.Session, reply.LastInput
 	p.Cutting = false
+	if p.Correction.Running() {
+		p.Correction.Given = true
+	}
 	// What is left is read only before the push: after it, the rest is
 	// filed from what the work was pushed with, or not at all. Asked for
 	// whole, it is not read: nothing is left over.
@@ -231,6 +259,24 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil {
 		return transition.Result{}, err
 	}
+	if r, ok := over(in, p); ok {
+		// Failed here, and the move that followed lost.
+		return r, nil
+	}
+
+	// Before the gate runs, as revise's check of the head it read is: a
+	// correction that rewrote the head the review read has nothing left for
+	// the review's citations to point at, and a retry is not what puts that
+	// right.
+	if c := p.Correction; c.Running() {
+		if branch, err := work.BranchOf(ctx, d.work().Dir(in.Job.ID)); err == nil && branch == p.Branch {
+			if kept, err := work.Ancestor(ctx, d.work().Dir(in.Job.ID), c.Reviewed, "HEAD"); err != nil {
+				return transition.Result{}, err
+			} else if !kept {
+				return d.stop(ctx, in, p, rewrote(c), "")
+			}
+		}
+	}
 
 	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress, d.Gate, d.Attempts)
 	if err != nil {
@@ -243,17 +289,20 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		}
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	case work.GateSwitched:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
+		return d.stop(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
 	case work.GateEmpty:
 		nothing := "The session finished without committing anything, so there is nothing to push."
-		if p.Pushed != "" {
+		switch {
+		case p.Correction.Running():
+			nothing = fmt.Sprintf("The session committed nothing on top of `%s`, the head the review read, so nothing was corrected.", git.Short(p.Pushed))
+		case p.Pushed != "":
 			nothing = fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", git.Short(p.Pushed))
 		}
-		return d.handBack(ctx, in, p, nothing, "")
+		return d.stop(ctx, in, p, nothing, "")
 	case work.GateExhausted:
-		return d.handBack(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
+		return d.stop(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
 	case work.GateDirty:
-		return d.handBack(ctx, in, p, p.Why, r.Output)
+		return d.stop(ctx, in, p, p.Why, r.Output)
 	default: // GateFailed
 		if err := d.save(in.Job.ID, p); err != nil {
 			return transition.Result{}, err
@@ -475,7 +524,11 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 		Cutting      bool
 		Lines, Tests int
 		Kept         string
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests, wholeBranch(p.Branch)})
+		// Correcting is work whose advisory review's findings are being
+		// corrected, and Reviewed the head the review read.
+		Correcting bool
+		Reviewed   string
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests, wholeBranch(p.Branch), p.Correction.Running(), reviewed(p)})
 	return b.String(), err
 }
 

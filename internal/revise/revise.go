@@ -33,7 +33,13 @@
 //	replying  --revise-replied-->  reviewing  the reply is on the pull request
 //	                               replying   made again, under the next key
 //	                               watching   its record was lost: CI is looked at again
-//	reviewing --revise-review--->  handing-off  the review of the pushed head is on the pull request
+//	reviewing --revise-review--->  handing-off  the review of the pushed head is on the pull request, with nothing to correct
+//	                               revising   on the agent's own pull request, its Correctness or Standards findings:
+//	                                          back to the session, once, to be corrected (then gating, pushing, pushed
+//	                                          and watching as for any push, never replaying, and a failure of the
+//	                                          correction's own goes back to the head the review read and on here)
+//	                               reviewing  a correction green or failed: the review edited to say so, under the next key
+//	                               handing-off  ... and read back, or given up on
 //	                               reviewing  the review job made due, or still on its way
 //	                               start      the review job handed its review back: at rest
 //	                               handing-back  someone else pushed, the review job failed, or out of rounds
@@ -163,6 +169,10 @@ type Tracker interface {
 	PullRequestReviews(ctx context.Context, number int) ([]github.PullRequestReview, error)
 	LineComments(ctx context.Context, number int, review int64) ([]github.LineComment, error)
 	owed.PullRequestReviewTracker
+
+	// EditComment is how the advisory review is edited once a correction of
+	// its findings is done with (package correction).
+	EditComment(ctx context.Context, commentID int64, body string) error
 }
 
 // Model runs one model. opencode.Command is one.
