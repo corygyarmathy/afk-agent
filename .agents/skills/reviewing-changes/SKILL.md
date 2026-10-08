@@ -54,7 +54,7 @@ If nothing is found and a user is in the session, ask where the spec is. Otherwi
 
 ### 3. Identify the standards sources
 
-Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md`, `CONTRIBUTING.md`, or `AGENTS.md`.
+Search the repo for every file that documents how code should be written. When `CODING_STANDARDS.md`, `CONTRIBUTING.md` or `AGENTS.md` exists, it must be on the list.
 
 At a `consider` floor, the Standards axis also carries the **smell baseline** in [`SMELLS.md`](SMELLS.md): a fixed set of Fowler code smells that applies even when a repo documents nothing.
 
@@ -66,6 +66,8 @@ Two folds, each decided by an input. Nothing else adds a sub-agent: not a large 
 - **Approach folds into Correctness below the fold cut.** Count the diff's changed lines, never the context diff's: non-test lines only, leaving out generated, vendored and lock files. Below the cut, no Approach sub-agent runs; the Correctness sub-agent also gets Approach's step 2, **Blast radius**, verbatim, and its brief adds: "Report these under `## Approach`, apart from your `## Correctness` findings."
 
 ### 5. Spawn the sub-agents in parallel
+
+Issue every sub-agent call together, in the foreground, and aggregate the reports they return.
 
 Where the harness runs no sub-agents, work each axis in turn from the same inputs, and say beside the scope notes that the axes were not reviewed independently.
 
