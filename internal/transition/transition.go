@@ -31,7 +31,7 @@ import (
 )
 
 // Transition is one unit of execution that moves a job from one persisted state
-// to the next (CONTEXT.md: transition).
+// to the next (GLOSSARY.md: transition).
 //
 // It is a value rather than an interface because everything about it except Run
 // is data the runner and the dispatcher must read *before* anything executes:
@@ -44,7 +44,7 @@ type Transition struct {
 	Name string
 
 	// Kind is the job kind this transition belongs to. A job kind determines
-	// which transitions the job may take (CONTEXT.md: job kind), and this is
+	// which transitions the job may take (GLOSSARY.md: job kind), and this is
 	// that edge, read from the other end.
 	Kind store.Kind
 
@@ -54,7 +54,7 @@ type Transition struct {
 	From string
 
 	// Tokens are the resource tokens this transition must hold to run
-	// (CONTEXT.md: resource token). They express a host constraint rather than
+	// (GLOSSARY.md: resource token). They express a host constraint rather than
 	// a logical one, so most transitions declare none: a transition that calls
 	// an API holds nothing, one that builds holds the heavy-build token
 	// (ADR 0001 §8). Names are matched against the pool's capacities, and an

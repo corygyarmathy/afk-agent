@@ -82,7 +82,7 @@ eligible issues takes the first ones in this order.
 ### The review-queue limit
 
 `--review-queue-limit` (`AFK_REVIEW_QUEUE_LIMIT`) caps the **review queue**
-(`CONTEXT.md`). Without it there is no limit, as there is no budget threshold
+(`GLOSSARY.md`). Without it there is no limit, as there is no budget threshold
 without `--budget-at`. With it, `afk intake` and `afk work` each take at most
 the limit less the queue, in the order above, and `--hand-off-label` is
 required. Why it holds what it holds, and nothing else, is the
@@ -125,7 +125,7 @@ them apart. `agent-ready-for-review` and `agent-stuck` become `needs-review` and
 `needs-decision`.
 
 If a transition you are implementing needs a tracker-visible state that is not
-here, say so on its issue, decide it there in the vocabulary of `CONTEXT.md`,
+here, say so on its issue, decide it there in the vocabulary of `GLOSSARY.md`,
 and add it here.
 
 ## The strings are configuration

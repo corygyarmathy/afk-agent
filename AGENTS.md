@@ -6,7 +6,7 @@ vendored dependency: the job store's SQLite driver (ADR 0004).
 
 ## Where things are
 
-- [`CONTEXT.md`](CONTEXT.md) - the vocabulary.
+- [`GLOSSARY.md`](GLOSSARY.md) - the vocabulary.
 - [`docs/adr/`](docs/adr/) - the decisions, and the reasoning behind them.
 - [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) - the tracker,
   and the dependency edges the backlog is ordered by.
@@ -37,7 +37,7 @@ Read what the work needs. None of it is required reading.
 
 ## Conventions
 
-- Use `CONTEXT.md`'s words when you name things, and not the synonyms it lists
+- Use `GLOSSARY.md`'s words when you name things, and not the synonyms it lists
   under `_Avoid_`.
 - `gofmt` is the formatter of record. Run it before you commit, so formatting
   lands in your commits rather than as drift. `scripts/check-format.sh` is the

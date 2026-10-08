@@ -7,7 +7,7 @@ import (
 )
 
 // Tier is a quality level a human assigns to enrolled models, and which a job
-// kind requires (CONTEXT.md: tier).
+// kind requires (GLOSSARY.md: tier).
 //
 // An opaque string here, exactly as a job's state is opaque to the store. How
 // many tiers there are and what they are called is a parameter and belongs to
@@ -21,7 +21,7 @@ import (
 type Tier string
 
 // Enrolment is which models a human has admitted to which tier
-// (CONTEXT.md: enrolled model).
+// (GLOSSARY.md: enrolled model).
 //
 // The whole of eligibility. Capability and price are fetched; this is not, and
 // there is no path by which a model reaches a candidate list without appearing

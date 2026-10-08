@@ -70,7 +70,7 @@ var allowed = map[string]map[string]string{
 		"attempts":         "run state: how many times this has been tried locally",
 		"stays":            "run state: how many local runs in a row chose to stay, which picks the candidate model",
 		"next_run_at":      "scheduling; ADR 0001 §3 keeps waiting out of process, so it has to live somewhere",
-		"lease_holder":     "a lease is local and has no tracker equivalent (CONTEXT.md: lease vs claim)",
+		"lease_holder":     "a lease is local and has no tracker equivalent (GLOSSARY.md: lease vs claim)",
 		"lease_expires_at": "the expiry that makes a dead holder's job reclaimable",
 	},
 	"episodes": {

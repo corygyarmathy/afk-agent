@@ -11,7 +11,7 @@ correctness validation) could serve `afk-agent`? For each one, can we get it
 with what we already run, and where in a job would it act?
 
 **Lens.** This note collects ideas. It does not recommend adopting anything.
-The measure is **operator load** (`CONTEXT.md`), and spend is a constraint on
+The measure is **operator load** (`GLOSSARY.md`), and spend is a constraint on
 it.
 
 ## Sources and trust

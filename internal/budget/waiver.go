@@ -7,7 +7,7 @@ import (
 )
 
 // Waiver is the operator's permission for work to carry on through one spent
-// window, until that window next resets (ADR 0001 §11, CONTEXT.md: waiver). It
+// window, until that window next resets (ADR 0001 §11, GLOSSARY.md: waiver). It
 // spends the pay-as-you-go balance, and the agent never grants or extends one:
 // carrying on through a spent window is a decision to spend money, and it is
 // the operator's.

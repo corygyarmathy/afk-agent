@@ -19,7 +19,7 @@ const (
 	// Wait stops new work from starting and says nothing about when to come
 	// back. Approaching a limit is this.
 	//
-	// Neither a park nor a defer (CONTEXT.md). The job the caller was holding
+	// Neither a park nor a defer (GLOSSARY.md). The job the caller was holding
 	// is released and stays due, so nothing is waiting for an operator and
 	// nothing has been scheduled on the provider's word; the caller simply
 	// stops taking jobs and looks again on its own poll interval. That is the
@@ -29,7 +29,7 @@ const (
 
 	// Defer stops new work from starting and carries the absolute timestamp it
 	// resumes at. Being limited is this, and it is the glossary's defer
-	// (CONTEXT.md): the provider has said when the window reopens, and a job
+	// (GLOSSARY.md): the provider has said when the window reopens, and a job
 	// scheduled to that time is a queue that goes quiet rather than one that
 	// re-asks every poll interval and suppresses the answer.
 	Defer

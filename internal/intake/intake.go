@@ -129,7 +129,7 @@ type Unattended struct {
 	Queue ReviewQueue
 }
 
-// ReviewQueue is the limit on the review queue (CONTEXT.md: review queue): the
+// ReviewQueue is the limit on the review queue (GLOSSARY.md: review queue): the
 // agent's open pull requests carrying the hand-off label, plus the jobs of the
 // unattended kind taken and not yet handed off, whether a command or the
 // eligibility label made them, plus the revisions in flight.

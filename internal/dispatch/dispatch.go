@@ -46,7 +46,7 @@ type Dispatcher struct {
 	//
 	// It sits here and not in the runner, so `afk run` is unaffected. A
 	// hand-invocation is an operator deliberately asking for this job now;
-	// admission is about the pool starting work on its own (CONTEXT.md).
+	// admission is about the pool starting work on its own (GLOSSARY.md).
 	Budget *budget.Observer
 
 	// Workers is how many transitions may execute at once.
@@ -433,7 +433,7 @@ func (d *Dispatcher) release(ctx context.Context, holder string, job store.Job) 
 }
 
 // park leaves a job in its persisted state with nothing scheduled, resting
-// until an operator moves it (CONTEXT.md: park).
+// until an operator moves it (GLOSSARY.md: park).
 //
 // Spelled as scheduling it for the zero time, because that is what a park is in
 // the store: no lease, no next run. It is a separate name from reschedule

@@ -128,7 +128,7 @@ type Message struct {
 }
 
 // Parked reports a job that has come to rest and will not move without an
-// operator (CONTEXT.md: park). cause is what failed, or nil for a job parked
+// operator (GLOSSARY.md: park). cause is what failed, or nil for a job parked
 // with nothing wrong - a state no transition leads out of.
 //
 // This is the failure ADR 0001 §13 reserves the channel for. A deferral is not

@@ -34,7 +34,7 @@ var (
 	ErrNotHeld = errors.New("lease not held")
 )
 
-// Kind is what a job is for (CONTEXT.md: job kind). It determines which
+// Kind is what a job is for (GLOSSARY.md: job kind). It determines which
 // transitions the job may take and what it requires of a model.
 type Kind string
 
@@ -69,7 +69,7 @@ func (t SubjectType) Valid() bool {
 }
 
 // Subject is the tracker subject a job is attached to. A job has exactly one
-// (CONTEXT.md: job).
+// (GLOSSARY.md: job).
 type Subject struct {
 	Type   SubjectType
 	Number int
@@ -81,7 +81,7 @@ func (s Subject) String() string {
 }
 
 // Lease is a local, exclusive, expiring hold on a job, held by the process
-// executing a transition (CONTEXT.md: lease). It is not a claim: a claim is the
+// executing a transition (GLOSSARY.md: lease). It is not a claim: a claim is the
 // tracker-visible marker that the work is taken, lives in GitHub, has no owner
 // and no expiry, and this package does not model it.
 type Lease struct {
@@ -96,7 +96,7 @@ func (l Lease) Expired(now time.Time) bool {
 }
 
 // Job is a durable, resumable piece of agent work attached to exactly one
-// tracker subject (CONTEXT.md: job).
+// tracker subject (GLOSSARY.md: job).
 //
 // State is opaque here. Which states exist and which transitions connect them
 // belongs to the transition runner (#2); the store persists the name and does
@@ -137,7 +137,7 @@ func (j Job) Held(holder string, now time.Time) bool {
 }
 
 // Episode is one job's episode of an exhausted model tier, as the pool keeps
-// it (CONTEXT.md: episode). When one starts, when it ends and when it is told
+// it (GLOSSARY.md: episode). When one starts, when it ends and when it is told
 // are the pool's (dispatch.Dispatcher); the store only makes each step one
 // statement, so two workers or two processes counting one job lose nothing.
 //

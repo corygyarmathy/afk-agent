@@ -51,7 +51,7 @@ The first job admitted under a waiver is told once per waiver.
 
 ## Waiving a window
 
-A **waiver** is defined in [`CONTEXT.md`](../../CONTEXT.md), and decided in
+A **waiver** is defined in [`GLOSSARY.md`](../../GLOSSARY.md), and decided in
 [ADR 0001 §11](../adr/0001-a-go-state-machine-in-its-own-repository.md).
 
 ```bash
