@@ -109,6 +109,13 @@ type Reply struct {
 	// asked for them.
 	Tokens Tokens
 
+	// LastInput is the input of the run's last step, cached reads and writes
+	// included: how much context the session's next turn starts from. Its
+	// own session's alone, whatever the request asked for, because that is
+	// the session a continuation runs in (#192). Zero for a run that
+	// finished no step.
+	LastInput int
+
 	// SubAgents is how many sub-agents' sessions the run started, theirs
 	// included, when the request asked for their cost.
 	SubAgents int
@@ -479,6 +486,7 @@ func decode(r io.Reader) (Reply, []string, error, error) {
 			reply.Cost += ev.Part.Cost
 			if t := ev.Part.Tokens; t != nil {
 				reply.Tokens.add(*t)
+				reply.LastInput = t.Input + t.Cache.Read + t.Cache.Write
 			}
 		case "tool_use":
 			if id := ev.Part.child(); id != "" {
