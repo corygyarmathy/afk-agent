@@ -21,8 +21,11 @@ const titleLimit = 256
 // description gives them (#111). The prompt names the same ones.
 var sections = []string{
 	"Start here",
+	"Summary",
+	"Evidence",
 	"Where the ticket didn't decide",
 	"Not verified",
+	"Merge danger",
 	"Recipe",
 }
 

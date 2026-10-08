@@ -45,7 +45,8 @@ func (f *fixture) opened() string {
 // session's sections in their order whatever order it wrote them in. A
 // section with nothing in it, or only "none", is left out, and so is one the
 // prompt did not name. A file:line in the session's part links to the pushed
-// head.
+// head. A fenced block, as a Summary visual is, is kept as written: a line in
+// it is neither a heading nor a citation.
 func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T) {
 	f := setup(t, newTracker())
 	f.deps.Repo, f.deps.ReviewProcedure = "o/n", procedure
@@ -64,9 +65,26 @@ func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T
 		"",
 		"ok:1 - where the behaviour lives.",
 		"",
+		"## Merge danger",
+		"",
+		"**Door:** two-way",
+		"",
+		"**Blast radius:** contained",
+		"",
 		"## Where the ticket didn’t decide",
 		"",
 		"- Took the skill's default.",
+		"",
+		"## Evidence",
+		"",
+		"Before: nothing. After: something.",
+		"",
+		"## Summary",
+		"",
+		"```text",
+		"## not a heading",
+		"ok:1",
+		"```",
 		"",
 		"## Recipe",
 		"",
@@ -81,10 +99,16 @@ func TestTheDescriptionIsGoFixedPartsThenTheSessionsSectionsInOrder(t *testing.T
 		"> **Your review** ([procedure](" + procedure + ")): read #7 first, then this, then the diff from **Start here**. Do your own reading before you open the advisory review. End by merging, sending back in your own words, or closing with one line why.\n\n" +
 		"## Start here\n\n" +
 		"[ok:1](https://github.com/o/n/blob/" + head + "/ok#L1) - where the behaviour lives.\n\n" +
+		"## Summary\n\n" +
+		"```text\n## not a heading\nok:1\n```\n\n" +
+		"## Evidence\n\n" +
+		"Before: nothing. After: something.\n\n" +
 		"## Where the ticket didn't decide\n\n" +
 		"- Took the skill's default.\n\n" +
 		"## Not verified\n\n" +
-		"- Needs a host run.\n" +
+		"- Needs a host run.\n\n" +
+		"## Merge danger\n\n" +
+		"**Door:** two-way\n\n**Blast radius:** contained\n" +
 		held
 	if body != want {
 		t.Errorf("description:\n%s\nwant:\n%s", body, want)
@@ -233,7 +257,8 @@ func TestThePromptAsksForTheDescriptionFile(t *testing.T) {
 	prompt := f.model.asked[0].Prompt
 	for _, want := range []string{
 		"closing report", ".git/afk-description.md",
-		"`## Start here`", "`## Where the ticket didn't decide`", "`## Not verified`", "`## Recipe`",
+		"`## Start here`", "`## Summary`", "`## Evidence`", "`## Where the ticket didn't decide`",
+		"`## Not verified`", "`## Merge danger`", "`## Recipe`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt does not contain %q:\n%s", want, prompt)

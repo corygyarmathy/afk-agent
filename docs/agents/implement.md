@@ -149,9 +149,10 @@ is [`internal/implement/correct.go`](../../internal/implement/correct.go).
 
 The pull request's description is orientation for the operator's review:
 what the operator needs and cannot cheaply get from the issue or the diff. It
-does not summarise the change, and the commit messages, not the description,
-are the record. [#111](https://github.com/corygyarmathy/afk-agent/issues/111)
-has the reasoning. The code is
+does not list what changed - its Summary shows a change's shape only where the
+diff does not - and the commit messages, not the description, are the record.
+[#111](https://github.com/corygyarmathy/afk-agent/issues/111) has the
+reasoning. The code is
 [`internal/implement/description.go`](../../internal/implement/description.go).
 Its sections, in this order, each left out when it has nothing to say:
 
@@ -171,21 +172,27 @@ Its sections, in this order, each left out when it has nothing to say:
    `--review-procedure`. Without that parameter it says it has no link to the
    procedure.
 4. **Start here**, the entry point and where the behaviour lives.
-5. **Where the ticket didn't decide**, the choices the session made where the
+5. **Summary**, the change's shape, only when the diff alone does not show it:
+   a visual such as pseudocode, a call or file tree, a `diff` of one, or
+   Mermaid.
+6. **Evidence**, before and after for behaviour the checks do not show.
+7. **Where the ticket didn't decide**, the choices the session made where the
    issue was silent, including the paths it took because nobody was there to
    ask.
-6. **Not verified**, what the session could not check, and behaviour the diff
+8. **Not verified**, what the session could not check, and behaviour the diff
    cannot show.
-7. **Recipe**, only on a deliberately large, single-concern change.
-8. **The spend footer**, what the job's runs have cost so far
-   ([`spend.md`](spend.md)). The agent's.
+9. **Merge danger**, `**Door:**` one-way or two-way, and `**Blast radius:**`
+   in a word, each with an optional why.
+10. **Recipe**, only on a deliberately large, single-concern change.
+11. **The spend footer**, what the job's runs have cost so far
+    ([`spend.md`](spend.md)). The agent's.
 
-- **Sections 4-7 are the session's**: the `implement` skill's closing report,
+- **Sections 4-10 are the session's**: the `implement` skill's closing report,
   which the prompt asks for in `.git/afk-description.md`. The prompt names the
   headings, because the skill that runs is whichever one opencode finds on the
   host (below), at whatever version that is. What goes under them is the
-  [skill's](../../.agents/skills/implement/SKILL.md). Nothing is capped or
-  cut.
+  [`pr` skill's](../../.agents/skills/pr/SKILL.md), which `implement` calls
+  for it. Nothing is capped or cut.
 - **The title is the issue's** on a `Closes` pull request, whatever the file
   says. A `Part of` pull request, the first piece of an issue too big for one,
   takes its title from the file's first line when that line is not a heading
@@ -201,7 +208,11 @@ Its sections, in this order, each left out when it has nothing to say:
 - **The pull request opens with the agent's parts only** when the file is
   missing, is not a regular file, cannot be read, has no `## Start here`, or
   makes a body over GitHub's 65,536 characters even with the sensitive files
-  counted. None of these is a gate failure. Each but the missing file is a log
+  counted. A Summary visual has no step of its own there: the skill keeps the
+  rest of the part to one screen, and a visual is far short of the limit, so a
+  body over it is output that ran away rather than a visual that needs cutting
+  ([#196](https://github.com/corygyarmathy/afk-agent/issues/196)). None of
+  these is a gate failure. Each but the missing file is a log
   line, and so is counting the sensitive files.
 - **Written once**, when the pull request opens. A session after that - a CI
   fix, or a new session that takes one over - is not asked for the file.
