@@ -3,6 +3,7 @@ package premise_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,6 +36,7 @@ func TestLinksAreThePremisesSectionsOwn(t *testing.T) {
 		"- Pull request https://github.com/o/n/pull/203/files.",
 		"- Docs at https://example.com/docs.",
 		"- A tree: https://github.com/o/n/tree/main/docs",
+		"- Review comments: https://github.com/o/n/pull/203#discussion_r1, https://github.com/o/n/pull/203/files#r2 and https://github.com/o/n/pull/203#pullrequestreview-3",
 		"",
 		"```",
 		"https://github.com/o/n/issues/2 in a fence is not a link",
@@ -46,6 +48,7 @@ func TestLinksAreThePremisesSectionsOwn(t *testing.T) {
 	}, "\n")
 
 	got := premise.Links(body, "o/n")
+	const review = "a review comment on a pull request's diff, or a review, which the agent does not fetch"
 	want := []premise.Link{
 		{Text: "https://github.com/up/stream/blob/abc123/cmd/flags.go#L10-L12", Repo: "up/stream", Ref: "abc123", Path: "cmd/flags.go"},
 		{Text: "https://github.com/o/n/issues/195#issuecomment-6056615353", Repo: "o/n", Number: 195, Comment: 6056615353},
@@ -54,6 +57,9 @@ func TestLinksAreThePremisesSectionsOwn(t *testing.T) {
 		{Text: "https://github.com/o/n/pull/203/files", Repo: "o/n", Number: 203},
 		{Text: "https://example.com/docs", Unread: "not on GitHub, so the agent does not fetch it"},
 		{Text: "https://github.com/o/n/tree/main/docs", Unread: "not a file permalink, an issue, a pull request or a comment"},
+		{Text: "https://github.com/o/n/pull/203#discussion_r1", Unread: review},
+		{Text: "https://github.com/o/n/pull/203/files#r2", Unread: review},
+		{Text: "https://github.com/o/n/pull/203#pullrequestreview-3", Unread: review},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Links =\n%+v\nwant\n%+v", got, want)
@@ -223,5 +229,91 @@ func TestFetchStartsAfresh(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "1-thread.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("an earlier fetch's file is still there: %v", err)
+	}
+}
+
+// flaky is a repository that fails its first read of each thread and of each
+// file, as GitHub might for a moment, and counts every read.
+type flaky struct {
+	repo
+	failed map[string]bool
+	reads  int
+}
+
+func (r *flaky) once(key string) error {
+	r.reads++
+	if r.failed == nil {
+		r.failed = map[string]bool{}
+	}
+	if !r.failed[key] {
+		r.failed[key] = true
+		return &github.StatusError{Method: "GET", URL: "/" + key, Code: 502, Status: "502 Bad Gateway"}
+	}
+	return nil
+}
+
+func (r *flaky) Issue(ctx context.Context, n int) (github.Issue, error) {
+	if err := r.once(fmt.Sprint("issue ", n)); err != nil {
+		return github.Issue{}, err
+	}
+	return r.repo.Issue(ctx, n)
+}
+
+func (r *flaky) File(ctx context.Context, path, ref string) ([]byte, error) {
+	if err := r.once(ref + ":" + path); err != nil {
+		return nil, err
+	}
+	return r.repo.File(ctx, path, ref)
+}
+
+// A link the earlier fetch read all of is kept as it was read, and one it
+// could not read, or read only part of, is fetched again, so a failure that
+// was GitHub's for a moment is not the rest of the job's.
+func TestFetchAgainReadsOnlyWhatWasNotRead(t *testing.T) {
+	r := &flaky{repo: repo{
+		branch: "main",
+		files:  map[string]string{"abc:a.go": "linked\n", "main:a.go": "head\n"},
+		issues: map[int]github.Issue{5: {Number: 5, State: "open", Title: "Five"}},
+	}}
+	links := premise.Links("## Premises\n\n- #5\n- https://github.com/o/n/blob/abc/a.go\n", "o/n")
+	dir := filepath.Join(t.TempDir(), premise.Dir)
+	fetch := func() (int, string) {
+		t.Helper()
+		failed, err := premise.Fetch(context.Background(), dir, links, func(string) premise.Reader { return r })
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, premise.Index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return failed, string(b)
+	}
+
+	if failed, index := fetch(); failed != 2 || !strings.Contains(index, "502 Bad Gateway") {
+		t.Fatalf("first fetch: failed = %d, index:\n%s\nwant both links failed for a moment", failed, index)
+	}
+	failed, index := fetch()
+	if failed != 0 || strings.Contains(index, "502") || !strings.Contains(index, "`1-thread.md`") || !strings.Contains(index, "which differs from the linked revision") {
+		t.Fatalf("second fetch: failed = %d, index:\n%s\nwant both read in full", failed, index)
+	}
+	reads := r.reads
+	if failed, again := fetch(); failed != 0 || again != index || r.reads != reads {
+		t.Errorf("third fetch: failed = %d, %d more reads, index:\n%s\nwant what the second read, read again from nothing", failed, r.reads-reads, again)
+	}
+}
+
+// A fetch whose context ends is an error, rather than an index that says the
+// premises it did not get to could not be read.
+func TestACancelledFetchIsAnError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := &repo{issues: map[int]github.Issue{5: {Number: 5}}}
+	dir := filepath.Join(t.TempDir(), premise.Dir)
+	if _, err := premise.Fetch(ctx, dir, premise.Links("## Premises\n\n- #5\n", "o/n"), func(string) premise.Reader { return r }); !errors.Is(err, context.Canceled) {
+		t.Errorf("Fetch = %v, want the context's error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, premise.Index)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a cancelled fetch left an index: %v", err)
 	}
 }

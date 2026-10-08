@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,56 +69,22 @@ func TestWhatIsNotAFileIsAnError(t *testing.T) {
 	}
 }
 
-// On another repository, the App mints a token for that repository's own
-// installation, and for that repository alone.
-func TestTheAppOnAnotherRepositoryMintsForThatRepository(t *testing.T) {
-	var minted []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/o/other/installation":
-			fmt.Fprint(w, `{"id":77}`)
-		case r.URL.Path == "/app/installations/77/access_tokens":
-			b, _ := io.ReadAll(r.Body)
-			minted = append(minted, string(b))
-			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"token":"ghs_other","expires_at":"2099-01-01T00:00:00Z"}`)
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	app := &github.App{ID: "123", Key: testKey(), Repo: "o/n", BaseURL: srv.URL}
-
-	got, err := app.On("o/other").Token(context.Background())
-	if err != nil || got != "ghs_other" {
-		t.Fatalf("Token = %q, %v; want the other repository's", got, err)
-	}
-	if len(minted) != 1 || !strings.Contains(minted[0], `"repositories":["other"]`) {
-		t.Errorf("minted with %q, want for the other repository alone", minted)
-	}
-}
-
-// Where the App is not installed, there is no token, and the read is made as
-// anyone's would be: a public repository is still read.
-func TestTheAppWhereItIsNotInstalledReadsWithNoToken(t *testing.T) {
+// A client with no credential reads as anyone would, so a public repository
+// is still read: how a premise in another repository is read (#207).
+func TestAClientWithNoCredentialReadsWithNoToken(t *testing.T) {
 	var auth []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/up/stream/installation":
-			http.NotFound(w, r)
-		case "/repos/up/stream":
-			auth = append(auth, r.Header.Get("Authorization"))
-			fmt.Fprint(w, `{"default_branch":"main"}`)
-		default:
+		if r.URL.Path != "/repos/up/stream" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
+			return
 		}
+		auth = append(auth, r.Header.Get("Authorization"))
+		fmt.Fprint(w, `{"default_branch":"main"}`)
 	}))
 	t.Cleanup(srv.Close)
-	app := &github.App{ID: "123", Key: testKey(), Repo: "o/n", BaseURL: srv.URL}
 
-	c := &github.Client{Repo: "up/stream", Credential: app.On("up/stream"), BaseURL: srv.URL}
+	c := &github.Client{Repo: "up/stream", BaseURL: srv.URL}
 	if got, err := c.DefaultBranch(context.Background()); err != nil || got != "main" {
 		t.Fatalf("DefaultBranch = %q, %v; want main", got, err)
 	}

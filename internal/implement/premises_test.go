@@ -123,6 +123,9 @@ func TestWorkWithACriterionItCannotMeetRefersToItsIssue(t *testing.T) {
 	if strings.Contains(body, "Closes #7") {
 		t.Errorf("the description closes the issue:\n%s", body)
 	}
+	if !strings.Contains(body, "Refs #7\n\n**Not verified:** merging this leaves #7 open.") || !strings.Contains(body, "still to check:\n\n- The unit starts on the host.") {
+		t.Errorf("the description does not list the criterion under its link line:\n%s", body)
+	}
 	if got := f.tr.opened[0].Title; got != "Reserve a job" {
 		t.Errorf("title %q, want the issue's", got)
 	}

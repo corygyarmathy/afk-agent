@@ -255,31 +255,3 @@ func ParseKey(b []byte) (*rsa.PrivateKey, error) {
 	}
 	return nil, fmt.Errorf("a PEM block of type %q, and a GitHub App's key is an RSA private key", block.Type)
 }
-
-// On is the App as it reaches another repository: a token minted for repo's
-// own installation, and for repo alone (ADR 0005 §4), or no token where the
-// App is not installed there, so a public repository is still read.
-//
-// It reads, as the agent reads another repository's premises. The App itself
-// keeps reaching the one repository the agent is working.
-func (a *App) On(repo string) Credential {
-	return &elsewhere{app: &App{ID: a.ID, Key: a.Key, Repo: repo, BaseURL: a.BaseURL, HTTP: a.HTTP, Clock: a.Clock}}
-}
-
-// elsewhere is an App on a repository it may not be installed on.
-type elsewhere struct {
-	app *App
-}
-
-// Token is an installation token for the repository, or none when GitHub says
-// the App has no installation there. An unauthenticated read of a private
-// repository then fails as it would for anyone, and is reported as that.
-func (e *elsewhere) Token(ctx context.Context) (string, error) {
-	token, err := e.app.Token(ctx)
-	if se := (*StatusError)(nil); errors.As(err, &se) && se.Code == http.StatusNotFound {
-		return "", nil
-	}
-	return token, err
-}
-
-func (e *elsewhere) Refused(token string) { e.app.Refused(token) }

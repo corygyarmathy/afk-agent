@@ -44,6 +44,17 @@ func linkLine(n int, piece, unmet bool, rest int) string {
 	return fmt.Sprintf("Closes #%d", n)
 }
 
+// unmetNote is what a description says under its link line of the acceptance
+// criteria the session said the work cannot meet by itself (#199), in the
+// session's words: what is still to check once it merges.
+func unmetNote(n int, piece bool, unmet string) string {
+	lead := fmt.Sprintf("**Not verified:** merging this leaves #%d open. The session says these of its acceptance criteria need more than this work to meet - a deploy, or a run by hand - so they are still to check:", n)
+	if piece {
+		lead = "**Not verified:** the session says these of the issue's acceptance criteria need more than this work to meet - a deploy, or a run by hand - so they are still to check:"
+	}
+	return lead + "\n\n" + unmet
+}
+
 // unblockedNote is what a first piece's description says under its link line
 // when its rest could not be made blocked by the issue: nothing fails for want
 // of the dependency, and the operator can add it by hand.

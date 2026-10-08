@@ -54,6 +54,11 @@ var address = regexp.MustCompile(`https?://[^\s<>()\[\]]+`)
 // read from text with its URLs taken out, so a URL's fragment is not one.
 var short = regexp.MustCompile(`(?:^|[^\w/#&])(?:([A-Za-z0-9][\w.-]*/[\w.-]+))?#([0-9]+)\b`)
 
+// reviewComment is the fragment a link to a review comment on a pull
+// request's diff ends with, from the conversation or from the diff, or a link
+// to a review.
+var reviewComment = regexp.MustCompile(`^(?:discussion_r|r|pullrequestreview-)[0-9]+$`)
+
 // Links is each link in the issue's Premises section, once, in the order the
 // section gives them: a heading named Premises, at any level, to the next
 // heading at its level or above. repo is the issue's own repository, which a
@@ -154,6 +159,13 @@ func parse(raw string) Link {
 		n, err := strconv.Atoi(parts[3])
 		if err != nil || n < 1 {
 			break
+		}
+		// A review comment on a pull request's diff, or a review, is not on
+		// the conversation the agent fetches, so the thread would be read
+		// as verifying a comment the session never saw.
+		if reviewComment.MatchString(u.Fragment) {
+			l.Unread = "a review comment on a pull request's diff, or a review, which the agent does not fetch"
+			return l
 		}
 		l.Repo, l.Number = repo, n
 		if id, ok := strings.CutPrefix(u.Fragment, "issuecomment-"); ok {

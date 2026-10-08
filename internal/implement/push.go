@@ -273,6 +273,12 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if p.Unblocked {
 		link += "\n\n" + unblockedNote(n, p.Rest)
 	}
+	// The criteria are the agent's to list, beside the line they change,
+	// rather than left to the session's own part, which may not repeat them
+	// or may not be there at all.
+	if p.Unmet != "" {
+		link += "\n\n" + unmetNote(n, p.piece(), p.Unmet)
+	}
 	if session == "" && strings.TrimSpace(p.Description) != "" {
 		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])
 	}

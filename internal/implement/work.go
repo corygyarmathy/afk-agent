@@ -488,18 +488,14 @@ func (d *Deps) spec(ctx context.Context, jobID, ws string, n int) (string, strin
 // credentials for the tracker or the remote, so it can check only a premise
 // the agent fetched for it (#199).
 //
-// Once for each workspace: a retry, a fix or a session that takes over reads
-// what the first run read, rather than a source that moved under the work. An
-// index is what a finished fetch leaves, so one without is fetched again. An
+// Each link once for each workspace: a retry, a fix or a session that takes
+// over reads what the first run read, rather than a source that moved under
+// the work. A link that was not read in full is fetched again on each run,
+// since what failed may have been GitHub for a moment (premise.Fetch). An
 // issue with no Premises section fetches nothing, and so does a kind with no
 // way to read a repository.
 func (d *Deps) premises(ctx context.Context, jobID, ws, body string) (bool, error) {
 	dir := filepath.Join(ws, ".git", premise.Dir)
-	if _, err := os.Stat(filepath.Join(dir, premise.Index)); err == nil {
-		return true, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
 	if d.Premises == nil {
 		return false, nil
 	}

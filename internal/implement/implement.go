@@ -220,8 +220,8 @@ type Deps struct {
 	Repo string
 
 	// Premises is how a premise's repository is read: the agent's own
-	// client for its own repository, and the App on its installation there
-	// for another (#199). Nil fetches no premises.
+	// client for its own repository, and no token for another (#199). Nil
+	// fetches no premises.
 	Premises func(repo string) premise.Reader
 
 	// ReviewProcedure is the operator's review procedure, which the
