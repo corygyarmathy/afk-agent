@@ -336,10 +336,13 @@ non-test lines the work may have before its size needs a decision. The code is
   So pointing it into the agent's state directory means the credentials are
   wiped whenever the state is. If a session is gone anyway, the retry starts a
   new session given the failure: weaker, and the job carries on.
-- **The `implement` skill**, where opencode discovers it from the workspace: in
+- **The `implement` skill**, and the **`pr` skill** it calls for the
+  description's sections, where opencode discovers them from the workspace: in
   the implemented repository's `.agents/skills/`, or in the per-user skills
-  directory. The model is told to reply that the skill is missing rather than
-  implement without it, and then the gate finds no commits and hands back.
+  directory. The model is told to reply that the `implement` skill is missing
+  rather than implement without it, and then the gate finds no commits and
+  hands back. Without `pr`, the prompt still lists the headings the agent
+  reads, but nothing tells the session what goes under them.
 - **The GitHub App**, as for review ([`review.md`](review.md#the-apps-permissions)),
   plus these:
 

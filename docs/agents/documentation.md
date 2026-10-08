@@ -65,9 +65,11 @@ Distinct from a findings note, which holds what was measured here.
 
 Links the issue, and gives the reviewer what they need and cannot cheaply get
 from the issue or the diff: where to start reading, the choices the issue left
-open, and what was not verified. It does not summarise the change, and it is
-not the record: the commit messages are
-([#111](https://github.com/corygyarmathy/afk-agent/issues/111)). A claim in a
+open, and what was not verified. It does not list what changed - a Summary
+shows a change's shape only where the diff does not - and it is not the record:
+the commit messages are
+([#111](https://github.com/corygyarmathy/afk-agent/issues/111)). The agent's
+layout is in [`implement.md`](implement.md#the-description). A claim in a
 pull request description that is not true of the diff is one of the two
 findings the review path treats as most serious; do not make claims the diff
 does not support.
