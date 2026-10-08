@@ -306,21 +306,18 @@ branch.
 ## A session too long to continue
 
 A gate retry, a fix and a cut each continue the session that wrote the
-commits, so it sees what it is retrying against. A session grows with every
-turn, and a long one costs more for each - its whole context is sent again,
-mostly as cache reads, and some models price a long context in a dearer band -
-and does worse work
+commits, unless it has grown too long
 ([#192](https://github.com/corygyarmathy/afk-agent/issues/192)).
 
-So before a continuation the agent reads the input tokens of the session's
-last turn: its last step's input, cached reads and writes included, kept in
-the job's progress when the run finished. Over `--fresh-session-at`, a fresh
-session takes over instead, given the issue, the branch's commits and the
+Before a continuation the agent reads the input tokens of the session's last
+turn: its last step's input, cached reads and writes included, kept in the
+job's progress when the run finished, or failed. Over `--fresh-session-at`, a
+fresh session takes over instead, given the issue, the branch's commits and the
 failure or the cut, as one does after a session gone with opencode's data. It
-is one rule for every continuation, and for `/revise` too. Each time it
-applies is a log line naming the session, its size and the threshold. `0`
-continues every session, and so does one whose size is unknown: a progress
-written before the size was kept.
+is one rule for every continuation, and for `/revise` too. Each time it applies
+is a log line naming the session, its size and the threshold. `0` continues
+every session, and so does one whose size is unknown: a progress written before
+the size was kept.
 
 ## Parameters
 
