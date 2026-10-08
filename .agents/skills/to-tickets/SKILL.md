@@ -52,7 +52,20 @@ A **waiting premise** depends on what a blocker produces, not only on its order,
 
 Confirm every other premise against its source now. One you cannot confirm becomes a question in the quiz, and stays out of the ticket until the user settles it.
 
-### 5. Quiz the user
+### 5. Name each ticket's open choices, and what its pull request can meet
+
+A ticket decides everything it does not list as an **open choice**. State each decision as the outcome or contract the change must meet (what it accepts, what it produces, what holds afterwards), not as the steps to reach it: the implementer finds the steps in the code, where a prescribed step can break a rule of the repository the ticket never read.
+
+Mark each open choice as one of:
+
+- **the implementer's**: any reasonable answer will do. The implementer chooses, and reports the choice.
+- **settle first**: the answer changes what gets built, so the ticket isn't ready until someone settles it. Each becomes a question in the quiz. One the user settles there becomes a decision and leaves the list; one the user defers stays marked, and the ticket is published as `needs-triage`, whatever role it would otherwise carry. Once it is settled, `/triage` writes the answer in and returns the ticket to that role.
+
+A ticket with no open choices says "None".
+
+An **acceptance criterion** is something the pull request itself can meet: a test, behaviour the diff shows, a check CI runs. A check that needs a deploy, a hand run on a host, or anything else after merge goes in the ticket's after-merge note instead, so that the pull request which meets the criteria can close the ticket. A ticket with no such check has no note.
+
+### 6. Quiz the user
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
@@ -61,6 +74,8 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 - **Recipe ticket**: if it is one (runs past one sitting on purpose), and its recipe
 - **Premises**: each as its fact and source, marking any waiting premise
+- **Open choices**: each with its mark, the implementer's or settle first
+- **After merge**: any check only a deploy or hand run can make
 
 Ask the user:
 
@@ -68,15 +83,16 @@ Ask the user:
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
 - Each premise you could not confirm, as its own question
+- Each choice marked settle first, as its own question, with a recommended answer
 
 Iterate until the user approves the breakdown.
 
-### 6. Publish the tickets to the configured tracker
+### 7. Publish the tickets to the configured tracker
 
 Publish the approved tickets. **How** depends on the tracker `/setup-cory-gyarmathy-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
 
 - **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. If the source was an existing issue, make each ticket its sub-issue (the tracker doc's operation). Apply each ticket's triage role unless instructed otherwise: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see step 4). A `ready-for-agent` ticket is agent-grabbable by construction.
+- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. If the source was an existing issue, make each ticket its sub-issue (the tracker doc's operation). Apply each ticket's triage role unless instructed otherwise: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see steps 4 and 5). A `ready-for-agent` ticket is agent-grabbable by construction.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
@@ -90,12 +106,16 @@ Do NOT close or modify any parent issue.
 
 **Premises:** each outside fact the ticket rests on, with a permalink to its source of record, or "None".
 
+**Open choices:** each choice the ticket leaves open, marked "the implementer's" or "settle first", or "None".
+
 **Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
 
-**Status:** the ticket's triage role: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see step 4).
+**Status:** the ticket's triage role: `ready-for-agent`, `recipe-ticket` for a recipe ticket (see the slice rules), or `needs-triage` (see steps 4 and 5).
 
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
+
+**After merge:** each check only a deploy or hand run can make. Omit when there are none.
 
 </local-ticket-template>
 
@@ -113,10 +133,18 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 
 - Each outside fact the ticket rests on, with a permalink to its source of record, or "None".
 
+## Open choices
+
+- Each choice the ticket leaves open, marked "the implementer's" or "settle first", or "None".
+
 ## Acceptance criteria
 
 - [ ] Criterion 1
 - [ ] Criterion 2
+
+## After merge
+
+- Each check only a deploy or hand run can make. Omit this section when there are none.
 
 ## Blocked by
 
