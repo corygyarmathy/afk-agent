@@ -68,6 +68,10 @@ _Avoid_: Trigger, invocation
 The issue label that opts an issue in to unattended work: the agent may take it with nobody asking, producing the same job a command would. The single label the agent reads rather than writes, and a queue filter rather than an instruction: it says this issue _may_ be worked, never that a particular thing should happen to it. Not needed for work to start - a command starts work on any issue.
 _Avoid_: Trigger label, ready label
 
+**Premise**:
+An outside fact an issue rests on, from beyond the issue and the code it changes, stated with its source of record.
+_Avoid_: Assumption, dependency
+
 **Gate**:
 A check a job must pass before it may proceed. Distinct from the advisory review, which advises and never blocks.
 _Avoid_: Check, validation
