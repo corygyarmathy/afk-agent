@@ -4,7 +4,6 @@ package revise_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -58,8 +58,10 @@ func TestKillingARevisionStillAnswersOnce(t *testing.T) {
 			if err := seedReviseJob(t, state, head); err != nil {
 				t.Fatal(err)
 			}
-			dt := &diskTracker{path: filepath.Join(dir, "tracker.json"), remote: remote}
-			if err := dt.save(snapshot{Labels: []string{"bug"}, NextID: 1000}); err != nil {
+			dt := diskTracker(dir, remote, "", "")
+			start := newTracker()
+			start.PullRequests[12].Labels = []string{"bug"}
+			if err := dt.Save(start); err != nil {
 				t.Fatal(err)
 			}
 			ready := filepath.Join(dir, "ready")
@@ -88,12 +90,12 @@ func TestKillingARevisionStillAnswersOnce(t *testing.T) {
 				t.Errorf("%d pushes landed, want exactly one", n)
 			}
 			after := remoteFeatureHead(t, remote)
-			snap, err := dt.load()
+			snap, err := dt.Load()
 			if err != nil {
 				t.Fatal(err)
 			}
 			var answers, replies, reviews []github.Comment
-			for _, c := range snap.Comments {
+			for _, c := range snap.CommentsOn[12] {
 				if strings.Contains(c.Body, owed.RevisionMarker(1)) {
 					answers = append(answers, c)
 				}
@@ -105,7 +107,7 @@ func TestKillingARevisionStillAnswersOnce(t *testing.T) {
 				}
 			}
 			if len(answers) != 1 || len(replies) != 1 {
-				t.Fatalf("%d answers to the command and %d replies, want the one reply\n%v", len(answers), len(replies), snap.Comments)
+				t.Fatalf("%d answers to the command and %d replies, want the one reply\n%v", len(answers), len(replies), snap.CommentsOn[12])
 			}
 			if n := snap.Reacts[replies[0].ID]; n != 1 {
 				t.Errorf("%d claims landed on the reply, want one", n)
@@ -113,8 +115,8 @@ func TestKillingARevisionStillAnswersOnce(t *testing.T) {
 			if len(reviews) != 1 {
 				t.Errorf("%d reviews of %s, want one", len(reviews), git.Short(after))
 			}
-			if !github.HasLabel(snap.Labels, handOff) || github.HasLabel(snap.Labels, "needs-decision") {
-				t.Errorf("the labels are %v, want handed off and not handed back", snap.Labels)
+			if !github.HasLabel(snap.PullRequests[12].Labels, handOff) || github.HasLabel(snap.PullRequests[12].Labels, "needs-decision") {
+				t.Errorf("the labels are %v, want handed off and not handed back", snap.PullRequests[12].Labels)
 			}
 			if got := finalState(t, state); got != revise.Start {
 				t.Errorf("the revision is in %q, want at rest in %s", got, revise.Start)
@@ -155,7 +157,7 @@ func TestHelperAnswers(t *testing.T) {
 	if killAt != "" && !strings.HasPrefix(killAt, "after-") {
 		st = &killStore{Store: s, at: killAt, ready: ready}
 	}
-	dt := &diskTracker{path: filepath.Join(dir, "tracker.json"), remote: remote, killAt: killAt, ready: ready}
+	dt := diskTracker(dir, remote, killAt, ready)
 
 	resolve := func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst}, nil }
 	d := &revise.Deps{
@@ -235,189 +237,58 @@ func TestHelperAnswers(t *testing.T) {
 	t.Fatalf("the revision never finished; it is in %q", jobState(t, s, jobID()))
 }
 
-// diskTracker is the fixture tracker with pull request 12's comments,
-// reactions and labels in a file, so that what a killed process did to it
-// outlives the process. Its head is the remote's, as GitHub's moves with a
-// push.
-type diskTracker struct {
-	path   string
-	remote string
-
-	// killAt is the `after-` point this process dies at, having told the
-	// parent it is there: once the write it names has landed.
-	killAt string
-	ready  string
-}
-
-type snapshot struct {
-	Labels    []string
-	Comments  []github.Comment
-	Reactions map[int64][]github.Reaction
-	NextID    int64
-
-	// Reacts is how many reactions landed on each comment.
-	Reacts map[int64]int
-}
-
-func (dt *diskTracker) load() (snapshot, error) {
-	b, err := os.ReadFile(dt.path)
-	if err != nil {
-		return snapshot{}, err
-	}
-	var s snapshot
-	err = json.Unmarshal(b, &s)
-	return s, err
-}
-
-func (dt *diskTracker) save(s snapshot) error {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return err
-	}
-	tmp := dt.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, dt.path)
-}
-
-// with runs do on the fixture tracker as the file has it, and writes back what
-// it changed.
-func (dt *diskTracker) with(do func(tr *tracker) error) error {
-	s, err := dt.load()
-	if err != nil {
-		return err
-	}
-	tr := newTracker()
-	tr.live = dt.remote
-	tr.pr.Labels = s.Labels
-	tr.comments[12] = s.Comments
-	if s.Reactions != nil {
-		tr.reactions = s.Reactions
-	}
-	if s.Reacts != nil {
-		tr.reacts = s.Reacts
-	}
-	tr.nextID = s.NextID
-	if err := do(tr); err != nil {
-		return err
-	}
-	return dt.save(snapshot{Labels: tr.pr.Labels, Comments: tr.comments[12], Reactions: tr.reactions, NextID: tr.nextID, Reacts: tr.reacts})
-}
-
-// landed dies if point is where this process is to die.
-func (dt *diskTracker) landed(point string) {
-	if dt.killAt != point {
-		return
-	}
-	os.WriteFile(dt.ready, nil, 0o644)
-	select {}
-}
-
-func (dt *diskTracker) PullRequest(ctx context.Context, n int) (pr github.PullRequest, err error) {
-	err = dt.with(func(tr *tracker) (err error) { pr, err = tr.PullRequest(ctx, n); return err })
-	return pr, err
-}
-
-func (dt *diskTracker) Issue(ctx context.Context, n int) (is github.Issue, err error) {
-	err = dt.with(func(tr *tracker) (err error) { is, err = tr.Issue(ctx, n); return err })
-	return is, err
-}
-
-func (dt *diskTracker) Comments(ctx context.Context, n int) (cs []github.Comment, err error) {
-	err = dt.with(func(tr *tracker) (err error) { cs, err = tr.Comments(ctx, n); return err })
-	return cs, err
-}
-
-func (dt *diskTracker) Reactions(ctx context.Context, id int64) (rs []github.Reaction, err error) {
-	err = dt.with(func(tr *tracker) (err error) { rs, err = tr.Reactions(ctx, id); return err })
-	return rs, err
-}
-
-func (dt *diskTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
-	return nil, nil
-}
-
-func (dt *diskTracker) Comment(ctx context.Context, n int, body string) (c github.Comment, err error) {
-	if err = dt.with(func(tr *tracker) (err error) { c, err = tr.Comment(ctx, n, body); return err }); err != nil {
-		return c, err
-	}
-	switch {
-	case strings.Contains(body, "<!-- afk:revision-reply "):
-		dt.landed("after-reply")
-	case strings.Contains(body, "<!-- afk:review head="):
-		dt.landed("after-review")
-	}
-	return c, nil
-}
-
-func (dt *diskTracker) React(ctx context.Context, id int64, content string) error {
-	var reply bool
-	if err := dt.with(func(tr *tracker) error {
-		for _, c := range tr.comments[12] {
-			reply = reply || (c.ID == id && strings.Contains(c.Body, "<!-- afk:revision-reply "))
+// diskTracker is the fixture tracker in a file in dir, so that what a killed
+// process did to pull request 12 outlives the process. Its head is the
+// remote's, as GitHub's moves with a push. A non-empty killAt is the `after-`
+// point this process dies at, having told the parent it is there: once the
+// write it names has landed.
+func diskTracker(dir, remote, killAt, ready string) *githubtest.File {
+	dt := &githubtest.File{Path: filepath.Join(dir, "tracker.json")}
+	dt.New = func() *githubtest.Tracker {
+		tr := newTracker()
+		tr.Live = remote
+		// A review is never a send-back here, and nothing edits.
+		tr.Fail = func(c githubtest.Call) error {
+			switch c.Method {
+			case "ReactToPullRequestReview":
+				return errors.New("nothing here claims a review")
+			case "ReactToIssue":
+				return errors.New("nothing here claims a pull request's description")
+			case "EditComment":
+				return errors.New("PATCH comment: this test edits no comment")
+			case "EditPullRequest":
+				return fmt.Errorf("the description has no sensitive line to edit here")
+			}
+			return nil
 		}
-		return tr.React(ctx, id, content)
-	}); err != nil {
-		return err
+		return tr
 	}
-	if reply {
-		dt.landed("after-reply-claim")
+	landed := func(point string) {
+		if killAt != point {
+			return
+		}
+		os.WriteFile(ready, nil, 0o644)
+		select {}
 	}
-	return nil
-}
-
-// A review is never a send-back here.
-func (dt *diskTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
-	return nil, nil
-}
-
-func (dt *diskTracker) LineComments(context.Context, int, int64) ([]github.LineComment, error) {
-	return nil, nil
-}
-
-func (dt *diskTracker) PullRequestReviewReactions(context.Context, string) ([]github.Reaction, error) {
-	return nil, nil
-}
-
-func (dt *diskTracker) ReactToPullRequestReview(context.Context, string, string) error {
-	return errors.New("nothing here claims a review")
-}
-
-func (dt *diskTracker) ReactToIssue(context.Context, int, string) error {
-	return errors.New("nothing here claims a pull request's description")
-}
-
-func (dt *diskTracker) Label(ctx context.Context, n int, label string) error {
-	if err := dt.with(func(tr *tracker) error { return tr.Label(ctx, n, label) }); err != nil {
-		return err
+	dt.After = func(c githubtest.Call) {
+		switch {
+		case c.Method == "Comment" && strings.Contains(c.Text, "<!-- afk:revision-reply "):
+			landed("after-reply")
+		case c.Method == "Comment" && strings.Contains(c.Text, "<!-- afk:review head="):
+			landed("after-review")
+		case c.Method == "React":
+			tr, err := dt.Load()
+			if err != nil {
+				return
+			}
+			for _, cm := range tr.CommentsOn[12] {
+				if cm.ID == c.ID && strings.Contains(cm.Body, "<!-- afk:revision-reply ") {
+					landed("after-reply-claim")
+				}
+			}
+		case c.Method == "Label" && c.Text == handOff:
+			landed("after-label")
+		}
 	}
-	if label == handOff {
-		dt.landed("after-label")
-	}
-	return nil
-}
-
-func (dt *diskTracker) Unlabel(ctx context.Context, n int, label string) error {
-	return dt.with(func(tr *tracker) error { return tr.Unlabel(ctx, n, label) })
-}
-
-func (dt *diskTracker) EditComment(context.Context, int64, string) error {
-	return errors.New("PATCH comment: this test edits no comment")
-}
-
-func (dt *diskTracker) EditPullRequest(context.Context, int, string) error {
-	return fmt.Errorf("the description has no sensitive line to edit here")
-}
-
-func (dt *diskTracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, error) {
-	return green(sha, 0), nil
-}
-
-func (dt *diskTracker) RequiredChecks(context.Context, string) ([]string, error) {
-	return nil, nil
-}
-
-func (dt *diskTracker) Compare(context.Context, string, string) (string, error) {
-	return "", nil
+	return dt
 }

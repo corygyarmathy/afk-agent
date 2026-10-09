@@ -42,7 +42,7 @@ func correctOn(name, trailer string) func(dir string) error {
 // corrected it; nothing is reviewed again; and the pull request is handed off.
 func TestARevisionsOwnFindingsAreCorrectedBeforeTheHandOff(t *testing.T) {
 	f := setupReplying(t)
-	f.tr.pr.Login = agent
+	f.tr.PullRequests[12].Login = agent
 	f.review.Model = finder{}
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"), correctOn("regression", "Corrects: advisory 1"))
 
@@ -62,7 +62,7 @@ func TestARevisionsOwnFindingsAreCorrectedBeforeTheHandOff(t *testing.T) {
 		t.Fatalf("%d replies, want one", n)
 	}
 	var reviews []string
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && reviewMarker.MatchString(c.Body) {
 			reviews = append(reviews, c.Body)
 		}
@@ -91,7 +91,7 @@ func TestARevisionsOwnFindingsAreCorrectedBeforeTheHandOff(t *testing.T) {
 			t.Errorf("the review does not have %q:\n%s", want, body)
 		}
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label is not back on the pull request")
 	}
 	if f.handedBack() {
@@ -117,7 +117,7 @@ func TestARevisionOfAnotherAuthorsPullRequestIsNotCorrected(t *testing.T) {
 	if len(reviews) != 1 || strings.Contains(reviews[0].Body, "afk:correction") {
 		t.Errorf("reviews of %s: %+v, want one, never edited", at, reviews)
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label is not back on the pull request")
 	}
 }
@@ -127,7 +127,7 @@ func TestARevisionOfAnotherAuthorsPullRequestIsNotCorrected(t *testing.T) {
 // correction failed, and the pull request is handed off.
 func TestARevisionsFailedCorrectionLeavesTheFindingsAsAdvice(t *testing.T) {
 	f := setupReplying(t)
-	f.tr.pr.Login = agent
+	f.tr.PullRequests[12].Login = agent
 	f.review.Model = finder{}
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"), func(dir string) error {
 		if _, err := run(dir, "git", "rm", "--quiet", "ok"); err != nil {
@@ -151,7 +151,7 @@ func TestARevisionsFailedCorrectionLeavesTheFindingsAsAdvice(t *testing.T) {
 	if _, n := f.reply(); n != 1 {
 		t.Errorf("%d replies, want one", n)
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label is not back on the pull request")
 	}
 	if f.handedBack() {
@@ -165,10 +165,10 @@ func TestARevisionsFailedCorrectionLeavesTheFindingsAsAdvice(t *testing.T) {
 // it was posted, and the pull request is handed off.
 func TestARevisionsCorrectionCIRefusesIsPushedBackToTheReviewedHead(t *testing.T) {
 	f := setupReplying(t)
-	f.tr.pr.Login = agent
+	f.tr.PullRequests[12].Login = agent
 	f.review.Model = finder{}
 	var reviewed string
-	f.tr.checks = func(sha string, call int) []github.CheckRun {
+	f.tr.Checks = func(sha string, call int) []github.CheckRun {
 		if reviewed == "" {
 			reviewed = sha
 		}
@@ -198,7 +198,7 @@ func TestARevisionsCorrectionCIRefusesIsPushedBackToTheReviewedHead(t *testing.T
 	if _, n := f.reply(); n != 1 {
 		t.Errorf("%d replies, want one", n)
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label is not back on the pull request")
 	}
 	if f.handedBack() {

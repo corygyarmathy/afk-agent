@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/git"
-	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/model"
@@ -190,7 +190,7 @@ func revisionRemote(t *testing.T) (remote, head string) {
 
 type revFixture struct {
 	t       *testing.T
-	tr      *tracker
+	tr      *githubtest.Tracker
 	model   *reviser
 	deps    *revise.Deps
 	remote  string
@@ -219,7 +219,7 @@ func jobID() string {
 func setupRevision(t *testing.T) *revFixture {
 	t.Helper()
 	f := revisionFixture(t)
-	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.tr.Say(12, send(1, "/revise Rename Foo to Bar."))
 	f.claim()
 	return f
 }
@@ -229,8 +229,8 @@ func revisionFixture(t *testing.T) *revFixture {
 	t.Helper()
 	remote, head := revisionRemote(t)
 	tr := newTracker()
-	tr.pr.HeadSHA = head
-	tr.pr.HeadRef = "feature"
+	tr.PullRequests[12].HeadSHA = head
+	tr.PullRequests[12].HeadRef = "feature"
 	s := storetest.Open(t)
 	m := &reviser{}
 	state := t.TempDir()
@@ -395,10 +395,10 @@ func TestARevisionAddsCommitsOnTopOfTheSendBacksHead(t *testing.T) {
 // request is for.
 func TestADeclinedPointIsKeptAndTheRevisionGoesOn(t *testing.T) {
 	f := revisionFixture(t)
-	f.tr.pr.Body = "Closes #7.\n\n<!-- afk:implement issue=7 -->"
-	f.tr.issues[7] = github.Issue{Number: 7, State: "open", Title: "Rename the widget", Body: "Foo is a bad name."}
-	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
-	f.tr.say(12, send(2, "/revise And drop the flag."))
+	f.tr.PullRequests[12].Body = "Closes #7.\n\n<!-- afk:implement issue=7 -->"
+	f.tr.Issues[7].Title, f.tr.Issues[7].Body = "Rename the widget", "Foo is a bad name."
+	f.tr.Say(12, send(1, "/revise Rename Foo to Bar."))
+	f.tr.Say(12, send(2, "/revise And drop the flag."))
 	f.claim()
 	var spec string
 	f.model.then(func(dir string) error {
@@ -506,7 +506,7 @@ func pushAs(dir, remote, name, content string) error {
 }
 
 func (f *revFixture) handedBack() bool {
-	for _, l := range f.tr.pr.Labels {
+	for _, l := range f.tr.PullRequests[12].Labels {
 		if l == "needs-decision" {
 			return true
 		}
@@ -516,7 +516,7 @@ func (f *revFixture) handedBack() bool {
 
 // handBack is the revision's hand-back the agent posted, or empty.
 func (f *revFixture) handBack() string {
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, "afk:revision-hand-back") {
 			return c.Body
 		}
@@ -681,7 +681,7 @@ func TestAHandBackCarriesTheRevisionsMarkers(t *testing.T) {
 	})
 
 	f.drive()
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, "afk:revision-hand-back") {
 			if !strings.Contains(c.Body, owed.RevisionMarker(1)) {
 				t.Errorf("the hand-back does not carry the revision's marker for comment 1:\n%s", c.Body)
@@ -736,8 +736,8 @@ func TestATransientFailureLeavesNothingForTheNextCandidate(t *testing.T) {
 func TestTheDenylistReadsOnlyWhatTheRevisionAdds(t *testing.T) {
 	f := revisionFixture(t)
 	f.head = f.humanPushes("flake.lock")
-	f.tr.pr.HeadSHA = f.head
-	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.tr.PullRequests[12].HeadSHA = f.head
+	f.tr.Say(12, send(1, "/revise Rename Foo to Bar."))
 	f.claim()
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
 

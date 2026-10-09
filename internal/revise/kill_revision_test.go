@@ -266,10 +266,10 @@ func TestHelperRevisions(t *testing.T) {
 	}
 
 	tr := newTracker()
-	tr.pr.HeadSHA = head
-	tr.pr.HeadRef = "feature"
+	tr.PullRequests[12].HeadSHA = head
+	tr.PullRequests[12].HeadRef = "feature"
 	if red {
-		tr.checks = func(sha string, _ int) []github.CheckRun {
+		tr.Checks = func(sha string, _ int) []github.CheckRun {
 			if _, err := run(remote, "git", "cat-file", "-e", sha+":fix.txt"); err == nil {
 				return green(sha, 0)
 			}

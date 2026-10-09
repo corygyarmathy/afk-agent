@@ -27,7 +27,7 @@ import (
 func setupReplying(t *testing.T) *revFixture {
 	t.Helper()
 	f := setupRevision(t)
-	f.tr.live = f.remote
+	f.tr.Live = f.remote
 	f.deps.SizeSignal = 1000
 	return f
 }
@@ -70,7 +70,7 @@ func (f *revFixture) finish() store.Job {
 func (f *revFixture) reply() (github.Comment, int) {
 	f.t.Helper()
 	var found []github.Comment
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, "<!-- afk:revision-reply ") {
 			found = append(found, c)
 		}
@@ -84,7 +84,7 @@ func (f *revFixture) reply() (github.Comment, int) {
 // reviews is the agent's reviews of head on the pull request.
 func (f *revFixture) reviews(head string) []github.Comment {
 	var out []github.Comment
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, review.Marker(head)) {
 			out = append(out, c)
 		}
@@ -123,16 +123,16 @@ func TestARevisionIsRepliedToThenReviewedThenHandedOff(t *testing.T) {
 	if !strings.Contains(reply.Body, owed.RevisionReadMarker(f.head)) {
 		t.Errorf("the reply does not say the send-back's head %s:\n%s", f.head, reply.Body)
 	}
-	if want := []string{base + "..." + at, f.head + "..." + at}; !slices.Equal(f.tr.compares, want) {
-		t.Errorf("the review read the diffs %v, want %v", f.tr.compares, want)
+	if want := []string{base + "..." + at, f.head + "..." + at}; !slices.Equal(f.tr.Compares, want) {
+		t.Errorf("the review read the diffs %v, want %v", f.tr.Compares, want)
 	}
 	if want := fmt.Sprintf("Advisory review of <code>%s..%s</code>", git.Short(f.head), git.Short(at)); !strings.Contains(reviews[0].Body, want) {
 		t.Errorf("the review's summary does not name the range (%s):\n%s", want, reviews[0].Body)
 	}
-	if !f.tr.claimed(reply.ID) || f.tr.reacts[reply.ID] != 1 {
-		t.Errorf("the reply has %d reactions landed, and claimed is %v: want one claim", f.tr.reacts[reply.ID], f.tr.claimed(reply.ID))
+	if !claimed(f.tr, reply.ID) || f.tr.Reacts[reply.ID] != 1 {
+		t.Errorf("the reply has %d reactions landed, and claimed is %v: want one claim", f.tr.Reacts[reply.ID], claimed(f.tr, reply.ID))
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label is not back on the pull request")
 	}
 	if f.handedBack() || f.handBack() != "" {
@@ -141,13 +141,13 @@ func TestARevisionIsRepliedToThenReviewedThenHandedOff(t *testing.T) {
 
 	// In order: the reply, the review's claim on it, the review, the label.
 	want := []string{
-		fmt.Sprintf("comment %d", reply.ID),
-		fmt.Sprintf("react %d", reply.ID),
-		fmt.Sprintf("comment %d", reviews[0].ID),
-		"label " + handOff,
+		fmt.Sprintf("Comment %d", reply.ID),
+		fmt.Sprintf("React %d", reply.ID),
+		fmt.Sprintf("Comment %d", reviews[0].ID),
+		"Label " + handOff,
 	}
 	var got []string
-	for _, e := range f.tr.events {
+	for _, e := range f.tr.Events {
 		if slices.Contains(want, e) {
 			got = append(got, e)
 		}
@@ -255,7 +255,7 @@ func TestTheReplySaysWhenThePullRequestIsOverTheSizeSignal(t *testing.T) {
 	if !strings.Contains(reply.Body, "over the size signal of 1.") {
 		t.Errorf("the reply does not say the pull request is over the size signal:\n%s", reply.Body)
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("a pull request over the size signal was not handed off")
 	}
 }
@@ -265,7 +265,7 @@ func TestTheReplySaysWhenThePullRequestIsOverTheSizeSignal(t *testing.T) {
 // appears, and the review job's own hand-back is the pull request's.
 func TestAReviewThatFailsAfterTheReplyHandsBack(t *testing.T) {
 	f := setupReplying(t)
-	f.tr.drop = "<!-- afk:review head="
+	drop(f.tr, "<!-- afk:review head=")
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"))
 
 	if job := f.finish(); job.State != revise.Start || !job.NextRunAt.IsZero() {
@@ -278,7 +278,7 @@ func TestAReviewThatFailsAfterTheReplyHandsBack(t *testing.T) {
 		t.Error("the hand-back label is not on the pull request")
 	}
 	handedBack := false
-	for _, c := range f.tr.comments[12] {
+	for _, c := range f.tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, review.HandBackMarker(f.remoteHead())) {
 			handedBack = true
 		}
@@ -286,7 +286,7 @@ func TestAReviewThatFailsAfterTheReplyHandsBack(t *testing.T) {
 	if !handedBack {
 		t.Error("the review's hand-back is not on the pull request")
 	}
-	if f.tr.labelled() {
+	if labelled(f.tr) {
 		t.Error("the pull request was handed off without a review")
 	}
 }
@@ -315,8 +315,8 @@ func TestAPushAfterTheReplyHandsBackLinkingIt(t *testing.T) {
 	if strings.Contains(hb, "Rename Foo") {
 		t.Errorf("the hand-back says the reply's points again:\n%s", hb)
 	}
-	if !f.handedBack() || f.tr.labelled() {
-		t.Errorf("labels are %v, want handed back and not handed off", f.tr.pr.Labels)
+	if !f.handedBack() || labelled(f.tr) {
+		t.Errorf("labels are %v, want handed back and not handed off", f.tr.PullRequests[12].Labels)
 	}
 }
 
@@ -352,8 +352,8 @@ func TestALostReplyRecordAfterTheReplyHandsBackLinkingIt(t *testing.T) {
 	if !strings.Contains(hb, "Someone else pushed") || !strings.Contains(hb, fmt.Sprintf("#issuecomment-%d", reply.ID)) {
 		t.Errorf("the hand-back does not say someone pushed, and link the reply:\n%s", hb)
 	}
-	if !f.handedBack() || f.tr.labelled() {
-		t.Errorf("labels are %v, want handed back and not handed off", f.tr.pr.Labels)
+	if !f.handedBack() || labelled(f.tr) {
+		t.Errorf("labels are %v, want handed back and not handed off", f.tr.PullRequests[12].Labels)
 	}
 }
 
@@ -371,8 +371,8 @@ func TestALostReplyRecordWithNoPushHandsOff(t *testing.T) {
 	if _, n := f.reply(); n != 1 {
 		t.Fatalf("%d replies, want one", n)
 	}
-	if !f.tr.labelled() || f.handedBack() {
-		t.Errorf("labels are %v, want handed off", f.tr.pr.Labels)
+	if !labelled(f.tr) || f.handedBack() {
+		t.Errorf("labels are %v, want handed off", f.tr.PullRequests[12].Labels)
 	}
 }
 
@@ -380,12 +380,12 @@ func TestALostReplyRecordWithNoPushHandsOff(t *testing.T) {
 // the watch posts it, once.
 func TestALostReplyRecordBeforeTheReplyStillReplies(t *testing.T) {
 	f := setupReplying(t)
-	f.tr.drop = "<!-- afk:revision-reply "
+	drop(f.tr, "<!-- afk:revision-reply ")
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done.\n"))
 
 	f.step(revise.Replying)
 	f.loseOwed()
-	f.tr.drop = ""
+	drop(f.tr, "")
 	if job := f.finish(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the revision is in %q, want at rest in %s\n%s", job.State, revise.Start, f.handBack())
 	}
@@ -396,8 +396,8 @@ func TestALostReplyRecordBeforeTheReplyStillReplies(t *testing.T) {
 	if at := f.remoteHead(); !strings.Contains(reply.Body, owed.RevisionReplyMarker(12, at)) {
 		t.Errorf("the reply is not for the head %s:\n%s", at, reply.Body)
 	}
-	if !f.tr.labelled() || f.handedBack() {
-		t.Errorf("labels are %v, want handed off", f.tr.pr.Labels)
+	if !labelled(f.tr) || f.handedBack() {
+		t.Errorf("labels are %v, want handed off", f.tr.PullRequests[12].Labels)
 	}
 }
 

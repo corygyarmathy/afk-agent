@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
@@ -41,14 +42,14 @@ func sendAt(id int64, body string, minutes int) github.Comment {
 	return c
 }
 
-func (tr *tracker) reviewClaimed(id int64) bool {
-	return intake.Claimed(tr.reviewEyes[fmt.Sprintf("PRR_%d", id)], agent)
+func reviewClaimed(tr *githubtest.Tracker, id int64) bool {
+	return intake.Claimed(tr.ReviewReactionsOn[fmt.Sprintf("PRR_%d", id)], agent)
 }
 
 // reviewAnswers is the agent's replies to review id.
-func (tr *tracker) reviewAnswers(id int64) []string {
+func reviewAnswers(tr *githubtest.Tracker, id int64) []string {
 	var out []string
-	for _, c := range tr.comments[12] {
+	for _, c := range tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, owed.PullRequestReviewReplyMarker(id)) {
 			out = append(out, c.Body)
 		}
@@ -64,12 +65,12 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 	for _, state := range []string{"CHANGES_REQUESTED", "COMMENTED", "APPROVED"} {
 		t.Run(state, func(t *testing.T) {
 			f := setup(t)
-			f.tr.reviews = []github.PullRequestReview{
+			f.tr.ReviewsOn[12] = []github.PullRequestReview{
 				sendReview(4, "COMMENTED", "Looks fine so far.", 1),
 				sendReview(5, state, "/revise\nKeep the test.", 2),
 			}
-			f.tr.lines[4] = []github.LineComment{line(41, "a.go", 1, "Not a point: another review's.")}
-			f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 0, "Split this file.")}
+			f.tr.LineCommentsOn[4] = []github.LineComment{line(41, "a.go", 1, "Not a point: another review's.")}
+			f.tr.LineCommentsOn[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 0, "Split this file.")}
 
 			made := f.pass()
 			if len(made) != 1 || made[0].ID != "revise-pr-12" {
@@ -79,10 +80,10 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 			if job.State != revise.Revising {
 				t.Fatalf("the job is in %q, want revising", job.State)
 			}
-			if !f.tr.reviewClaimed(5) || f.tr.writes["react-review"] != 1 || f.tr.writes["react"] != 0 {
-				t.Errorf("claims: review 5 %v, %d on reviews and %d on comments; want the one on review 5", f.tr.reviewClaimed(5), f.tr.writes["react-review"], f.tr.writes["react"])
+			if !reviewClaimed(f.tr, 5) || f.tr.Writes["ReactToPullRequestReview"] != 1 || f.tr.Writes["React"] != 0 {
+				t.Errorf("claims: review 5 %v, %d on reviews and %d on comments; want the one on review 5", reviewClaimed(f.tr, 5), f.tr.Writes["ReactToPullRequestReview"], f.tr.Writes["React"])
 			}
-			if f.tr.labelled() {
+			if labelled(f.tr) {
 				t.Error("the hand-off label is still on the pull request")
 			}
 			sb, err := f.deps.Load(job.ID)
@@ -103,8 +104,8 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 			if made := f.pass(); len(made) != 0 {
 				t.Errorf("a second pass made %v, want nothing", made)
 			}
-			if f.tr.writes["react-review"] != 1 {
-				t.Errorf("%d claims on reviews, want 1", f.tr.writes["react-review"])
+			if f.tr.Writes["ReactToPullRequestReview"] != 1 {
+				t.Errorf("%d claims on reviews, want 1", f.tr.Writes["ReactToPullRequestReview"])
 			}
 		})
 	}
@@ -114,21 +115,21 @@ func TestASubmittedReviewIsASendBackWithItsLineComments(t *testing.T) {
 // reply, linking it, and nothing else.
 func TestAReviewWithNoPointsIsRefused(t *testing.T) {
 	f := setup(t)
-	f.tr.reviews = []github.PullRequestReview{sendReview(5, "APPROVED", "/revise", 1)}
+	f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "APPROVED", "/revise", 1)}
 	f.pass()
 
 	job := f.drive()
 	if job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q, want at rest in start", job.State)
 	}
-	if !f.tr.reviewClaimed(5) {
+	if !reviewClaimed(f.tr, 5) {
 		t.Error("the review is not claimed")
 	}
-	answers := f.tr.reviewAnswers(5)
+	answers := reviewAnswers(f.tr, 5)
 	if len(answers) != 1 || !strings.Contains(answers[0], "nothing here to revise") || !strings.Contains(answers[0], sendReview(5, "", "", 0).URL) {
 		t.Errorf("answers = %q, want one no-points reply linking the review", answers)
 	}
-	if !f.tr.labelled() {
+	if !labelled(f.tr) {
 		t.Error("the hand-off label came off for a refusal")
 	}
 }
@@ -136,8 +137,8 @@ func TestAReviewWithNoPointsIsRefused(t *testing.T) {
 // A review with only line comments has them as its points.
 func TestAReviewsLineCommentsAloneArePoints(t *testing.T) {
 	f := setup(t)
-	f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise", 1)}
-	f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this.")}
+	f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise", 1)}
+	f.tr.LineCommentsOn[5] = []github.LineComment{line(51, "a.go", 3, "Rename this.")}
 	f.pass()
 
 	job := f.drive()
@@ -154,9 +155,9 @@ func TestAReviewsLineCommentsAloneArePoints(t *testing.T) {
 // were written.
 func TestCommentsAndReviewsAreOneSendBackInTheOrderWritten(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, sendAt(1, "/revise First.", 1))
-	f.tr.say(12, sendAt(3, "/revise Third.", 3))
-	f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Second.", 2)}
+	f.tr.Say(12, sendAt(1, "/revise First.", 1))
+	f.tr.Say(12, sendAt(3, "/revise Third.", 3))
+	f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Second.", 2)}
 	f.pass()
 
 	job := f.drive()
@@ -168,7 +169,7 @@ func TestCommentsAndReviewsAreOneSendBackInTheOrderWritten(t *testing.T) {
 	if fmt.Sprint(sb.Points) != fmt.Sprint(want) {
 		t.Errorf("points = %+v, want %+v", sb.Points, want)
 	}
-	if !f.tr.claimed(1) || !f.tr.claimed(3) || !f.tr.reviewClaimed(5) {
+	if !claimed(f.tr, 1) || !claimed(f.tr, 3) || !reviewClaimed(f.tr, 5) {
 		t.Error("not every command is claimed")
 	}
 }
@@ -179,44 +180,44 @@ func TestCommentsAndReviewsAreOneSendBackInTheOrderWritten(t *testing.T) {
 func TestAReviewWrittenWhileARevisionWasInFlightIsRefused(t *testing.T) {
 	t.Run("a review during a comment's revision", func(t *testing.T) {
 		f := setup(t)
-		f.tr.say(12, sendAt(1, "/revise Earlier.", 1))
-		f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise During.", 2)}
+		f.tr.Say(12, sendAt(1, "/revise Earlier.", 1))
+		f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+		f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise During.", 2)}
 		reply := answer(2, 1)
 		reply.CreatedAt = at(3)
-		f.tr.say(12, reply)
+		f.tr.Say(12, reply)
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Start {
 			t.Fatalf("the job is in %q, want at rest", job.State)
 		}
-		if answers := f.tr.reviewAnswers(5); len(answers) != 1 || !strings.Contains(answers[0], "in flight") {
+		if answers := reviewAnswers(f.tr, 5); len(answers) != 1 || !strings.Contains(answers[0], "in flight") {
 			t.Errorf("answers = %q, want one in-flight refusal", answers)
 		}
 	})
 	t.Run("a comment during a review's revision", func(t *testing.T) {
 		f := setup(t)
-		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Earlier.", 1)}
-		f.tr.reviewEyes["PRR_5"] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-		f.tr.say(12, sendAt(1, "/revise During.", 2))
-		f.tr.say(12, github.Comment{ID: 2, Login: agent, Body: owed.PullRequestReviewRevisionMarker(5) + "\nDone.", CreatedAt: at(3)})
+		f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Earlier.", 1)}
+		f.tr.ReviewReactionsOn["PRR_5"] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+		f.tr.Say(12, sendAt(1, "/revise During.", 2))
+		f.tr.Say(12, github.Comment{ID: 2, Login: agent, Body: owed.PullRequestReviewRevisionMarker(5) + "\nDone.", CreatedAt: at(3)})
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Start {
 			t.Fatalf("the job is in %q, want at rest", job.State)
 		}
-		if answers := f.tr.answers(1); len(answers) != 1 || !strings.Contains(answers[0], "in flight") {
+		if answers := answersTo(f.tr, 1); len(answers) != 1 || !strings.Contains(answers[0], "in flight") {
 			t.Errorf("answers = %q, want one in-flight refusal", answers)
 		}
 	})
 	t.Run("a review after the revision's answer", func(t *testing.T) {
 		f := setup(t)
-		f.tr.say(12, sendAt(1, "/revise Earlier.", 1))
-		f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+		f.tr.Say(12, sendAt(1, "/revise Earlier.", 1))
+		f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 		reply := answer(2, 1)
 		reply.CreatedAt = at(2)
-		f.tr.say(12, reply)
-		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise After.", 3)}
+		f.tr.Say(12, reply)
+		f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise After.", 3)}
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Revising {
@@ -233,10 +234,10 @@ var linked = regexp.MustCompile(`https://github\.com/\S+#discussion_r\d+`)
 // and identifies each line-comment point by its link.
 func TestTheReplyToAReviewLinksEachLineCommentPoint(t *testing.T) {
 	f := revisionFixture(t)
-	f.tr.live = f.remote
+	f.tr.Live = f.remote
 	f.deps.SizeSignal = 1000
-	f.tr.reviews = []github.PullRequestReview{sendReview(5, "CHANGES_REQUESTED", "/revise\nKeep the test.", 1)}
-	f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 7, "Split this.")}
+	f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "CHANGES_REQUESTED", "/revise\nKeep the test.", 1)}
+	f.tr.LineCommentsOn[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), line(52, "b.go", 7, "Split this.")}
 	var spec string
 	f.model.then(func(dir string) error {
 		b, err := os.ReadFile(filepath.Join(dir, ".git", "afk-send-back.md"))
@@ -283,41 +284,41 @@ func TestTheReplyToAReviewLinksEachLineCommentPoint(t *testing.T) {
 func TestAReviewWrittenOnAnotherHeadIsRefused(t *testing.T) {
 	t.Run("a review begun before a revision and submitted after its answer", func(t *testing.T) {
 		f := setup(t)
-		f.tr.say(12, sendAt(1, "/revise Earlier.", 1))
-		f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+		f.tr.Say(12, sendAt(1, "/revise Earlier.", 1))
+		f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 		reply := answer(2, 1)
 		reply.CreatedAt = at(2)
-		f.tr.say(12, reply)
+		f.tr.Say(12, reply)
 		r := sendReview(5, "COMMENTED", "/revise", 3)
 		r.CommitID = "0ld0000"
-		f.tr.reviews = []github.PullRequestReview{r}
-		f.tr.lines[5] = []github.LineComment{{ID: 51, Path: "a.go", Line: 3, Body: "Rename this.", CommitID: "0ld0000"}}
+		f.tr.ReviewsOn[12] = []github.PullRequestReview{r}
+		f.tr.LineCommentsOn[5] = []github.LineComment{{ID: 51, Path: "a.go", Line: 3, Body: "Rename this.", CommitID: "0ld0000"}}
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 			t.Fatalf("the job is in %q, want at rest in start", job.State)
 		}
-		if !f.tr.reviewClaimed(5) {
+		if !reviewClaimed(f.tr, 5) {
 			t.Error("the review is not claimed")
 		}
-		answers := f.tr.reviewAnswers(5)
+		answers := reviewAnswers(f.tr, 5)
 		if len(answers) != 1 || !strings.Contains(answers[0], "written against `0ld0000`") || !strings.Contains(answers[0], r.URL) {
 			t.Errorf("answers = %q, want one refusal naming the commit and linking the review", answers)
 		}
-		if !f.tr.labelled() {
+		if !labelled(f.tr) {
 			t.Error("the hand-off label came off for a refusal")
 		}
 	})
 	t.Run("a line comment written on another commit", func(t *testing.T) {
 		f := setup(t)
-		f.tr.reviews = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Keep the test.", 1)}
-		f.tr.lines[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), {ID: 52, Path: "b.go", Line: 9, Body: "Split this.", CommitID: "0ld0000"}}
+		f.tr.ReviewsOn[12] = []github.PullRequestReview{sendReview(5, "COMMENTED", "/revise Keep the test.", 1)}
+		f.tr.LineCommentsOn[5] = []github.LineComment{line(51, "a.go", 3, "Rename this."), {ID: 52, Path: "b.go", Line: 9, Body: "Split this.", CommitID: "0ld0000"}}
 		f.pass()
 
 		if job := f.drive(); job.State != revise.Start {
 			t.Fatalf("the job is in %q, want at rest", job.State)
 		}
-		if answers := f.tr.reviewAnswers(5); len(answers) != 1 || !strings.Contains(answers[0], "written against `0ld0000`") {
+		if answers := reviewAnswers(f.tr, 5); len(answers) != 1 || !strings.Contains(answers[0], "written against `0ld0000`") {
 			t.Errorf("answers = %q, want one refusal naming the commit", answers)
 		}
 	})

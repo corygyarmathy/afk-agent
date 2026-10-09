@@ -21,7 +21,7 @@ func TestAnOutgrownRevisionSessionIsNotContinued(t *testing.T) {
 		reviseOn("fix.txt", "## Points\n\n- \"Rename Foo\" done, and fixed."),
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	job := f.drive()
 	if job.State != revise.Replying {
@@ -66,7 +66,7 @@ func TestARevisionSessionAtTheThresholdIsContinued(t *testing.T) {
 		reviseOn("fix.txt", "## Points\n\n- \"Rename Foo\" done, and fixed."),
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Replying {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
@@ -92,7 +92,7 @@ func TestARevisionSessionThatGrewInAFailedRunIsNotContinued(t *testing.T) {
 		reviseOn("fix.txt", "## Points\n\n- \"Rename Foo\" done, and fixed."),
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Replying {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
