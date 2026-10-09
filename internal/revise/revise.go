@@ -121,15 +121,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/model"
-	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
-	"github.com/corygyarmathy/afk-agent/internal/sensitive"
-	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -175,110 +171,22 @@ type Tracker interface {
 	EditComment(ctx context.Context, commentID int64, body string) error
 }
 
-// Model runs one model. opencode.Command is one.
-type Model interface {
-	Run(ctx context.Context, req opencode.Request) (opencode.Reply, error)
-}
-
 // Deps is everything the revise kind's transitions reach. Built once, by the
 // command surface; the transitions themselves hold nothing.
+//
+// Of the parameters it shares with implement, what is this kind's to say: a
+// pull request whose branch is in any repository but Repo - a fork's, or one
+// deleted - is one the agent cannot push to. HandOffLabel is taken off by a
+// claim that moves on to the work, and put back by the revision's hand-off.
+// Over SizeSignal is a note in the reply, never a cut or a hand-back.
 type Deps struct {
+	delivery.Params
+
 	Tracker Tracker
-	Model   Model
-
-	// Store is read, never written: which round of an effect is next. This
-	// job's own state is the runner's to write.
-	Store store.Store
-
-	// Login is the agent's own account: whose reaction is a claim, and whose
-	// comment is an answer.
-	Login string
-
-	// Repo is the repository, as owner/name. A pull request whose branch is
-	// in any other - a fork's, or one deleted - is one the agent cannot push
-	// to.
-	Repo string
-
-	// Remote is the repository a revision is cloned from and pushed to, and
-	// the App's installation token every git process that reaches it carries.
-	Remote git.Remote
-
-	// Resolve is the ordered candidate list a revision runs on, as of now
-	// (ADR 0001 §9): the implement tier's, since a revision is implementing
-	// work on a branch. A *model.LimitedError defers the job to the reset.
-	Resolve func(ctx context.Context) (model.Candidates, error)
-
-	// Price is the catalogue's price for a model, for the spend footer of a
-	// run opencode reported no cost for (#22). Nil prices none of them.
-	Price spend.Prices
-
-	// Bound is how many candidates a run tries before the tier counts as
-	// exhausted, and TierWait how long an exhausted tier defers. Parameters.
-	Bound    int
-	TierWait time.Duration
-
-	// FreshAt is the last-turn input tokens over which a session is not
-	// continued, and a fresh one takes over; zero continues every session
-	// (work.Tier). A parameter.
-	FreshAt int
-
-	// Rounds is how many times something owed is made before one that never
-	// appears is an error. A parameter.
-	Rounds int
-
-	// Gate is the local gate: a shell command run in the workspace, which
-	// passes by exiting zero, and Attempts how many times it may fail before
-	// the revision is handed back. Parameters.
-	Gate     string
-	Attempts int
-
-	// CIWait is how long a head whose checks are not finished waits before
-	// it is looked at again, CICeiling how long after its push they may
-	// take before the revision is handed back, and CIFixes how many times a
-	// red run is sent back to the session. Parameters.
-	CIWait    time.Duration
-	CICeiling time.Duration
-	CIFixes   int
-
-	// Denylist is the paths the agent may never push, as globs (see work).
-	// A parameter.
-	Denylist []string
 
 	// Replays is how many times a revision is replayed onto someone else's
 	// push before one more is handed back. A parameter.
 	Replays int
-
-	// Sensitive is the paths the operator named as deserving closer reading,
-	// which the description's sensitive line names when the pull request
-	// touches one. Empty is the feature off. A parameter.
-	Sensitive []sensitive.Path
-
-	// HandOffLabel is the label the hand-off applies, which a claim that
-	// moves on to the work takes off and the revision's hand-off puts back.
-	// A parameter.
-	HandOffLabel string
-
-	// SizeSignal is the changed non-test lines a pull request may have
-	// before the reply says it is over. A note, never a cut or a
-	// hand-back. A parameter.
-	SizeSignal int
-
-	// AskReview makes the pull request's review job due now, under a lease
-	// of its own (handoff.Asker): how the revision asks for the advisory
-	// review of its green head.
-	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
-
-	// HandBackLabel is the label a hand-back applies. A parameter.
-	HandBackLabel string
-
-	// StateDir is where what is owed, the send-back and the revision's
-	// workspace wait - beside the store, never in it (ADR 0001 §5).
-	StateDir string
-
-	// Log receives one line each time a candidate's run fails transiently,
-	// which nothing else keeps once the next candidate runs, and one each
-	// time CI fails a head the local gate passed. Nil is silent.
-	Log func(msg string)
 }
 
 // logf is one line to Log, if there is one.

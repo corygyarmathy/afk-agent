@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/model"
@@ -277,26 +278,28 @@ func TestHelperRevisions(t *testing.T) {
 		}
 	}
 	d := &revise.Deps{
-		Tracker:       tr,
-		Model:         &reviser{turns: []func(string) error{session, session}},
-		Store:         st,
-		Login:         agent,
-		Repo:          repo,
-		Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
-		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst}, nil },
-		Bound:         1,
-		TierWait:      time.Hour,
-		Rounds:        3,
-		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
-		Attempts:      3,
-		Denylist:      []string{"flake.lock"},
-		CIWait:        10 * time.Minute,
-		CICeiling:     2 * time.Hour,
-		CIFixes:       2,
-		Replays:       1,
-		HandOffLabel:  handOff,
-		HandBackLabel: "needs-decision",
-		StateDir:      state,
+		Tracker: tr,
+		Replays: 1,
+		Params: delivery.Params{
+			Model:         &reviser{turns: []func(string) error{session, session}},
+			Store:         st,
+			Login:         agent,
+			Repo:          repo,
+			Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
+			Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst}, nil },
+			Bound:         1,
+			TierWait:      time.Hour,
+			Rounds:        3,
+			Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+			Attempts:      3,
+			Denylist:      []string{"flake.lock"},
+			CIWait:        10 * time.Minute,
+			CICeiling:     2 * time.Hour,
+			CIFixes:       2,
+			HandOffLabel:  handOff,
+			HandBackLabel: "needs-decision",
+			StateDir:      state,
+		},
 	}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
 

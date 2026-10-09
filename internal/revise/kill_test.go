@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
@@ -113,7 +114,7 @@ func TestHelperClaimsASendBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &revise.Deps{Tracker: ft, Store: s, Login: agent, Repo: repo, Rounds: 2, HandOffLabel: handOff, StateDir: dir}
+	d := &revise.Deps{Tracker: ft, Params: delivery.Params{Store: s, Login: agent, Repo: repo, Rounds: 2, HandOffLabel: handOff, StateDir: dir}}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
 
 	// The process that finishes runs an hour ahead, past the killed process's

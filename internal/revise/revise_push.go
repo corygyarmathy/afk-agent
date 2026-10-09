@@ -91,7 +91,7 @@ func (d *Deps) push(ctx context.Context, in transition.In) (transition.Result, e
 		p.Measured, p.Lines, p.Tests, p.Sensitive = false, 0, 0, nil
 	}
 
-	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head, p.Correction.PushFrom(head))
+	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress.Progress, head, p.Correction.PushFrom(head))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -124,15 +124,15 @@ func (d *Deps) pushed(ctx context.Context, in transition.In) (transition.Result,
 		}
 		return d.resensitize(ctx, in, p)
 	}
-	switch landing, at, err := d.work().Land(ctx, &p.Progress, in.Now); {
+	switch landing, at, err := d.work().Land(ctx, &p.Progress.Progress, in.Now); {
 	case err != nil:
 		return transition.Result{}, err
 	case landing == work.Moved && at == "":
-		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress))
+		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress.Progress))
 	case landing == work.Moved && p.Correction != nil:
 		// Someone else pushed after the review: the correction is of the
 		// head the review read, and is not replayed onto anything else.
-		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress))
+		return d.handBack(ctx, in, p, p.overwrote(at), d.work().PushNote(in.Job.ID, p.Progress.Progress))
 	case landing == work.Moved:
 		// Someone else pushed: the revision goes on top of their push.
 		return transition.Result{State: Replaying, RunAt: in.Now}, nil

@@ -41,7 +41,7 @@ func (d *Deps) awaitReview(ctx context.Context, in transition.In) (transition.Re
 	if p.Correction != nil {
 		return d.corrected(ctx, in, p, pr.Number)
 	}
-	r, err := d.handOffDeps().AwaitReview(ctx, in, pr.Number, p.Progress)
+	r, err := d.handOffDeps().AwaitReview(ctx, in, pr.Number, p.Progress.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}

@@ -14,6 +14,7 @@ import (
 	"text/template"
 
 	"github.com/corygyarmathy/afk-agent/internal/correction"
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
@@ -58,7 +59,7 @@ var (
 // The checkout, the push and the gate are work.Progress, which both kinds
 // share; what is here is what only implement needs.
 type progress struct {
-	work.Progress
+	delivery.Progress
 
 	// Description is the session's part of the pull request's
 	// description, as its last run left the file.
@@ -112,11 +113,6 @@ type progress struct {
 	// says. Either way the dependency is not made again.
 	Blocked   bool `json:"blocked,omitempty"`
 	Unblocked bool `json:"unblocked,omitempty"`
-
-	// Correction is the correction of the advisory review's findings, from
-	// the review that asks for one until the hand-off (#193). Nil for work
-	// whose review asked for none, or that has not been reviewed.
-	Correction *correction.Correction `json:"correction,omitempty"`
 }
 
 // run is `implement-run`: one candidate model does the work in the workspace,
@@ -299,7 +295,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 		}
 	}
 
-	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress, d.Gate, d.Attempts)
+	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress.Progress, d.Gate, d.Attempts)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -461,7 +457,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bo
 	if _, err := rand.Read(nonce); err != nil {
 		return progress{}, false, err
 	}
-	p = progress{Progress: work.Progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base, Into: into}}
+	p = progress{Progress: delivery.Progress{Progress: work.Progress{Nonce: hex.EncodeToString(nonce), Branch: branch, Base: base, Into: into}}}
 	return p, false, d.save(jobID, p)
 }
 

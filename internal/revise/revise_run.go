@@ -15,6 +15,7 @@ import (
 	"text/template"
 
 	"github.com/corygyarmathy/afk-agent/internal/correction"
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
@@ -53,7 +54,7 @@ const replyFile = "afk-reply.md"
 // progress is how far the revision has got. It lives beside the workspace in
 // the state directory and not in the store, so the two are lost together.
 type progress struct {
-	work.Progress
+	delivery.Progress
 
 	// Read is the head the send-back was written against: what the operator
 	// read, which the revision adds to and never rewrites. Progress.Pushed
@@ -91,12 +92,6 @@ type progress struct {
 	// Sensitive is the sensitive paths the pull request touches at that
 	// head, which its description's sensitive line names.
 	Sensitive []sensitive.Touched `json:"sensitive,omitempty"`
-
-	// Correction is the correction of the findings of the advisory review of
-	// the revision's head, from the review that asks for one until the
-	// hand-off (#193). Nil for a revision whose review asked for none, or
-	// that has not been reviewed.
-	Correction *correction.Correction `json:"correction,omitempty"`
 }
 
 // run is `revise-run`: one candidate model does the send-back's points in the
@@ -247,7 +242,7 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 			return d.stop(ctx, in, p, p.rewrote(), "")
 		}
 	}
-	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress, d.Gate, d.Attempts)
+	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress.Progress, d.Gate, d.Attempts)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -398,7 +393,7 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		// own: handBackLost keys on the head as "lost-<head>", and a later
 		// revision losing its record at this same head would find this
 		// hand-back's marker and take its own for already said.
-		lost := progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}, Read: sb.Head}
+		lost := progress{Progress: delivery.Progress{Progress: work.Progress{Nonce: "lost-pushed-" + sb.Pushed}}, Read: sb.Head}
 		lost.Points, lost.PullRequestReviews = answered(sb.Points)
 		return lost,
 			fmt.Sprintf("The agent lost its record of the revision after it pushed `%s` - part of its state directory was wiped - so it cannot fix what CI found.", git.Short(sb.Pushed)), nil
@@ -423,12 +418,12 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 		return progress{}, "", err
 	}
 	p = progress{
-		Progress: work.Progress{
+		Progress: delivery.Progress{Progress: work.Progress{
 			Nonce: hex.EncodeToString(nonce), Branch: branch,
 			// The revision pushes on top of the head the send-back was
 			// written against, and is leased on it.
 			Pushed: sb.Head,
-		},
+		}},
 		Read: sb.Head,
 	}
 	p.Points, p.PullRequestReviews = answered(sb.Points)
