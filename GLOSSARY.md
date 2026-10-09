@@ -108,6 +108,10 @@ _Avoid_: Change request, triage, feedback
 What one `/revise` produces for one send-back: commits added on top of the head the send-back was written against, never rewriting it, and one reply saying which points were done. Does only the send-back's points; anything else it noticed is a suggested follow-up in the reply, owed no answer.
 _Avoid_: Round, iteration, fix
 
+**Delivery**:
+The part of a job that brings a model session's commits to the operator: the session writes them on a pull request's branch, and they are gated, pushed, and carried through CI and the advisory review, with its correction, to a hand-off, or to a hand-back when they cannot be. A delivery that ends in a hand-back is a failed one.
+_Avoid_: Branch work, pipeline, shipping
+
 **Sensitive path**:
 A path the operator has named as deserving closer reading. A pull request that touches one says which, and the operator's review reads those files line by line. One-sided: nothing is ever marked as safe to skim. Named in the operator's configuration, never assessed by a model.
 _Avoid_: Risk level, high-risk, critical
