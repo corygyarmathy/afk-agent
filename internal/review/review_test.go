@@ -552,6 +552,47 @@ func TestPartOfReadsTheImplementLinkLine(t *testing.T) {
 	}
 }
 
+// Work that refers to its issue rather than closing it, because a criterion
+// needs a deploy or a hand run, is still reviewed against that issue, headed
+// as not closed by it (#199).
+func TestARefsPullRequestIsReviewedAgainstItsIssue(t *testing.T) {
+	tr := newTracker(command(1))
+	tr.desc = "<!-- afk:implement issue=7 -->\nRefs #7\n"
+	tr.issues = map[int]github.Issue{
+		7: {Number: 7, Title: "Jobs are reserved", Body: "A job is reserved before it runs."},
+	}
+	f := setup(t, tr, &reviewer{})
+
+	if errs := f.drive(); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	spec := strings.ReplaceAll(f.model.specs[0], tr.desc, "")
+	for _, want := range []string{"# Issue #7: Jobs are reserved (not closed by this pull request", "A job is reserved before it runs."} {
+		if !strings.Contains(spec, want) {
+			t.Errorf("the spec does not say %q:\n%s", want, spec)
+		}
+	}
+	if strings.Count(spec, "A job is reserved before it runs.") != 1 {
+		t.Errorf("the spec carries #7 more than once:\n%s", spec)
+	}
+}
+
+func TestRefsReadsTheImplementLinkLine(t *testing.T) {
+	for desc, want := range map[string]int{
+		"<!-- afk:implement issue=7 -->\nRefs #7\n\nmore": 7,
+		"<!-- afk:implement issue=7 -->\r\nRefs #7\r\n":   7,
+		"<!-- afk:implement issue=7 -->\nRefs #7":         7,
+		"<!-- afk:implement issue=7 -->\nCloses #7\n":     0,
+		"Refs #7\n": 0,
+		"text\n<!-- afk:implement issue=7 -->\nRefs #7\n":  0,
+		"<!-- afk:implement issue=7 -->\nRefs #7 and #8\n": 0,
+	} {
+		if got, ok := review.Refs(desc); got != want || ok != (want != 0) {
+			t.Errorf("Refs(%q) = %d, %v; want %d", desc, got, ok, want)
+		}
+	}
+}
+
 // The advisory review is unaware of the sensitive line and of what the work
 // cost: the spec it reads is the description without either, and otherwise
 // as it was.

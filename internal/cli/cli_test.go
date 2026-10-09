@@ -1060,6 +1060,14 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 	if d.Tracker != tr.client || d.Login != tr.login {
 		t.Errorf("deps = %+v, want the command's client and login", d)
 	}
+	// A premise in the agent's own repository is read with its own client,
+	// and one elsewhere with a client for that repository and no token.
+	if own, ok := d.Premises("O/N").(*github.Client); !ok || own != tr.client {
+		t.Errorf("a premise in o/n is read through %+v, want the command's client", d.Premises("O/N"))
+	}
+	if other, ok := d.Premises("up/stream").(*github.Client); !ok || other.Repo != "up/stream" || other.Credential != nil {
+		t.Errorf("a premise in up/stream is read through %+v, want a client of its own, with no token", d.Premises("up/stream"))
+	}
 	if d.BranchPrefix != "afk/" || d.Gate != "go test ./..." || d.Attempts != 2 || d.HandBackLabel != "needs-decision" ||
 		fmt.Sprint(d.Denylist) != "[.github/** flake.lock]" || d.Remote.Token == nil ||
 		d.HandOffLabel != "needs-review" || d.AskReview == nil ||

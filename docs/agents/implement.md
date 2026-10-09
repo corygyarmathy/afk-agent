@@ -16,8 +16,9 @@ both too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 ## What it does
 
 `/implement` on an open issue, from an account with write access that is not
-the agent's, produces one branch, one pull request that closes the issue, and
-one advisory review of the pull request's head. A review with a Correctness or
+the agent's, produces one branch, one pull request that closes the issue (or
+[refers to it](#a-criterion-the-work-cannot-meet)), and one advisory review of
+the pull request's head. A review with a Correctness or
 Standards finding is [corrected](#the-correction) first. Then the pull request
 gets the hand-off label. Any text after the word, on the same line or below it, reaches
 the model as instructions. The agent never merges.
@@ -31,8 +32,8 @@ label, when `afk` is given `--eligibility-label`
 | --- | --- | --- |
 | `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
-| `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](#a-session-too-long-to-continue). |
-| `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back. Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. In a [correction](#the-correction), each of those fails the correction instead, and so does one that rewrote the head the review read. |
+| `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, fetches the issue's [premises](#premises-and-gaps) into it, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](#a-session-too-long-to-continue). |
+| `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back, with the session's questions if it [stopped on gaps](#a-stop-on-a-gap). Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. In a [correction](#the-correction), each of those fails the correction instead, and so does one that rewrote the head the review read. |
 | `implement-push` | `pushing` | Checks every path any commit touches against the denylist, counts the work's size and matches the diff against the [sensitive paths](#sensitive-paths), then pushes the commit it checked. A denied path hands back, or fails a correction. Work over the size signal before its first push is first pushed as it is to `<branch>-whole` and read back there, then goes back to the session instead, once, to be [cut](#the-size-signal). |
 | `implement-open` | `opening` | Reads the push back from the remote, then, for a first piece, files its rest and blocks it, then opens the pull request, with its [description](#the-description), if it is not open already. If it is, brings the sensitive line and the spend footer up to the push. Work over the size signal hands back on the issue instead, with its branch pushed. |
 | `implement-watch` | `watching` | Reads CI's check runs on the pushed head, and the checks the base branch's rulesets require. Unfinished, or passing with a required check that has no run yet: looks again after `--ci-wait`. Green, every run passed and every required check among them: on to the review. Red: logs the failed and timed-out checks to stderr as `<job>: CI caught what the local gate passed, ...` (`dotfiles` ADR 0007 §8), then back to the session, with what CI said, until `--ci-fixes` runs out, then hand-back. A head still unfinished at `--ci-ceiling` hands back, naming any required check that had not started and logging any check that had already failed. A run waiting for approval hands back. It is not logged, because it never ran, but a check that failed beside it is. A cancelled check goes back for the fix but is not logged. [`afk caught`](#what-ci-caught) counts the same catches from GitHub, with the differences listed there. In a [correction](#the-correction), every hand-back but someone else's push fails the correction instead; a failed correction back at the head the review read is not watched again. |
@@ -42,7 +43,8 @@ label, when `afk` is given `--eligibility-label`
 | `implement-resume` | `deferred` | Tries the tier again from its first model, after a limited budget or an exhausted tier. |
 
 A **hand-back** is a comment saying what stopped the work, quoting the end of
-the output that said so, plus the hand-back label. Before the push it goes on
+the output that said so (or, for a [stop on a gap](#a-stop-on-a-gap), the
+session's questions), plus the hand-back label. Before the push it goes on
 the issue, and nothing was pushed. After the push it goes on the pull request
 only, and the pull request stays open. Between the two - work over the size
 signal, or a pull request that never opened - it goes on the issue, and says
@@ -63,6 +65,92 @@ The review is a `review` job the implement job makes due, never a `/review`
 comment (ADR 0001 §14). The review claims the request with a 👀 on the pull request's
 description, and says the implement job asked for it
 ([`review.md`](review.md)).
+
+## Premises and gaps
+
+The implementing session checks the issue before its first edit, and stops on
+a gap rather than guess: the `implement` skill's own step. What the agent does
+is give that session the issue's premises, and do something with its answer
+([#199](https://github.com/corygyarmathy/afk-agent/issues/199)). The code is
+[`internal/premise`](../../internal/premise) and
+[`internal/implement/gaps.go`](../../internal/implement/gaps.go).
+
+### The premises
+
+A [premise](../../GLOSSARY.md) is an outside fact the issue rests on. The
+session has no credentials for the tracker or the remote, so it can check only
+a premise the agent fetched for it.
+
+- **Which links.** Each in the issue's `Premises` section: a heading named
+  Premises, at any level, to the next heading at its level or above. A URL, or
+  a `#N` or `owner/name#N` reference. An issue with no such section fetches
+  nothing, and the prompt says nothing of premises.
+- **What is fetched**, into `.git/afk-premises/` beside the issue, before the
+  session starts:
+  - a file permalink (`/blob/<rev>/<path>`): the file at the linked revision,
+    and at the current head of its repository's default branch, with whether
+    the two differ;
+  - an issue, a pull request or a comment link, and a `#N`: the thread as it is
+    now, its description and every comment, with a linked comment marked.
+    Review comments on a pull request's diff are not in it, and a link to one,
+    or to a review, is not fetched.
+
+  `index.md` there lists each link and what it was fetched into. The prompt
+  points the session at it.
+- **Each link once for each workspace.** A gate retry, a CI fix or a session
+  that takes over reads what the first run read of a link it read in full. A
+  link it could not read, or read only part of, is fetched again on each run,
+  since what failed may have been GitHub for a moment. A fetch cut short, by a
+  shutdown or a deadline, fails the run rather than listing the rest as not
+  fetched. A new `/implement` is a new workspace, and fetches again.
+- **A link that can't be fetched fails nothing**: one on another host, one that
+  is neither a file permalink nor a thread, a review comment, another
+  repository that is private, a file gone at the head. The index says why, and the
+  session lists it under **Not verified**. A fetch with any of these is a log
+  line, with the count.
+- **Credentials.** A premise in the agent's own repository is read with its own
+  token. One in another repository is read with no token, as anyone would: a
+  public repository is read, within GitHub's limit for unauthenticated
+  requests from the host, and a private one is not fetched. The App's token
+  reaches only the repository the agent is working
+  ([ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) §4);
+  whether it may read another is
+  [#207](https://github.com/corygyarmathy/afk-agent/issues/207).
+
+### A stop on a gap
+
+The first session is told that, with nobody to ask, a gap in the issue means
+committing nothing, and writing its questions, each with its recommended
+answer, to `.git/afk-questions.md`. A session that commits nothing and leaves
+that file is a stop on a gap. The file is what the agent reads, not the
+wording of the session's report, which is the vendored skill's to change.
+
+- **It is a hand-back on the issue**, as a session that commits nothing
+  already is, and nothing was pushed. Its detail is the session's questions **in
+  full**, each with its recommended answer, rather than the end of the output.
+  Questions that would take the comment over GitHub's 65,536 characters are cut
+  at a line, with a note that says so, and a log line.
+- **The next step it names** is answering with `/implement <answers>`. The
+  answers are that command's instructions, and reach the next session as the
+  more recent word than the issue. The agent never edits the issue.
+- **It cannot loop.** Unattended intake does not take a handed-back issue
+  again, because its job is still in the store: only a command runs it again.
+- Only work not yet pushed is read for it. With no file, or an empty one, the
+  session committed nothing for some other reason, and is handed back as
+  one.
+
+### A criterion the work cannot meet
+
+An acceptance criterion the pull request can't meet by itself - one that needs
+a deploy or a hand run - is listed under **Not verified**, as the `pr` skill
+says, and in `.git/afk-unmet.md`, as the prompt asks. Work with one says
+`Refs #N` rather than `Closes #N`, so merging it does not close an issue with a
+check still to do. The criteria are listed under the link line too, in the
+session's words, so they are there whether or not its own part repeats them.
+The file is read before the push only, as what is left is,
+and a file that says only "none" is no criterion. A first piece is `Part of`
+either way. The advisory review reads `Refs` back as the issue the work is
+reviewed against ([`review.md`](review.md)).
 
 ## The correction
 
@@ -158,9 +246,12 @@ Its sections, in this order, each left out when it has nothing to say:
 
 1. **The link line**, `Closes #N`, or `Part of #N. The rest is #R.` on a
    first piece, naming the issue filed for the rest
-   ([the size signal](#the-size-signal)). The advisory review reads that line
-   back ([`review.md`](review.md)), so it is the one straight after the
-   marker. The agent's.
+   ([the size signal](#the-size-signal)), or `Refs #N` on work with
+   [a criterion it cannot meet](#a-criterion-the-work-cannot-meet). The
+   advisory review reads that line back ([`review.md`](review.md)), so it is
+   the one straight after the marker. Under it, a **Not verified** note
+   listing the criteria from `.git/afk-unmet.md`, when there are any. The
+   agent's.
 2. **The sensitive line**, only on a pull request that touches a sensitive
    path: `**Sensitive:** job store schema (…), CI (…)`, each label the
    operator named that matched, in the operator's order, with the files it
@@ -193,8 +284,8 @@ Its sections, in this order, each left out when it has nothing to say:
   host (below), at whatever version that is. What goes under them is the
   [`pr` skill's](../../.agents/skills/pr/SKILL.md), which `implement` calls
   for it. Nothing is capped or cut.
-- **The title is the issue's** on a `Closes` pull request, whatever the file
-  says. A `Part of` pull request, the first piece of an issue too big for one,
+- **The title is the issue's** on a `Closes` or `Refs` pull request, whatever
+  the file says. A `Part of` pull request, the first piece of an issue too big for one,
   takes its title from the file's first line when that line is not a heading
   ([#111](https://github.com/corygyarmathy/afk-agent/issues/111),
   [#127](https://github.com/corygyarmathy/afk-agent/issues/127)). A line longer
@@ -336,8 +427,10 @@ non-test lines the work may have before its size needs a decision. The code is
   So pointing it into the agent's state directory means the credentials are
   wiped whenever the state is. If a session is gone anyway, the retry starts a
   new session given the failure: weaker, and the job carries on.
-- **The `implement` skill**, and the **`pr` skill** it calls for the
-  description's sections, where opencode discovers them from the workspace: in
+- **The `implement` skill**, at a version that checks the ticket before its
+  first edit and stops on a gap
+  ([`skills#32`](https://github.com/corygyarmathy/skills/issues/32)), and the
+  **`pr` skill** it calls for the description's sections, where opencode discovers them from the workspace: in
   the implemented repository's `.agents/skills/`, or in the per-user skills
   directory. The model is told to reply that the `implement` skill is missing
   rather than implement without it, and then the gate finds no commits and
@@ -368,7 +461,7 @@ The state directory is the directory holding `--store`. Beside the store,
 implementing keeps `workspaces/<job>` (the clone the model works in),
 `relays/<job>.git` (the copy pushes are made from), `progress/<job>.json`
 (branch, base, session and its last turn's input tokens, the session's description and what it says is left,
-whether the work was cut and the commit kept on `<branch>-whole`, the rest's issue and whether it was blocked, the sensitive line, gate attempts
+whether the work was cut and the commit kept on `<branch>-whole`, the criteria the work cannot meet, whether premises were fetched, the rest's issue and whether it was blocked, the sensitive line, gate attempts
 and fixes, the last failure, the pushed head, the correction and its findings, what its sessions have spent), `requests/<job>.json` (which command the job's claim took, for its
 instructions) and `notes/<job>.json` (the last error of a push, a pull request, a
 review request or a label, for the hand-back to quote). All of it is disposable. Lost before the push, the work starts over.

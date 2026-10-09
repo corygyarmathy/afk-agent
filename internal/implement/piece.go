@@ -26,14 +26,33 @@ func (p progress) piece() bool {
 }
 
 // linkLine is the description's link line: the issue the pull request closes,
-// or the one it is the first piece of, and the issue filed for the rest. The
-// advisory review reads a first piece's line back (review.PartOf), so the two
-// are spelled alike.
-func linkLine(n int, piece bool, rest int) string {
-	if !piece {
-		return fmt.Sprintf("Closes #%d", n)
+// or the one it is the first piece of, and the issue filed for the rest, or the
+// one it refers to without closing. The advisory review reads the line back
+// (review.PartOf, review.Refs), so they are spelled alike.
+//
+// Work with an acceptance criterion it cannot meet by itself - one that needs
+// a deploy or a hand run - refers to its issue rather than closing it, so that
+// merging it does not close an issue with a check still to do (#199). A first
+// piece does not close its issue either way.
+func linkLine(n int, piece, unmet bool, rest int) string {
+	switch {
+	case piece:
+		return fmt.Sprintf("Part of #%d. The rest is #%d.", n, rest)
+	case unmet:
+		return fmt.Sprintf("Refs #%d", n)
 	}
-	return fmt.Sprintf("Part of #%d. The rest is #%d.", n, rest)
+	return fmt.Sprintf("Closes #%d", n)
+}
+
+// unmetNote is what a description says under its link line of the acceptance
+// criteria the session said the work cannot meet by itself (#199), in the
+// session's words: what is still to check once it merges.
+func unmetNote(n int, piece bool, unmet string) string {
+	lead := fmt.Sprintf("**Not verified:** merging this leaves #%d open. The session says these of its acceptance criteria need more than this work to meet - a deploy, or a run by hand - so they are still to check:", n)
+	if piece {
+		lead = "**Not verified:** the session says these of the issue's acceptance criteria need more than this work to meet - a deploy, or a run by hand - so they are still to check:"
+	}
+	return lead + "\n\n" + unmet
 }
 
 // unblockedNote is what a first piece's description says under its link line

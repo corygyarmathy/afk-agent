@@ -79,6 +79,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/model"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/premise"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
@@ -214,8 +215,14 @@ type Deps struct {
 	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
 
 	// Repo is the repository, as owner/name: what the permalinks in the
-	// pull request's description are built on. Unset, nothing is linked.
+	// pull request's description are built on, and the repository an
+	// issue's bare #N premise is in. Unset, nothing is linked.
 	Repo string
+
+	// Premises is how a premise's repository is read: the agent's own
+	// client for its own repository, and no token for another (#199). Nil
+	// fetches no premises.
+	Premises func(repo string) premise.Reader
 
 	// ReviewProcedure is the operator's review procedure, which the
 	// description's reminder links. A parameter. Unset, the reminder says

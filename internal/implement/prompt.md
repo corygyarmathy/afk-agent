@@ -9,6 +9,23 @@ The issue is the spec. It is in `.git/afk-issue.md`, verbatim: its title, its
 body, and any instructions from the person who asked for it to be implemented.
 Where the instructions and the issue disagree, the instructions are the more
 recent word.
+{{- if .Premises}}
+
+The issue's premises, the outside facts it rests on, are fetched for you into
+`.git/{{.Dir}}/`: `{{.Index}}` there lists each link in the issue's Premises
+section and the files it was fetched into. A file permalink is there at its
+linked revision and at the head of its repository's default branch, and an
+issue, a pull request or a comment as its thread is now. A link the index says
+was not fetched is a premise whose source can't be read.
+{{- end}}
+{{- if not (or .Failed .Cutting .Correcting .Opened)}}
+
+Nobody can answer a question while you work, so a gap the skill finds in the
+issue means committing nothing. Write the skill's questions, each with its
+recommended answer, to `.git/afk-questions.md` and stop: the agent posts them
+on the issue, and the answers come back to the next session as instructions.
+Write that file only when you stop on a gap.
+{{- end}}
 {{if .Whole}}
 The person who asked wants the work as one pull request, whatever its size. Do
 not stop early to keep it small.
@@ -55,4 +72,9 @@ request's description. The agent reads it under these headings and no others:
 a plain line, not a heading, that gives a title for the piece: the issue's
 title describes the whole job.
 {{- end}}
+
+If an acceptance criterion needs more than this work to meet it - a deploy, or
+a run by hand - list it under `## Not verified`, and write it to
+`.git/afk-unmet.md` too, one line each: the pull request then refers to the
+issue without closing it.
 {{- end}}

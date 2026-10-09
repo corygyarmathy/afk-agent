@@ -262,15 +262,22 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	}
 	// A first piece is part of the issue, and takes the title the session
 	// gave it: the issue's describes the whole job (#111, #127). A pull
-	// request that closes the issue keeps the issue's title, whatever the
-	// file says, and so does a piece the session gave no title.
+	// request that closes the issue, or refers to it, keeps the issue's
+	// title, whatever the file says, and so does a piece the session gave no
+	// title.
 	title, session := sessionPart(p.Description)
 	if !p.piece() || title == "" {
 		title = is.Title
 	}
-	link := linkLine(n, p.piece(), p.Rest)
+	link := linkLine(n, p.piece(), p.Unmet != "", p.Rest)
 	if p.Unblocked {
 		link += "\n\n" + unblockedNote(n, p.Rest)
+	}
+	// The criteria are the agent's to list, beside the line they change,
+	// rather than left to the session's own part, which may not repeat them
+	// or may not be there at all.
+	if p.Unmet != "" {
+		link += "\n\n" + unmetNote(n, p.piece(), p.Unmet)
 	}
 	if session == "" && strings.TrimSpace(p.Description) != "" {
 		d.logf("%s: the description file has no %q section, so the pull request opens with the agent's parts only", in.Job.ID, "## "+sections[0])

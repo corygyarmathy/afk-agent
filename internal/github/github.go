@@ -15,6 +15,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -212,6 +213,63 @@ func (c *Client) Issue(ctx context.Context, number int) (Issue, error) {
 		return Issue{}, err
 	}
 	return w.issue(), nil
+}
+
+// DefaultBranch is the name of the repository's default branch.
+func (c *Client) DefaultBranch(ctx context.Context) (string, error) {
+	u, err := c.repoURL("")
+	if err != nil {
+		return "", err
+	}
+	var w struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if _, err := c.getJSON(ctx, u, &w); err != nil {
+		return "", err
+	}
+	if w.DefaultBranch == "" {
+		return "", fmt.Errorf("GET %s: no default branch in the response", u)
+	}
+	return w.DefaultBranch, nil
+}
+
+// File is the content of the file at path as of ref: a commit, a branch or a
+// tag. A directory, a symbolic link or a submodule is not a file, and neither
+// is a file too large for the API to serve inline (over a megabyte): each is
+// an error rather than an empty file.
+func (c *Client) File(ctx context.Context, path, ref string) ([]byte, error) {
+	var segments []string
+	for _, s := range strings.Split(strings.Trim(path, "/"), "/") {
+		segments = append(segments, url.PathEscape(s))
+	}
+	u, err := c.repoURL("/contents/%s?ref=%s", strings.Join(segments, "/"), url.QueryEscape(ref))
+	if err != nil {
+		return nil, err
+	}
+	// A directory is served as a listing, which decodes as no object.
+	var w struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	if _, err := c.getJSON(ctx, u, &w); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return nil, fmt.Errorf("GET %s: a directory, not a file", u)
+		}
+		return nil, err
+	}
+	if w.Type != "file" {
+		return nil, fmt.Errorf("GET %s: a %s, not a file", u, w.Type)
+	}
+	if w.Encoding != "base64" {
+		return nil, fmt.Errorf("GET %s: content encoded as %q, which is a file too large to be served inline", u, w.Encoding)
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(w.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: decoding: %w", u, err)
+	}
+	return b, nil
 }
 
 // OpenIssues lists every open issue and every open pull request, to the last

@@ -18,6 +18,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
+	"github.com/corygyarmathy/afk-agent/internal/premise"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
@@ -90,6 +91,17 @@ type progress struct {
 	// the rest. Not read of work asked for whole.
 	Remainder string `json:"remainder,omitempty"`
 
+	// Unmet is the acceptance criteria the session said the work cannot meet
+	// by itself, as its last run before the push left the file: the pull
+	// request then refers to the issue rather than closing it (#199). Not
+	// read after the push, as the remainder is not.
+	Unmet string `json:"unmet,omitempty"`
+
+	// Premises is the issue's premises fetched into the workspace, with
+	// their index, for the prompt to point the session at (#199). False for
+	// an issue with no Premises section.
+	Premises bool `json:"premises,omitempty"`
+
 	// Rest is the issue filed for the rest, once it is seen on the tracker:
 	// kept once seen, so a rest the operator closes straight away is not
 	// filed again.
@@ -143,14 +155,17 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		if err := work.Reset(ctx, ws, from); err != nil {
 			return transition.Result{}, err
 		}
-		for _, name := range []string{descriptionFile, remainderFile} {
+		for _, name := range []string{descriptionFile, remainderFile, unmetFile, questionsFile} {
 			if err := os.Remove(filepath.Join(ws, ".git", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return transition.Result{}, err
 			}
 		}
 	}
-	instructions, err := d.spec(ctx, in.Job.ID, ws, n)
+	instructions, body, err := d.spec(ctx, in.Job.ID, ws, n)
 	if err != nil {
+		return transition.Result{}, err
+	}
+	if p.Premises, err = d.premises(ctx, in.Job.ID, ws, body); err != nil {
 		return transition.Result{}, err
 	}
 	whole := Whole(instructions)
@@ -222,7 +237,9 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	}
 	// What is left is read only before the push: after it, the rest is
 	// filed from what the work was pushed with, or not at all. Asked for
-	// whole, it is not read: nothing is left over.
+	// whole, it is not read: nothing is left over. What the work cannot meet
+	// is read only then too: the link line is written once, as the pull
+	// request opens.
 	if p.Pushed == "" {
 		p.Remainder = ""
 		if !whole {
@@ -230,6 +247,10 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 				p.Remainder = ""
 				d.logf("%s: the file of what is left could not be read, so the issue for the rest says the session did not say: %v", in.Job.ID, err)
 			}
+		}
+		if p.Unmet, err = readUnmet(ws); err != nil {
+			p.Unmet = ""
+			d.logf("%s: the file of the criteria the work cannot meet could not be read, so the pull request closes the issue: %v", in.Job.ID, err)
 		}
 	}
 	// Read now, as the session left it. The file stays for a retry that
@@ -291,6 +312,19 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	case work.GateSwitched:
 		return d.stop(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
 	case work.GateEmpty:
+		// A session that checked the issue before its first edit and stopped
+		// on its gaps commits nothing on purpose, and what it asks is the
+		// hand-back (#199). Only work not yet pushed is checked so. A file
+		// that cannot be read is a session that committed nothing.
+		if p.Pushed == "" && !p.Correction.Running() {
+			questions, err := readQuestions(d.work().Dir(in.Job.ID))
+			if err != nil {
+				d.logf("%s: the session's questions could not be read, so the hand-back says it committed nothing: %v", in.Job.ID, err)
+			}
+			if questions != "" {
+				return d.handBackGaps(ctx, in, p, questions)
+			}
+		}
 		nothing := "The session finished without committing anything, so there is nothing to push."
 		switch {
 		case p.Correction.Running():
@@ -356,7 +390,14 @@ func (d *Deps) handBackIssue(ctx context.Context, in transition.In, p progress, 
 		// and the work it was cut from was, before it went back.
 		next = fmt.Sprintf("The cut was not pushed. `%s` is on the remote at `%s`, the work as it was before it went back to be cut, with no pull request. Open one from it by hand, or `%s` again to start over on a new branch.", wholeBranch(p.Branch), git.Short(p.Uncut), Word)
 	}
-	body := work.HandBackBody(marker, "", "I stopped without opening a pull request. "+reason, "", output, next, p.Spent)
+	return d.oweIssue(ctx, in, p, work.HandBackBody(marker, "", "I stopped without opening a pull request. "+reason, "", output, next, p.Spent))
+}
+
+// oweIssue owes a hand-back on the issue: its comment, whose body carries the
+// hand-back's marker, and the hand-back label.
+func (d *Deps) oweIssue(ctx context.Context, in transition.In, p progress, body string) (transition.Result, error) {
+	n := in.Job.Subject.Number
+	marker := handBackMarker(n, p, p.Nonce)
 
 	// The workspace and the relay go before the commit rather than after
 	// it. Before the push, a commit that then fails leaves the job where it
@@ -425,15 +466,16 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int) (progress, bo
 }
 
 // spec writes the issue, and the instructions of the command that asked for
-// it, where the prompt says they are. It returns the instructions.
-func (d *Deps) spec(ctx context.Context, jobID, ws string, n int) (string, error) {
+// it, where the prompt says they are. It returns the instructions, and the
+// issue's body.
+func (d *Deps) spec(ctx context.Context, jobID, ws string, n int) (string, string, error) {
 	is, err := d.Tracker.Issue(ctx, n)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	instructions, err := d.instructions(ctx, jobID, n)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Issue #%d: %s\n\n", is.Number, is.Title)
@@ -445,7 +487,37 @@ func (d *Deps) spec(ctx context.Context, jobID, ws string, n int) (string, error
 	if instructions != "" {
 		fmt.Fprintf(&b, "\n# Instructions from the person who asked\n\n%s\n", instructions)
 	}
-	return instructions, os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
+	return instructions, is.Body, os.WriteFile(filepath.Join(ws, ".git", "afk-issue.md"), []byte(b.String()), 0o644)
+}
+
+// premises fetches the issue's premises into the workspace's .git, where the
+// prompt says they are, and reports whether there are any. The session has no
+// credentials for the tracker or the remote, so it can check only a premise
+// the agent fetched for it (#199).
+//
+// Each link once for each workspace: a retry, a fix or a session that takes
+// over reads what the first run read, rather than a source that moved under
+// the work. A link that was not read in full is fetched again on each run,
+// since what failed may have been GitHub for a moment (premise.Fetch). An
+// issue with no Premises section fetches nothing, and so does a kind with no
+// way to read a repository.
+func (d *Deps) premises(ctx context.Context, jobID, ws, body string) (bool, error) {
+	dir := filepath.Join(ws, ".git", premise.Dir)
+	if d.Premises == nil {
+		return false, nil
+	}
+	links := premise.Links(body, d.Repo)
+	if len(links) == 0 {
+		return false, nil
+	}
+	failed, err := premise.Fetch(ctx, dir, links, d.Premises)
+	if err != nil {
+		return false, err
+	}
+	if failed > 0 {
+		d.logf("%s: %d of the issue's %d premises could not be fetched, and the session is told which", jobID, failed, len(links))
+	}
+	return true, nil
 }
 
 // request is the command this job's last claim took: the newest of the
@@ -528,7 +600,11 @@ func (d *Deps) render(t *template.Template, n int, p progress, whole bool) (stri
 		// corrected, and Reviewed the head the review read.
 		Correcting bool
 		Reviewed   string
-	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests, wholeBranch(p.Branch), p.Correction.Running(), reviewed(p)})
+		// Premises is the issue's premises fetched beside it, and Dir and
+		// Index where.
+		Premises   bool
+		Dir, Index string
+	}{n, p.Branch, d.Gate, p.Failure != "", p.Why, whole, d.SizeSignal, p.Pushed != "", p.Cutting, p.Lines, p.Tests, wholeBranch(p.Branch), p.Correction.Running(), reviewed(p), p.Premises, premise.Dir, premise.Index})
 	return b.String(), err
 }
 

@@ -39,6 +39,22 @@ func PartOf(desc string) (issue, rest int, ok bool) {
 	return issue, rest, err1 == nil && err2 == nil
 }
 
+// refs is the implement kind's link line on work that refers to its issue
+// without closing it, because an acceptance criterion needs a deploy or a hand
+// run (#199): the line straight after its marker, as partOf is read.
+var refs = regexp.MustCompile(`\A<!-- afk:implement issue=\d+ -->\r?\nRefs #(\d+)\r?(?:\n|\z)`)
+
+// Refs is the issue a description says its pull request refers to without
+// closing, as the implement kind writes it.
+func Refs(desc string) (issue int, ok bool) {
+	m := refs.FindStringSubmatch(desc)
+	if m == nil {
+		return 0, false
+	}
+	issue, err := strconv.Atoi(m[1])
+	return issue, err == nil
+}
+
 // closes is the issues a description closes, in the order it names them, once
 // each, and none that is the issue it is part of.
 func closes(desc string, partOf int) []int {
@@ -63,6 +79,9 @@ func closes(desc string, partOf int) []int {
 // Its spend footer goes too: the review is of the work, not of its price.
 // Both are taken out of a description the agent wrote and no other, so a
 // human's description that quotes either is reviewed as they wrote it.
+//
+// Work that refers to its issue without closing it is reviewed against it too,
+// headed as not closed by it (#199).
 //
 // A first piece is reviewed against the issue it is part of, which is headed
 // as only partly done by it, and beside the issue filed for the rest, headed
@@ -104,6 +123,14 @@ func (d *Deps) spec(ctx context.Context, pr github.PullRequest) (string, error) 
 			return "", err
 		}
 		if err := write(rest, fmt.Sprintf(" (out of scope: filed for the rest of #%d)", issue)); err != nil {
+			return "", err
+		}
+	}
+	// Work that refers to its issue is reviewed against it, as work that
+	// closes it is: all of it but a check the work cannot make by itself.
+	if n, ok := Refs(pr.Body); ok && !piece {
+		issue = n
+		if err := write(n, " (not closed by this pull request: it lists a criterion that needs more than the pull request to meet as not verified)"); err != nil {
 			return "", err
 		}
 	}

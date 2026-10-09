@@ -122,6 +122,7 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 		FreshAt:         ip.freshSessionAt,
 		SizeSignal:      ip.sizeSignal,
 		Repo:            tr.client.Repo,
+		Premises:        tr.reader,
 		ReviewProcedure: ip.reviewProcedure,
 		Store:           st,
 		// A holder of its own: it leases the review job, never this one.
