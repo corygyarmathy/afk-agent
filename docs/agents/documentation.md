@@ -8,6 +8,9 @@ writing a paragraph, check whether it is already someone else's job below.
 
 Problem statement and acceptance criteria. It does not move once implementation
 starts: a changed shape is a comment on the issue, not a rewrite somewhere else.
+The one exception is an approach rejected with the agent's pull request: the
+approach to take goes in the issue itself, because the session reads the body
+and not the comments ([`implement.md`](implement.md#starting-over)).
 Nothing else in this list restates a spec; they link the issue instead.
 
 Where the issues live and how to read them: [`issue-tracker.md`](issue-tracker.md).

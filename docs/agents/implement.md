@@ -492,25 +492,30 @@ in review, and never the agent's
 count or a failed [correction](#the-correction) is not a sign of a wrong
 approach, and the agent never starts over on its own.
 
-- **To reject an approach**, close the agent's pull request, then comment
+- **To reject an approach**, wait for the job to come to rest, with the
+  hand-off label or the hand-back label on the pull request. Then close the
+  agent's pull request, delete its branch and any `<branch>-whole`, and comment
   `/implement` on the issue. With no open pull request of the agent's for the
   issue, the work starts again. While one is open, `/implement` only replies
-  with a link to it.
+  with a link to it. A pull request closed while its job is still running a
+  fix or a [correction](#the-correction) is opened again from the same branch
+  at the next push, and the `/implement` after it links to that one.
 - **Say why in the issue.** Amend the issue to say the approach to take, or
   the one to avoid, in words rather than by pointing at the closed pull
-  request. The issue is the spec: it outlasts the attempt, and it is what the
-  session reads for [gaps](#a-stop-on-a-gap). Anything that applies only to
-  this attempt goes in the `/implement` instructions, which reach the session
-  as the more recent word than the issue.
-- **The new attempt starts clean**: a new branch `<prefix><n>-<k>` from the
-  default branch, without the closed pull request's commits, and nothing kept
-  from the earlier run. `k` is the lowest number whose branch, and its `-whole`,
-  are not on the remote, so a closed pull request's branch that was deleted
-  gives its name to the next attempt. The closed pull request is deliberately not given to the session -
-  it reads the issue's title and body, its [premises](#premises-and-gaps) and
-  the instructions - so the new work is not anchored to the code that was
-  rejected. Linking the closed pull request under the issue's Premises would
-  give it back.
+  request. The issue is the spec: it outlasts the pull request, and it is what
+  the session reads for [gaps](#a-stop-on-a-gap). Anything that applies only to
+  this run goes in the `/implement` instructions, which reach the session as
+  the more recent word than the issue.
+- **The work starts clean**: a new branch `<prefix><n>-<k>` from the default
+  branch, without the closed pull request's commits, and nothing kept from the
+  earlier run. A deleted branch's number is free again, so the new branch can
+  take the closed pull request's name; one left on the remote is
+  [skipped](#the-size-signal). The closed pull request is deliberately not
+  given to the session - it reads the issue's title and body, its
+  [premises](#premises-and-gaps) and the instructions - so the new work is not
+  anchored to the code that was rejected. A branch left on the remote is in the
+  session's clone, and linking the closed pull request under the issue's
+  Premises would give it back too.
 
 ## Parameters
 
