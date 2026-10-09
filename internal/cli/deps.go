@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
@@ -75,59 +76,16 @@ var implementDeps = func(ctx context.Context, p params, st store.Store, tr *trac
 	if tr == nil {
 		return nil, usagef("implement needs --repo (or set AFK_REPO)")
 	}
-	ip, err := p.implement()
-	if err != nil {
-		return nil, err
-	}
-	m, err := p.implementModel()
-	if err != nil {
-		return nil, err
-	}
-	ep, err := p.effects()
-	if err != nil {
-		return nil, err
-	}
-	stateDir, resolve, price, err := resolver(p, m)
-	if err != nil {
-		return nil, err
-	}
-	lease, err := p.leaseTTL()
-	if err != nil {
-		return nil, err
-	}
-	login, err := tr.Login(ctx)
+	dp, ip, err := deliveryParams(ctx, p, st, tr)
 	if err != nil {
 		return nil, err
 	}
 	return &implement.Deps{
+		Params:          dp,
 		Tracker:         tr.client,
-		Model:           opencode.Command{Path: m.opencode, Timeout: m.timeout},
-		Login:           login,
 		BranchPrefix:    ip.branchPrefix,
-		Remote:          remote(tr, stateDir),
-		Resolve:         resolve,
-		Price:           price,
-		Bound:           m.attempts,
-		TierWait:        m.tierWait,
-		Rounds:          ep.rounds,
-		Gate:            ip.gate,
-		Attempts:        ip.attempts,
-		HandBackLabel:   ep.handBackLabel,
-		HandOffLabel:    ip.handOffLabel,
-		Denylist:        ip.denylist,
-		Sensitive:       ip.sensitive,
-		CIWait:          ip.ciWait,
-		CICeiling:       ip.ciCeiling,
-		CIFixes:         ip.ciFixes,
-		FreshAt:         ip.freshSessionAt,
-		SizeSignal:      ip.sizeSignal,
-		Repo:            tr.client.Repo,
 		Premises:        tr.reader,
 		ReviewProcedure: ip.reviewProcedure,
-		Store:           st,
-		// A holder of its own: it leases the review job, never this one.
-		AskReview: handoff.Asker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
-		StateDir:  stateDir,
 	}, nil
 }
 
@@ -139,23 +97,7 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if tr == nil {
 		return nil, usagef("revise needs --repo (or set AFK_REPO)")
 	}
-	// The revision's gate and its bound, the paths it may not push, the
-	// sensitive paths, the size signal, its CI bounds and the tier it runs
-	// on are the implement kind's: one local gate, one denylist, one list of
-	// sensitive paths, one size signal, one CI and one tier serve both.
-	ip, err := p.implement()
-	if err != nil {
-		return nil, err
-	}
-	m, err := p.implementModel()
-	if err != nil {
-		return nil, err
-	}
-	ep, err := p.effects()
-	if err != nil {
-		return nil, err
-	}
-	handOff, err := required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL")
+	dp, _, err := deliveryParams(ctx, p, st, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -163,20 +105,45 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 	if err != nil {
 		return nil, err
 	}
+	return &revise.Deps{
+		Params:  dp,
+		Tracker: tr.client,
+		Replays: rp,
+	}, nil
+}
+
+// deliveryParams builds what both kinds that deliver take, from the parameters
+// and the command's tracker, and the implement kind's parameters it read them
+// from. A revision's gate and its bound, the paths it may not push, the
+// sensitive paths, the size signal, its CI bounds, its hand-off label and the
+// tier it runs on are the implement kind's: one local gate, one denylist, one
+// list of sensitive paths, one size signal, one CI and one tier serve both.
+func deliveryParams(ctx context.Context, p params, st store.Store, tr *tracker) (delivery.Params, implementParams, error) {
+	ip, err := p.implement()
+	if err != nil {
+		return delivery.Params{}, implementParams{}, err
+	}
+	m, err := p.implementModel()
+	if err != nil {
+		return delivery.Params{}, implementParams{}, err
+	}
+	ep, err := p.effects()
+	if err != nil {
+		return delivery.Params{}, implementParams{}, err
+	}
 	stateDir, resolve, price, err := resolver(p, m)
 	if err != nil {
-		return nil, err
+		return delivery.Params{}, implementParams{}, err
 	}
 	lease, err := p.leaseTTL()
 	if err != nil {
-		return nil, err
+		return delivery.Params{}, implementParams{}, err
 	}
 	login, err := tr.Login(ctx)
 	if err != nil {
-		return nil, err
+		return delivery.Params{}, implementParams{}, err
 	}
-	return &revise.Deps{
-		Tracker:       tr.client,
+	return delivery.Params{
 		Model:         opencode.Command{Path: m.opencode, Timeout: m.timeout},
 		Store:         st,
 		Login:         login,
@@ -186,24 +153,23 @@ var reviseDeps = func(ctx context.Context, p params, st store.Store, tr *tracker
 		Price:         price,
 		Bound:         m.attempts,
 		TierWait:      m.tierWait,
+		FreshAt:       ip.freshSessionAt,
 		Rounds:        ep.rounds,
 		Gate:          ip.gate,
 		Attempts:      ip.attempts,
-		Denylist:      ip.denylist,
+		HandBackLabel: ep.handBackLabel,
+		HandOffLabel:  ip.handOffLabel,
 		CIWait:        ip.ciWait,
 		CICeiling:     ip.ciCeiling,
 		CIFixes:       ip.ciFixes,
-		FreshAt:       ip.freshSessionAt,
-		Replays:       rp,
+		Denylist:      ip.denylist,
 		Sensitive:     ip.sensitive,
 		SizeSignal:    ip.sizeSignal,
-		HandOffLabel:  handOff,
-		HandBackLabel: ep.handBackLabel,
 		// A holder of its own: it leases the review job, never this one.
 		AskReview: handoff.Asker(transition.Armer{Store: st, Holder: holder() + "/ask-review", LeaseTTL: lease}),
 		// Beside the store, as every other kind's state directory is.
 		StateDir: stateDir,
-	}, nil
+	}, ip, nil
 }
 
 // remote is the tracker's repository as git reaches it, with the installation

@@ -43,7 +43,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		// again, or failed here and the move that followed lost.
 		return r, nil
 	}
-	r, err := d.work().Watch(ctx, in, d.ci(), n, &p.Progress)
+	r, err := d.work().Watch(ctx, in, d.ci(), n, &p.Progress.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
@@ -402,27 +403,29 @@ func setup(t *testing.T, tr *tracker) *fixture {
 	remote := bareRemote(t)
 	m := &coder{}
 	d := &implement.Deps{
-		Tracker:       tr,
-		Model:         m,
-		Login:         agent,
-		BranchPrefix:  prefix,
-		Remote:        git.Remote{URL: remote},
-		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
-		Bound:         2,
-		Rounds:        2,
-		TierWait:      time.Hour,
-		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
-		Attempts:      3,
-		HandBackLabel: "needs-decision",
-		HandOffLabel:  "needs-review",
-		Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
-		SizeSignal:    400,
-		CIWait:        10 * time.Minute,
-		CICeiling:     2 * time.Hour,
-		CIFixes:       2,
-		Store:         s,
-		AskReview:     handoff.Asker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
-		StateDir:      t.TempDir(),
+		Tracker:      tr,
+		BranchPrefix: prefix,
+		Params: delivery.Params{
+			Model:         m,
+			Login:         agent,
+			Remote:        git.Remote{URL: remote},
+			Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+			Bound:         2,
+			Rounds:        2,
+			TierWait:      time.Hour,
+			Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+			Attempts:      3,
+			HandBackLabel: "needs-decision",
+			HandOffLabel:  "needs-review",
+			Denylist:      []string{".github/**", "flake.lock", "**/secrets.yaml"},
+			SizeSignal:    400,
+			CIWait:        10 * time.Minute,
+			CICeiling:     2 * time.Hour,
+			CIFixes:       2,
+			Store:         s,
+			AskReview:     handoff.Asker(transition.Armer{Store: s, Holder: "implement-test", LeaseTTL: time.Minute}),
+			StateDir:      t.TempDir(),
+		},
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
 	job, err := s.Ensure(context.Background(), store.KindImplement, store.Subject{Type: store.SubjectIssue, Number: issue}, implement.Start, now)

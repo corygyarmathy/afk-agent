@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
@@ -398,33 +399,35 @@ func TestHelperRunsAnImplement(t *testing.T) {
 	}
 	d := &implement.Deps{
 		Tracker:      ft,
-		Model:        killModel{ft, os.Getenv(envKillCut) != ""},
-		Login:        agent,
 		BranchPrefix: prefix,
-		Remote: git.Remote{URL: remote, Token: func(context.Context) (string, error) {
-			// Every read mints a token too. The first one minted once there
-			// is a relay is the push's.
-			if _, err := os.Stat(filepath.Join(dir, "state", "relays")); err == nil {
-				ft.die("before-push")
-			}
-			return "", nil
-		}},
-		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
-		Bound:         3,
-		Rounds:        3,
-		TierWait:      time.Hour,
-		Gate:          gate,
-		Attempts:      2,
-		HandBackLabel: "needs-decision",
-		HandOffLabel:  "needs-review",
-		Denylist:      []string{".github/**"},
-		SizeSignal:    signal,
-		CIWait:        time.Minute,
-		CICeiling:     48 * time.Hour,
-		CIFixes:       1,
-		Store:         askStore{s, ft},
-		AskReview:     handoff.Asker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
-		StateDir:      filepath.Join(dir, "state"),
+		Params: delivery.Params{
+			Model: killModel{ft, os.Getenv(envKillCut) != ""},
+			Login: agent,
+			Remote: git.Remote{URL: remote, Token: func(context.Context) (string, error) {
+				// Every read mints a token too. The first one minted once there
+				// is a relay is the push's.
+				if _, err := os.Stat(filepath.Join(dir, "state", "relays")); err == nil {
+					ft.die("before-push")
+				}
+				return "", nil
+			}},
+			Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{first, second}, nil },
+			Bound:         3,
+			Rounds:        3,
+			TierWait:      time.Hour,
+			Gate:          gate,
+			Attempts:      2,
+			HandBackLabel: "needs-decision",
+			HandOffLabel:  "needs-review",
+			Denylist:      []string{".github/**"},
+			SizeSignal:    signal,
+			CIWait:        time.Minute,
+			CICeiling:     48 * time.Hour,
+			CIFixes:       1,
+			Store:         askStore{s, ft},
+			AskReview:     handoff.Asker(transition.Armer{Store: askStore{s, ft}, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+			StateDir:      filepath.Join(dir, "state"),
+		},
 	}
 	reg := transition.MustRegistry(implement.Transitions(d)...)
 

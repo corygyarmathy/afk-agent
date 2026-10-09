@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
 )
@@ -37,7 +38,7 @@ func (d *Deps) watch(ctx context.Context, in transition.In) (transition.Result, 
 		// again, or failed here and the move that followed lost.
 		return r, nil
 	}
-	r, err := d.work().Watch(ctx, in, d.ci(), pr.Number, &p.Progress)
+	r, err := d.work().Watch(ctx, in, d.ci(), pr.Number, &p.Progress.Progress)
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -73,7 +74,7 @@ func (d *Deps) lost(ctx context.Context, in transition.In) (transition.Result, e
 	if err != nil || !ok {
 		return transition.Result{State: Start}, errors.Join(err, d.clear(in.Job.ID))
 	}
-	return d.handBackPR(ctx, in, progress{Progress: work.Progress{Branch: pr.HeadRef}}, pr.Number, "lost-"+pr.HeadSHA,
+	return d.handBackPR(ctx, in, progress{Progress: delivery.Progress{Progress: work.Progress{Branch: pr.HeadRef}}}, pr.Number, "lost-"+pr.HeadSHA,
 		"The agent lost its record of the work - its state directory was wiped - so it cannot watch CI or fix what CI finds.", "")
 }
 

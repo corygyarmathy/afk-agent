@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/handoff"
@@ -236,27 +237,29 @@ func revisionFixture(t *testing.T) *revFixture {
 	state := t.TempDir()
 	d := &revise.Deps{
 		Tracker: tr,
-		Model:   m,
-		Store:   s,
-		Login:   agent,
-		Repo:    repo,
-		// As the command surface builds it: the remote is never reached
-		// from a workspace.
-		Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
-		Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst, refSecond}, nil },
-		Bound:         2,
-		TierWait:      time.Hour,
-		Rounds:        3,
-		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
-		Attempts:      3,
-		Denylist:      []string{"flake.lock", ".github/**", "**/secrets.yaml"},
-		CIWait:        10 * time.Minute,
-		CICeiling:     2 * time.Hour,
-		CIFixes:       2,
-		Replays:       2,
-		HandOffLabel:  handOff,
-		HandBackLabel: "needs-decision",
-		StateDir:      state,
+		Replays: 2,
+		Params: delivery.Params{
+			Model: m,
+			Store: s,
+			Login: agent,
+			Repo:  repo,
+			// As the command surface builds it: the remote is never reached
+			// from a workspace.
+			Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
+			Resolve:       func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst, refSecond}, nil },
+			Bound:         2,
+			TierWait:      time.Hour,
+			Rounds:        3,
+			Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+			Attempts:      3,
+			Denylist:      []string{"flake.lock", ".github/**", "**/secrets.yaml"},
+			CIWait:        10 * time.Minute,
+			CICeiling:     2 * time.Hour,
+			CIFixes:       2,
+			HandOffLabel:  handOff,
+			HandBackLabel: "needs-decision",
+			StateDir:      state,
+		},
 	}
 	// The review job the revision asks for, beside it, as the pool runs both.
 	rd := &review.Deps{

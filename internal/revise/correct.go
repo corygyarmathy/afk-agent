@@ -32,7 +32,7 @@ func (d *Deps) corrected(ctx context.Context, in transition.In, p progress) (tra
 	if s := correction.Next(p.Correction, p.Pushed); s != correction.Edit {
 		return transition.Result{State: step(s), RunAt: in.Now}, nil
 	}
-	if r, err := d.handOffDeps().Kept(ctx, p.Progress); err != nil {
+	if r, err := d.handOffDeps().Kept(ctx, p.Progress.Progress); err != nil {
 		return transition.Result{}, err
 	} else if r.State == handoff.HandBack {
 		return d.handBackReplied(ctx, in, p, r.Reason, r.Output)

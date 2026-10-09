@@ -72,16 +72,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/corygyarmathy/afk-agent/internal/git"
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/github"
-	"github.com/corygyarmathy/afk-agent/internal/model"
-	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/premise"
-	"github.com/corygyarmathy/afk-agent/internal/sensitive"
-	"github.com/corygyarmathy/afk-agent/internal/spend"
 	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
@@ -119,105 +114,27 @@ type Tracker interface {
 	EditComment(ctx context.Context, commentID int64, body string) error
 }
 
-// Model runs one model. opencode.Command is one.
-type Model interface {
-	Run(ctx context.Context, req opencode.Request) (opencode.Reply, error)
-}
-
 // Deps is everything the implement kind's transitions reach. Built once, by
 // the command surface; the transitions themselves hold nothing.
+//
+// Of the parameters it shares with revise, what is this kind's to say:
+// Repo is what the permalinks in the pull request's description are built on,
+// and the repository an issue's bare #N premise is in, and unset nothing is
+// linked. Over SizeSignal, the work goes back to its session once to be cut to
+// a first piece, and a piece still over it is pushed, and handed back on the
+// issue rather than opened; the session is told it up front. Log also receives
+// a line each time the session's part of a description is set aside -
+// unreadable, with no Start here, or too long for GitHub - which the pull
+// request alone cannot tell from no part, and one when an edit of its
+// sensitive line never lands.
 type Deps struct {
-	Tracker Tracker
-	Model   Model
+	delivery.Params
 
-	// Login is the agent's own account: whose reaction is a claim, and whose
-	// pull requests are the agent's.
-	Login string
+	Tracker Tracker
 
 	// BranchPrefix begins every branch the agent pushes for an issue. A
 	// parameter.
 	BranchPrefix string
-
-	// Remote is the repository a workspace is cloned from and the work is
-	// pushed to, and the App's installation token every git process that
-	// reaches it carries.
-	Remote git.Remote
-
-	// Resolve is the ordered candidate list for the implement tier, as of
-	// now (ADR 0001 §9). A *model.LimitedError defers the job to the reset.
-	Resolve func(ctx context.Context) (model.Candidates, error)
-
-	// Price is the catalogue's price for a model, for the spend footer of a
-	// run opencode reported no cost for (#22). Nil prices none of them.
-	Price spend.Prices
-
-	// Bound is how many candidates a run tries before the tier counts as
-	// exhausted, and TierWait how long an exhausted tier defers. Parameters.
-	Bound    int
-	TierWait time.Duration
-
-	// FreshAt is the last-turn input tokens over which a session is not
-	// continued, and a fresh one takes over; zero continues every session
-	// (work.Tier). A parameter.
-	FreshAt int
-
-	// Rounds is how many times an effect that is read back - a push, the
-	// pull request, the review asked for, a label, what is owed - is made
-	// before it counts as never taking effect. Out of rounds, the work is
-	// handed back. A parameter.
-	Rounds int
-
-	// Gate is the local gate: a shell command run in the workspace, which
-	// passes by exiting zero. A parameter.
-	Gate string
-
-	// Attempts is how many times the gate may fail before the work is
-	// handed back. A parameter.
-	Attempts int
-
-	// HandBackLabel is the label a hand-back applies, and HandOffLabel the
-	// one the hand-off does. Parameters.
-	HandBackLabel string
-	HandOffLabel  string
-
-	// CIWait is how long a head whose checks are not finished waits before
-	// it is looked at again, CICeiling how long after its push they may
-	// take before the work is handed back, and CIFixes how many times a
-	// red run is sent back to the session. Parameters.
-	CIWait    time.Duration
-	CICeiling time.Duration
-	CIFixes   int
-
-	// Denylist is the paths the agent may never push, as globs (see
-	// denied). A parameter.
-	Denylist []string
-
-	// Sensitive is the paths the operator named as deserving closer
-	// reading, by label (package sensitive). A pull request that touches
-	// one says so in its description. A parameter; empty, nothing is said.
-	Sensitive []sensitive.Path
-
-	// SizeSignal is the changed non-test lines a pull request may have
-	// before the work needs a decision (package size): over it, the work goes
-	// back to its session once to be cut to a first piece, and a piece still
-	// over it is pushed, and handed back on the issue rather than opened. The
-	// session is told it up front. A parameter.
-	SizeSignal int
-
-	// Store is read, never written: which round of an effect is next, and
-	// where the pull request's review job is. This job's own state is the
-	// runner's to write.
-	Store store.Store
-
-	// AskReview makes the pull request's review job due now, under a lease
-	// of its own: the one store write an effect makes, and it is to another
-	// job. handoff.Asker makes one.
-	AskReview func(ctx context.Context, pr store.Subject, now time.Time) error
-
-	// Repo is the repository, as owner/name: what the permalinks in the
-	// pull request's description are built on, and the repository an
-	// issue's bare #N premise is in. Unset, nothing is linked.
-	Repo string
 
 	// Premises is how a premise's repository is read: the agent's own
 	// client for its own repository, and no token for another (#199). Nil
@@ -228,21 +145,6 @@ type Deps struct {
 	// description's reminder links. A parameter. Unset, the reminder says
 	// it has no link rather than linking nowhere.
 	ReviewProcedure string
-
-	// StateDir is where workspaces and their progress live - beside the
-	// store, never in it (ADR 0001 §5).
-	StateDir string
-
-	// Log receives one line each time the watch finds a failed run on a head
-	// the local gate passed: what CI caught that the gate did not (dotfiles
-	// ADR 0007 §8). And one each time a candidate's run fails transiently:
-	// what it failed with, which nothing else keeps once the next candidate
-	// runs (#98). And one each time the session's part of a description is
-	// set aside - unreadable, with no Start here, or too long for GitHub -
-	// which the pull request alone cannot tell from no part. And one when an
-	// edit of its sensitive line never lands. Nil is silent. It is a log rather than a notification: nothing
-	// here is the operator's to act on.
-	Log func(msg string)
 }
 
 // logf is one line to Log, if there is one.

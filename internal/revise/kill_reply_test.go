@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/git"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
@@ -160,28 +161,30 @@ func TestHelperAnswers(t *testing.T) {
 
 	resolve := func(context.Context) (model.Candidates, error) { return model.Candidates{refFirst}, nil }
 	d := &revise.Deps{
-		Tracker:       dt,
-		Model:         &reviser{turns: []func(string) error{reviseOn("bar.txt", finishedReply)}},
-		Store:         st,
-		Login:         agent,
-		Repo:          repo,
-		Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
-		Resolve:       resolve,
-		Bound:         1,
-		TierWait:      time.Hour,
-		Rounds:        3,
-		Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
-		Attempts:      3,
-		Denylist:      []string{"flake.lock"},
-		CIWait:        10 * time.Minute,
-		CICeiling:     2 * time.Hour,
-		CIFixes:       2,
-		Replays:       1,
-		SizeSignal:    1000,
-		HandOffLabel:  handOff,
-		HandBackLabel: "needs-decision",
-		AskReview:     handoff.Asker(transition.Armer{Store: st, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
-		StateDir:      state,
+		Tracker: dt,
+		Replays: 1,
+		Params: delivery.Params{
+			Model:         &reviser{turns: []func(string) error{reviseOn("bar.txt", finishedReply)}},
+			Store:         st,
+			Login:         agent,
+			Repo:          repo,
+			Remote:        git.Remote{URL: remote, Untrusted: []string{filepath.Join(state, "workspaces")}},
+			Resolve:       resolve,
+			Bound:         1,
+			TierWait:      time.Hour,
+			Rounds:        3,
+			Gate:          "echo checking; test -f ok || { echo 'FAIL: no ok' >&2; exit 1; }",
+			Attempts:      3,
+			Denylist:      []string{"flake.lock"},
+			CIWait:        10 * time.Minute,
+			CICeiling:     2 * time.Hour,
+			CIFixes:       2,
+			SizeSignal:    1000,
+			HandOffLabel:  handOff,
+			HandBackLabel: "needs-decision",
+			AskReview:     handoff.Asker(transition.Armer{Store: st, Holder: "helper-ask-" + killAt, LeaseTTL: time.Minute}),
+			StateDir:      state,
+		},
 	}
 	rd := &review.Deps{
 		Tracker: dt, Model: advisor{}, Store: st,

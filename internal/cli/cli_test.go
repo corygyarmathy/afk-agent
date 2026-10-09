@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/budget"
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/implement"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -1406,36 +1407,40 @@ func standaloneDeps(t *testing.T) *deps {
 			StateDir: t.TempDir(),
 		},
 		implement: &implement.Deps{
-			Tracker: closedTracker{},
-			Login:   "afk-bot",
-			Resolve: func(context.Context) (model.Candidates, error) {
-				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+			Tracker:      closedTracker{},
+			BranchPrefix: "afk/",
+			Params: delivery.Params{
+				Login: "afk-bot",
+				Resolve: func(context.Context) (model.Candidates, error) {
+					return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+				},
+				Bound:         1,
+				Rounds:        1,
+				TierWait:      time.Hour,
+				Gate:          "false",
+				Attempts:      1,
+				HandBackLabel: "needs-decision",
+				StateDir:      t.TempDir(),
 			},
-			BranchPrefix:  "afk/",
-			Bound:         1,
-			Rounds:        1,
-			TierWait:      time.Hour,
-			Gate:          "false",
-			Attempts:      1,
-			HandBackLabel: "needs-decision",
-			StateDir:      t.TempDir(),
 		},
 		revise: &revise.Deps{
 			Tracker: closedTracker{},
-			Store:   st,
-			Login:   "afk-bot",
-			Repo:    "o/n",
-			Resolve: func(context.Context) (model.Candidates, error) {
-				return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+			Params: delivery.Params{
+				Store: st,
+				Login: "afk-bot",
+				Repo:  "o/n",
+				Resolve: func(context.Context) (model.Candidates, error) {
+					return nil, &model.LimitedError{ResetsAt: time.Now().Add(time.Hour)}
+				},
+				Bound:         1,
+				Rounds:        1,
+				TierWait:      time.Hour,
+				Gate:          "false",
+				Attempts:      1,
+				HandOffLabel:  "ready-for-review",
+				HandBackLabel: "needs-decision",
+				StateDir:      t.TempDir(),
 			},
-			Bound:         1,
-			Rounds:        1,
-			TierWait:      time.Hour,
-			Gate:          "false",
-			Attempts:      1,
-			HandOffLabel:  "ready-for-review",
-			HandBackLabel: "needs-decision",
-			StateDir:      t.TempDir(),
 		},
 	}
 }

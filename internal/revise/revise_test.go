@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/corygyarmathy/afk-agent/internal/delivery"
 	"github.com/corygyarmathy/afk-agent/internal/github"
 	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
@@ -101,7 +102,7 @@ func setup(t *testing.T) *fixture {
 	t.Helper()
 	tr := newTracker()
 	s := storetest.Open(t)
-	d := &revise.Deps{Tracker: tr, Store: s, Login: agent, Repo: repo, Rounds: 3, HandOffLabel: handOff, StateDir: t.TempDir()}
+	d := &revise.Deps{Tracker: tr, Params: delivery.Params{Store: s, Login: agent, Repo: repo, Rounds: 3, HandOffLabel: handOff, StateDir: t.TempDir()}}
 	reg := transition.MustRegistry(revise.Transitions(d)...)
 	clock := func() time.Time { return now }
 	return &fixture{

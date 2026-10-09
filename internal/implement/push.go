@@ -109,7 +109,7 @@ func (d *Deps) pushTransition(ctx context.Context, in transition.In) (transition
 
 	// Out of rounds, the work is handed back, and a later command starts it
 	// over on a new branch.
-	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress, head, p.Correction.PushFrom(head))
+	effect, unlanded, err := d.work().PushRound(ctx, d.Store, d.Rounds, in.Job.ID, p.Progress.Progress, head, p.Correction.PushFrom(head))
 	if err != nil {
 		return transition.Result{}, err
 	}
@@ -199,12 +199,12 @@ func (d *Deps) openPR(ctx context.Context, in transition.In) (transition.Result,
 	if err != nil {
 		return transition.Result{}, err
 	}
-	switch landing, at, err := d.work().Land(ctx, &p.Progress, in.Now); {
+	switch landing, at, err := d.work().Land(ctx, &p.Progress.Progress, in.Now); {
 	case err != nil:
 		return transition.Result{}, err
 	case landing == work.Moved:
 		return d.handBack(ctx, in, p, fmt.Sprintf("Someone else changed `%s` before the agent's push of `%s` landed: %s, and the agent does not push over anyone else's work.", p.Branch, git.Short(p.Head), work.Where(at, p.Pushed)),
-			d.work().PushNote(in.Job.ID, p.Progress))
+			d.work().PushNote(in.Job.ID, p.Progress.Progress))
 	case landing == work.NotLanded:
 		return transition.Result{State: Pushing, RunAt: in.Now}, nil
 	}
