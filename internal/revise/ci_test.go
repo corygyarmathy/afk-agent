@@ -57,7 +57,7 @@ func (f *revFixture) gateLog() string {
 func TestARevisionsCIIsWaitedOnAndGreenMovesOn(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
-	f.tr.checks = func(sha string, call int) []github.CheckRun {
+	f.tr.Checks = func(sha string, call int) []github.CheckRun {
 		if call == 1 {
 			return []github.CheckRun{{Name: "build", Status: "in_progress"}}
 		}
@@ -85,7 +85,7 @@ func TestARevisionsCIIsWaitedOnAndGreenMovesOn(t *testing.T) {
 func TestARevisionWaitsForEveryRequiredCheck(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."))
-	f.tr.required = []string{"build", "gate"}
+	f.tr.Required = []string{"build", "gate"}
 
 	f.step(revise.Watching)
 	if job := f.once(); job.State != revise.Watching {
@@ -103,7 +103,7 @@ func TestARedRunGoesBackToTheRevisionsSession(t *testing.T) {
 		reviseOn("fix.txt", "## Points\n\n- \"Rename Foo\" done, and fixed."),
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	job := f.drive()
 	if job.State != revise.Replying {
@@ -154,7 +154,7 @@ func TestAFixMayRewriteTheRevisionsOwnCommits(t *testing.T) {
 		},
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Replying {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
@@ -185,7 +185,7 @@ func TestAFixThatRewritesTheReadHeadHandsBack(t *testing.T) {
 		},
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
@@ -203,7 +203,7 @@ func TestAFixsPushGoesThroughTheDenylist(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."), commitOn("flake.lock"))
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
@@ -233,7 +233,7 @@ func TestAFixsPushIsLeasedOnTheRevisionsPush(t *testing.T) {
 		},
 	)
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Replying {
 		t.Fatalf("the job is in %q, want %s\n%s", job.State, revise.Replying, f.handBack())
@@ -255,7 +255,7 @@ func TestAWorkspaceLostAfterThePushHandsBack(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	f.step(revise.Watching)
 	if job := f.once(); job.State != revise.Revising {
@@ -293,7 +293,7 @@ func TestAProgressLostAfterThePushHandsBack(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	f.step(revise.Watching)
 	if job := f.once(); job.State != revise.Revising {
@@ -332,7 +332,7 @@ func TestAFixThatCommitsNothingHandsBack(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."), func(string) error { return nil })
 	var first string
-	f.tr.checks = redOn(&first)
+	f.tr.Checks = redOn(&first)
 
 	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q, want at rest after a hand-back", job.State)
@@ -352,7 +352,7 @@ func TestARevisionOutOfFixesHandsBackWithThePointsDone(t *testing.T) {
 		commitOn("fix1.txt"),
 		commitOn("fix2.txt"),
 	)
-	f.tr.checks = func(string, int) []github.CheckRun {
+	f.tr.Checks = func(string, int) []github.CheckRun {
 		return []github.CheckRun{{Name: "test", Status: "completed", Conclusion: "failure", Text: "--- FAIL: TestBar"}}
 	}
 
@@ -383,7 +383,7 @@ func TestARevisionOutOfFixesHandsBackWithThePointsDone(t *testing.T) {
 func TestARevisionPastTheCeilingHandsBack(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- \"Rename Foo\" done."))
-	f.tr.checks = func(string, int) []github.CheckRun {
+	f.tr.Checks = func(string, int) []github.CheckRun {
 		return []github.CheckRun{{Name: "build", Status: "queued"}}
 	}
 
@@ -427,7 +427,7 @@ func TestAClosedPullRequestWhileCIRunsRests(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."))
 	f.step(revise.Watching)
-	f.tr.pr.State = "closed"
+	f.tr.PullRequests[12].State = "closed"
 
 	if job := f.drive(); job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q, want at rest", job.State)
@@ -447,7 +447,7 @@ func TestAClosedPullRequestClearedButNotCommittedRests(t *testing.T) {
 	f := setupRevision(t)
 	f.model.then(reviseOn("bar.txt", "## Points\n\n- done."))
 	f.step(revise.Watching)
-	f.tr.pr.State = "closed"
+	f.tr.PullRequests[12].State = "closed"
 	if err := os.Remove(filepath.Join(f.deps.StateDir, "progress", jobID()+".json")); err != nil {
 		t.Fatal(err)
 	}

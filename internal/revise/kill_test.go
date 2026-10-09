@@ -4,7 +4,6 @@ package revise_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
 	"github.com/corygyarmathy/afk-agent/internal/store"
@@ -39,14 +38,10 @@ func TestKillingAClaimStillClaimsAndUnlabelsOnce(t *testing.T) {
 	for _, at := range []string{"before-claim", "after-claim", "before-unlabel", "after-unlabel"} {
 		t.Run(at, func(t *testing.T) {
 			dir := t.TempDir()
-			ft := &fileTracker{path: filepath.Join(dir, "tracker.json")}
-			start := trackerFile{
-				Comments:  []github.Comment{send(1, "/revise Rename Foo.")},
-				Reactions: map[int64][]github.Reaction{},
-				Labels:    []string{handOff, "bug"},
-				Writes:    map[string]int{},
-			}
-			if err := ft.save(start); err != nil {
+			ft := fileTracker(dir, "")
+			start := newTracker()
+			start.Say(12, send(1, "/revise Rename Foo."))
+			if err := ft.Save(start); err != nil {
 				t.Fatal(err)
 			}
 			ready := filepath.Join(dir, "ready")
@@ -72,15 +67,15 @@ func TestKillingAClaimStillClaimsAndUnlabelsOnce(t *testing.T) {
 				t.Fatalf("finishing the claim after the kill: %v\n%s", err, out)
 			}
 
-			got, err := ft.load()
+			got, err := ft.Load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !intake.Claimed(got.Reactions[1], agent) || got.Writes["react"] != 1 {
-				t.Errorf("claimed %v after %d reactions, want claimed by one", intake.Claimed(got.Reactions[1], agent), got.Writes["react"])
+			if !intake.Claimed(got.ReactionsOn[1], agent) || got.Writes["React"] != 1 {
+				t.Errorf("claimed %v after %d reactions, want claimed by one", intake.Claimed(got.ReactionsOn[1], agent), got.Writes["React"])
 			}
-			if len(got.Labels) != 1 || got.Labels[0] != "bug" || got.Writes["unlabel"] != 1 {
-				t.Errorf("labels %v after %d removals, want the hand-off label taken off once", got.Labels, got.Writes["unlabel"])
+			if len(got.PullRequests[12].Labels) != 1 || got.PullRequests[12].Labels[0] != "bug" || got.Writes["Unlabel"] != 1 {
+				t.Errorf("labels %v after %d removals, want the hand-off label taken off once", got.PullRequests[12].Labels, got.Writes["Unlabel"])
 			}
 		})
 	}
@@ -112,7 +107,7 @@ func TestHelperClaimsASendBack(t *testing.T) {
 		t.Skip("run by the kill test, not directly")
 	}
 	killAt := os.Getenv(envKillAt)
-	ft := &fileTracker{path: filepath.Join(dir, "tracker.json"), killAt: killAt, ready: filepath.Join(dir, "ready")}
+	ft := fileTracker(dir, killAt)
 
 	s, err := store.Open(filepath.Join(dir, "state.db"))
 	if err != nil {
@@ -153,161 +148,58 @@ func TestHelperClaimsASendBack(t *testing.T) {
 	t.Fatalf("the claim never finished; it is in %q", job.State)
 }
 
-// fileTracker is pull request 12, whose comments, reactions and labels live in
-// a file, so that what a killed process did to it outlives the process.
-type fileTracker struct {
-	path   string
-	killAt string
-	ready  string
-}
-
-type trackerFile struct {
-	Comments  []github.Comment
-	Reactions map[int64][]github.Reaction
-	Labels    []string
-
-	// Writes counts the writes that landed, by what they were.
-	Writes map[string]int
-}
-
-// die stops this process dead at the named point, if it is the one to be
-// killed at, having told the parent it is there.
-func (ft *fileTracker) die(point string) {
-	if ft.killAt != point {
-		return
-	}
-	os.WriteFile(ft.ready, nil, 0o644)
-	select {}
-}
-
-func (ft *fileTracker) load() (trackerFile, error) {
-	b, err := os.ReadFile(ft.path)
-	if err != nil {
-		return trackerFile{}, err
-	}
-	var f trackerFile
-	err = json.Unmarshal(b, &f)
-	if f.Reactions == nil {
-		f.Reactions = map[int64][]github.Reaction{}
-	}
-	if f.Writes == nil {
-		f.Writes = map[string]int{}
-	}
-	return f, err
-}
-
-func (ft *fileTracker) save(f trackerFile) error {
-	b, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	tmp := ft.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, ft.path)
-}
-
-func (ft *fileTracker) CheckRuns(context.Context, string) ([]github.CheckRun, error) {
-	return nil, errors.New("the claim reads no check runs")
-}
-
-func (ft *fileTracker) RequiredChecks(context.Context, string) ([]string, error) {
-	return nil, errors.New("the claim reads no required checks")
-}
-
-func (ft *fileTracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
-	f, err := ft.load()
-	return github.PullRequest{Number: n, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, Labels: f.Labels}, err
-}
-
-func (ft *fileTracker) EditComment(context.Context, int64, string) error {
-	return errors.New("PATCH comment: this test edits no comment")
-}
-
-func (ft *fileTracker) EditPullRequest(context.Context, int, string) error {
-	return errors.New("the claim never edits a pull request's description")
-}
-
-func (ft *fileTracker) Issue(_ context.Context, n int) (github.Issue, error) {
-	f, err := ft.load()
-	return github.Issue{Number: n, State: "open", PullRequest: true, Labels: f.Labels}, err
-}
-
-func (ft *fileTracker) Comments(context.Context, int) ([]github.Comment, error) {
-	f, err := ft.load()
-	return f.Comments, err
-}
-
-func (ft *fileTracker) Reactions(_ context.Context, id int64) ([]github.Reaction, error) {
-	f, err := ft.load()
-	return f.Reactions[id], err
-}
-
-func (ft *fileTracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
-	return nil, nil
-}
-
-func (ft *fileTracker) React(_ context.Context, id int64, content string) error {
-	ft.die("before-claim")
-	f, err := ft.load()
-	if err != nil {
-		return err
-	}
-	if !intake.Claimed(f.Reactions[id], agent) {
-		f.Reactions[id] = append(f.Reactions[id], github.Reaction{Login: agent, Content: content})
-	}
-	f.Writes["react"]++
-	if err := ft.save(f); err != nil {
-		return err
-	}
-	ft.die("after-claim")
-	return nil
-}
-
-func (ft *fileTracker) Unlabel(_ context.Context, _ int, label string) error {
-	ft.die("before-unlabel")
-	f, err := ft.load()
-	if err != nil {
-		return err
-	}
-	var kept []string
-	for _, l := range f.Labels {
-		if l != label {
-			kept = append(kept, l)
+// fileTracker is the fixture tracker in a file in dir, so that what a killed
+// process did to pull request 12 outlives the process. A non-empty killAt is
+// the point this process stops dead at, having told the parent it is there.
+// Nothing the claim does not do is served.
+func fileTracker(dir, killAt string) *githubtest.File {
+	die := func(point string) {
+		if killAt != point {
+			return
 		}
+		os.WriteFile(filepath.Join(dir, "ready"), nil, 0o644)
+		select {}
 	}
-	f.Labels = kept
-	f.Writes["unlabel"]++
-	if err := ft.save(f); err != nil {
-		return err
+	return &githubtest.File{
+		Path: filepath.Join(dir, "tracker.json"),
+		New: func() *githubtest.Tracker {
+			tr := newTracker()
+			tr.Fail = func(c githubtest.Call) error {
+				switch c.Method {
+				case "CheckRuns":
+					return errors.New("the claim reads no check runs")
+				case "RequiredChecks":
+					return errors.New("the claim reads no required checks")
+				case "EditComment":
+					return errors.New("PATCH comment: this test edits no comment")
+				case "EditPullRequest":
+					return errors.New("the claim never edits a pull request's description")
+				case "Comment":
+					return errors.New("a send-back with points is not answered at its claim")
+				case "ReactToIssue":
+					return errors.New("the revise kind never claims a pull request's description")
+				case "Label":
+					return errors.New("the revise kind's claim never applies a label")
+				}
+				return nil
+			}
+			return tr
+		},
+		Before: func(c githubtest.Call) {
+			switch c.Method {
+			case "React":
+				die("before-claim")
+			case "Unlabel":
+				die("before-unlabel")
+			}
+		},
+		After: func(c githubtest.Call) {
+			switch c.Method {
+			case "React":
+				die("after-claim")
+			case "Unlabel":
+				die("after-unlabel")
+			}
+		},
 	}
-	ft.die("after-unlabel")
-	return nil
-}
-
-func (ft *fileTracker) Comment(context.Context, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("a send-back with points is not answered at its claim")
-}
-
-func (ft *fileTracker) PullRequestReviews(context.Context, int) ([]github.PullRequestReview, error) {
-	return nil, nil
-}
-
-func (ft *fileTracker) LineComments(context.Context, int, int64) ([]github.LineComment, error) {
-	return nil, nil
-}
-
-func (ft *fileTracker) PullRequestReviewReactions(context.Context, string) ([]github.Reaction, error) {
-	return nil, nil
-}
-
-func (ft *fileTracker) ReactToPullRequestReview(context.Context, string, string) error { return nil }
-
-func (ft *fileTracker) ReactToIssue(context.Context, int, string) error {
-	return errors.New("the revise kind never claims a pull request's description")
-}
-
-func (ft *fileTracker) Label(context.Context, int, string) error {
-	return errors.New("the revise kind's claim never applies a label")
 }

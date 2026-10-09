@@ -134,8 +134,8 @@ func (f *revFixture) onRemote(branch string, steps ...any) string {
 func (f *revFixture) sendBack(head string) {
 	f.t.Helper()
 	f.head = head
-	f.tr.pr.HeadSHA = head
-	f.tr.say(12, send(1, "/revise Rename Foo to Bar."))
+	f.tr.PullRequests[12].HeadSHA = head
+	f.tr.Say(12, send(1, "/revise Rename Foo to Bar."))
 	f.claim()
 }
 
@@ -161,7 +161,7 @@ func (f *revFixture) size() (lines, tests int) {
 // was.
 func TestARevisionThatTouchesASensitivePathNamesIt(t *testing.T) {
 	f, _ := sensitiveFixture(t)
-	f.tr.pr.Body = description("")
+	f.tr.PullRequests[12].Body = description("")
 	f.sendBack(f.head)
 	f.model.then(writeOn("infra/main.tf"))
 
@@ -169,8 +169,8 @@ func TestARevisionThatTouchesASensitivePathNamesIt(t *testing.T) {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
 	want := description("**Sensitive:** infra (`infra/main.tf`)")
-	if f.tr.pr.Body != want {
-		t.Errorf("the description is\n%s\nwant\n%s", f.tr.pr.Body, want)
+	if f.tr.PullRequests[12].Body != want {
+		t.Errorf("the description is\n%s\nwant\n%s", f.tr.PullRequests[12].Body, want)
 	}
 }
 
@@ -179,15 +179,15 @@ func TestARevisionThatTouchesASensitivePathNamesIt(t *testing.T) {
 func TestARevisionThatStopsTouchingASensitivePathDropsIt(t *testing.T) {
 	f, _ := sensitiveFixture(t)
 	head := f.onRemote("feature", writeOn("infra/main.tf"), []string{"push", "--quiet", "origin", "feature"})
-	f.tr.pr.Body = description("**Sensitive:** infra (`infra/main.tf`)")
+	f.tr.PullRequests[12].Body = description("**Sensitive:** infra (`infra/main.tf`)")
 	f.sendBack(head)
 	f.model.then(removeOn("infra/main.tf"))
 
 	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
-	if want := description(""); f.tr.pr.Body != want {
-		t.Errorf("the description is\n%s\nwant\n%s", f.tr.pr.Body, want)
+	if want := description(""); f.tr.PullRequests[12].Body != want {
+		t.Errorf("the description is\n%s\nwant\n%s", f.tr.PullRequests[12].Body, want)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestARevisionThatStopsTouchingASensitivePathDropsIt(t *testing.T) {
 // request's.
 func TestARebasedPullRequestIsMeasuredAgainstItsBasesTip(t *testing.T) {
 	f, _ := sensitiveFixture(t)
-	f.tr.pr.Body = description("")
+	f.tr.PullRequests[12].Body = description("")
 	// The base moves on with a sensitive path, the operator rebases the pull
 	// request onto it, and then the base moves on again.
 	f.onRemote("main", writeOn("infra/old.tf"), []string{"push", "--quiet", "origin", "main"})
@@ -212,8 +212,8 @@ func TestARebasedPullRequestIsMeasuredAgainstItsBasesTip(t *testing.T) {
 	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s", job.State, revise.Watching)
 	}
-	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.pr.Body != want {
-		t.Errorf("the description is\n%s\nwant\n%s", f.tr.pr.Body, want)
+	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.PullRequests[12].Body != want {
+		t.Errorf("the description is\n%s\nwant\n%s", f.tr.PullRequests[12].Body, want)
 	}
 	// The pull request's own: feature.txt, and the revision's infra/main.tf,
 	// a line each. The base's ok came in with the rebase, and the revision's
@@ -228,19 +228,19 @@ func TestARebasedPullRequestIsMeasuredAgainstItsBasesTip(t *testing.T) {
 // goes on.
 func TestAnEditThatNeverLandsIsLoggedAndTheRevisionGoesOn(t *testing.T) {
 	f, log := sensitiveFixture(t)
-	f.tr.pr.Body = description("")
-	f.tr.editFails = errors.New("502 Bad Gateway")
+	f.tr.PullRequests[12].Body = description("")
+	fail(f.tr, "EditPullRequest", errors.New("502 Bad Gateway"))
 	f.sendBack(f.head)
 	f.model.then(writeOn("infra/main.tf"))
 
 	if job := f.step(revise.Watching); job.State != revise.Watching {
 		t.Fatalf("the job is in %q, want %s: an edit that never lands costs the revision nothing", job.State, revise.Watching)
 	}
-	if got := f.tr.writes["edit"]; got != f.deps.Rounds {
+	if got := f.tr.Writes["EditPullRequest"]; got != f.deps.Rounds {
 		t.Errorf("the description was edited %d times, want %d", got, f.deps.Rounds)
 	}
-	if f.tr.pr.Body != description("") {
-		t.Errorf("the description changed:\n%s", f.tr.pr.Body)
+	if f.tr.PullRequests[12].Body != description("") {
+		t.Errorf("the description changed:\n%s", f.tr.PullRequests[12].Body)
 	}
 	if f.handedBack() {
 		t.Error("the revision was handed back")
@@ -257,8 +257,8 @@ func TestAnEditThatNeverLandsIsLoggedAndTheRevisionGoesOn(t *testing.T) {
 // request's.
 func TestAPullRequestIntoAnotherBranchIsMeasuredAgainstIt(t *testing.T) {
 	f, _ := sensitiveFixture(t)
-	f.tr.pr.Body = description("")
-	f.tr.pr.BaseRef = "release"
+	f.tr.PullRequests[12].Body = description("")
+	f.tr.PullRequests[12].BaseRef = "release"
 	f.onRemote("main", []string{"switch", "--quiet", "-c", "release"}, writeOn("infra/old.tf"), []string{"push", "--quiet", "origin", "release"})
 	head := f.onRemote("feature",
 		[]string{"fetch", "--quiet", "origin"},
@@ -281,8 +281,8 @@ func TestAPullRequestIntoAnotherBranchIsMeasuredAgainstIt(t *testing.T) {
 	if strings.Contains(given, "infra/old.tf") {
 		t.Errorf("the diff the session was given has release's own infra/old.tf:\n%s", given)
 	}
-	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.pr.Body != want {
-		t.Errorf("the description is\n%s\nwant\n%s", f.tr.pr.Body, want)
+	if want := description("**Sensitive:** infra (`infra/main.tf`)"); f.tr.PullRequests[12].Body != want {
+		t.Errorf("the description is\n%s\nwant\n%s", f.tr.PullRequests[12].Body, want)
 	}
 	if lines, tests := f.size(); lines != 2 || tests != 0 {
 		t.Errorf("the size kept is %d lines and %d of tests, want 2 and 0", lines, tests)
@@ -294,10 +294,10 @@ func TestAPullRequestIntoAnotherBranchIsMeasuredAgainstIt(t *testing.T) {
 // and the sensitive line is left as it was.
 func TestAPushThatCannotBeMeasuredIsLoggedAndGoesOn(t *testing.T) {
 	f, log := sensitiveFixture(t)
-	f.tr.pr.Body = description("")
+	f.tr.PullRequests[12].Body = description("")
 	f.sendBack(f.head)
 	f.model.then(func(dir string) error {
-		f.tr.pr.BaseRef = "gone"
+		f.tr.PullRequests[12].BaseRef = "gone"
 		return writeOn("infra/main.tf")(dir)
 	})
 
@@ -310,7 +310,7 @@ func TestAPushThatCannotBeMeasuredIsLoggedAndGoesOn(t *testing.T) {
 	if at := f.onRemote("feature"); at == f.head {
 		t.Error("the revision was not pushed")
 	}
-	if got := f.tr.writes["edit"]; got != 0 {
+	if got := f.tr.Writes["EditPullRequest"]; got != 0 {
 		t.Errorf("the description was edited %d times, want none: what the push touches is not known", got)
 	}
 	said := strings.Join(*log, "\n")

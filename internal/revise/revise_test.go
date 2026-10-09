@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/corygyarmathy/afk-agent/internal/github"
+	"github.com/corygyarmathy/afk-agent/internal/github/githubtest"
 	"github.com/corygyarmathy/afk-agent/internal/intake"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/revise"
@@ -27,79 +28,25 @@ const (
 
 var now = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 
-// tracker is issue 7 and pull request 12 on a fixture tracker: what intake
-// lists, and what the revise kind reads and writes.
-type tracker struct {
-	pr        github.PullRequest
-	comments  map[int][]github.Comment
-	reactions map[int64][]github.Reaction
-	issues    map[int]github.Issue
-	nextID    int64
-
-	// editFails is the error every edit of the pull request's description
-	// fails with, or nil.
-	editFails error
-
-	// writes counts every write, by what it was.
-	writes map[string]int
-
-	// checks is the check runs on a commit, by the time they are asked
-	// about: green on every head, unless a test says otherwise. required is
-	// the checks the base branch's rules require.
-	checks   func(sha string, call int) []github.CheckRun
-	required []string
-	asks     int
-
-	// live is the bare remote whose feature branch is the pull request's
-	// head, which moves with a push as GitHub's does. Empty is pr's head,
-	// fixed.
-	live string
-
-	// drop is a marker whose comments are lost: posted, and never seen.
-	drop string
-
-	// events is every write that landed, in order, and reacts how many
-	// reactions landed on each comment.
-	events []string
-	reacts map[int64]int
-
-	// reviews is the reviews on pull request 12, lines each review's line
-	// comments, and reviewEyes the reactions on each review, by node id.
-	reviews    []github.PullRequestReview
-	lines      map[int64][]github.LineComment
-	reviewEyes map[string][]github.Reaction
-
-	// compares is every diff between two commits read, as base...head.
-	compares []string
-}
-
-func newTracker() *tracker {
-	return &tracker{
-		pr: github.PullRequest{
-			Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main", BaseSHA: base,
-			Login: "alice", Labels: []string{handOff, "bug"},
-		},
-		comments:   map[int][]github.Comment{},
-		reactions:  map[int64][]github.Reaction{},
-		issues:     map[int]github.Issue{},
-		nextID:     1000,
-		writes:     map[string]int{},
-		reacts:     map[int64]int{},
-		lines:      map[int64][]github.LineComment{},
-		reviewEyes: map[string][]github.Reaction{},
+// newTracker is issue 7 and pull request 12 on a fixture tracker: what intake
+// lists, and what the revise kind reads and writes. Its checks are green on
+// every head, unless a test says otherwise, and it refuses a claim on a pull
+// request's description, which the revise kind never makes.
+func newTracker() *githubtest.Tracker {
+	tr := githubtest.New(agent)
+	tr.Issues[7] = &github.Issue{Number: 7, State: "open", DependenciesRead: true}
+	tr.PullRequests[12] = &github.PullRequest{
+		Number: 12, State: "open", HeadSHA: head, HeadRef: "feature", HeadRepo: repo, BaseRef: "main", BaseSHA: base,
+		Login: "alice", Labels: []string{handOff, "bug"},
 	}
-}
-
-func (tr *tracker) CheckRuns(_ context.Context, sha string) ([]github.CheckRun, error) {
-	tr.asks++
-	if tr.checks == nil {
-		return green(sha, tr.asks), nil
+	tr.Checks = green
+	tr.Fail = func(c githubtest.Call) error {
+		if c.Method == "ReactToIssue" {
+			return errors.New("the revise kind never claims a pull request's description")
+		}
+		return nil
 	}
-	return tr.checks(sha, tr.asks), nil
-}
-
-func (tr *tracker) RequiredChecks(context.Context, string) ([]string, error) {
-	return tr.required, nil
+	return tr
 }
 
 // green is every check passed.
@@ -107,184 +54,30 @@ func green(string, int) []github.CheckRun {
 	return []github.CheckRun{{Name: "build", Status: "completed", Conclusion: "success"}, {Name: "lint", Status: "completed", Conclusion: "skipped"}}
 }
 
-// say posts a comment on subject n, as someone other than the agent.
-func (tr *tracker) say(n int, c github.Comment) {
-	tr.comments[n] = append(tr.comments[n], c)
-}
-
-func (tr *tracker) OpenIssues(context.Context) ([]github.Issue, error) {
-	out := []github.Issue{{Number: 7, State: "open", DependenciesRead: true}}
-	if tr.pr.State == "open" {
-		out = append(out, github.Issue{Number: 12, State: "open", PullRequest: true, Author: tr.pr.Login, Labels: tr.pr.Labels})
-	}
-	return out, nil
-}
-
-func (tr *tracker) PullRequest(_ context.Context, n int) (github.PullRequest, error) {
-	if n != 12 {
-		return github.PullRequest{}, &github.StatusError{Code: 404, Status: "404 Not Found"}
-	}
-	pr := tr.pr
-	pr.Labels = append([]string(nil), tr.pr.Labels...)
-	if tr.live != "" {
-		if at, err := run(tr.live, "git", "rev-parse", "refs/heads/feature"); err == nil {
-			pr.HeadSHA = at
+// fail makes every call of method on tr fail with err, without landing, and
+// leaves what else tr fails as it was.
+func fail(tr *githubtest.Tracker, method string, err error) {
+	before := tr.Fail
+	tr.Fail = func(c githubtest.Call) error {
+		if c.Method == method {
+			return err
 		}
+		return before(c)
 	}
-	return pr, nil
 }
 
-func (tr *tracker) Compare(_ context.Context, base, head string) (string, error) {
-	tr.compares = append(tr.compares, base+"..."+head)
-	return "", nil
-}
-
-func (tr *tracker) Issue(_ context.Context, n int) (github.Issue, error) {
-	if n == 12 {
-		return github.Issue{Number: 12, State: tr.pr.State, PullRequest: true, Labels: tr.pr.Labels}, nil
+// drop makes a comment of tr's carrying marker land and never be seen. An
+// empty marker drops nothing.
+func drop(tr *githubtest.Tracker, marker string) {
+	tr.Drop = func(c githubtest.Call) bool {
+		return marker != "" && c.Method == "Comment" && strings.Contains(c.Text, marker)
 	}
-	if is, ok := tr.issues[n]; ok {
-		return is, nil
-	}
-	return github.Issue{Number: n, State: "open"}, nil
 }
 
-func (tr *tracker) Comments(_ context.Context, n int) ([]github.Comment, error) {
-	return append([]github.Comment(nil), tr.comments[n]...), nil
-}
-
-func (tr *tracker) Reactions(_ context.Context, id int64) ([]github.Reaction, error) {
-	return tr.reactions[id], nil
-}
-
-func (tr *tracker) IssueReactions(context.Context, int) ([]github.Reaction, error) {
-	return nil, nil
-}
-
-func (tr *tracker) Comment(_ context.Context, n int, body string) (github.Comment, error) {
-	tr.writes["comment"]++
-	tr.nextID++
-	c := github.Comment{ID: tr.nextID, Login: agent, Body: body}
-	if tr.drop != "" && strings.Contains(body, tr.drop) {
-		return c, nil
-	}
-	tr.comments[n] = append(tr.comments[n], c)
-	tr.events = append(tr.events, fmt.Sprintf("comment %d", c.ID))
-	return c, nil
-}
-
-func (tr *tracker) React(_ context.Context, id int64, content string) error {
-	tr.writes["react"]++
-	tr.reacts[id]++
-	tr.events = append(tr.events, fmt.Sprintf("react %d", id))
-	if !intake.Claimed(tr.reactions[id], agent) {
-		tr.reactions[id] = append(tr.reactions[id], github.Reaction{Login: agent, Content: content})
-	}
-	return nil
-}
-
-// PullRequestReviews is the reviews on pull request 12. One a test gave no
-// commit was written on the pull request's head, as its line comments were.
-func (tr *tracker) PullRequestReviews(ctx context.Context, n int) ([]github.PullRequestReview, error) {
-	if n != 12 {
-		return nil, nil
-	}
-	out := append([]github.PullRequestReview(nil), tr.reviews...)
-	for i := range out {
-		if out[i].CommitID == "" {
-			out[i].CommitID = tr.head(ctx)
-		}
-	}
-	return out, nil
-}
-
-func (tr *tracker) LineComments(ctx context.Context, _ int, review int64) ([]github.LineComment, error) {
-	out := append([]github.LineComment(nil), tr.lines[review]...)
-	for i := range out {
-		if out[i].CommitID == "" {
-			out[i].CommitID = tr.head(ctx)
-		}
-	}
-	return out, nil
-}
-
-// head is pull request 12's head, as PullRequest reads it.
-func (tr *tracker) head(ctx context.Context) string {
-	pr, _ := tr.PullRequest(ctx, 12)
-	return pr.HeadSHA
-}
-
-func (tr *tracker) PullRequestReviewReactions(_ context.Context, nodeID string) ([]github.Reaction, error) {
-	return tr.reviewEyes[nodeID], nil
-}
-
-func (tr *tracker) ReactToPullRequestReview(_ context.Context, nodeID, content string) error {
-	tr.writes["react-review"]++
-	tr.events = append(tr.events, "react-review "+nodeID)
-	if !intake.Claimed(tr.reviewEyes[nodeID], agent) {
-		tr.reviewEyes[nodeID] = append(tr.reviewEyes[nodeID], github.Reaction{Login: agent, Content: content})
-	}
-	return nil
-}
-
-func (tr *tracker) ReactToIssue(context.Context, int, string) error {
-	return errors.New("the revise kind never claims a pull request's description")
-}
-
-func (tr *tracker) Label(_ context.Context, _ int, label string) error {
-	tr.writes["label"]++
-	tr.events = append(tr.events, "label "+label)
-	for _, l := range tr.pr.Labels {
-		if l == label {
-			return nil
-		}
-	}
-	tr.pr.Labels = append(tr.pr.Labels, label)
-	return nil
-}
-
-func (tr *tracker) Unlabel(_ context.Context, n int, label string) error {
-	tr.writes["unlabel"]++
-	var kept []string
-	for _, l := range tr.pr.Labels {
-		if l != label {
-			kept = append(kept, l)
-		}
-	}
-	tr.pr.Labels = kept
-	return nil
-}
-
-func (tr *tracker) EditComment(_ context.Context, id int64, body string) error {
-	tr.writes["edit-comment"]++
-	for n, cs := range tr.comments {
-		for i := range cs {
-			if cs[i].ID == id {
-				tr.comments[n][i].Body = body
-				tr.events = append(tr.events, "edit-comment")
-				return nil
-			}
-		}
-	}
-	return &github.StatusError{Code: 404, Status: "404 Not Found"}
-}
-
-func (tr *tracker) EditPullRequest(_ context.Context, n int, body string) error {
-	tr.writes["edit"]++
-	if tr.editFails != nil {
-		return tr.editFails
-	}
-	if n != 12 {
-		return &github.StatusError{Code: 404, Status: "404 Not Found"}
-	}
-	tr.pr.Body = body
-	return nil
-}
-
-// answers is the agent's replies to comment id.
-func (tr *tracker) answers(id int64) []string {
+// answersTo is the agent's replies to comment id.
+func answersTo(tr *githubtest.Tracker, id int64) []string {
 	var out []string
-	for _, c := range tr.comments[12] {
+	for _, c := range tr.CommentsOn[12] {
 		if c.Login == agent && strings.Contains(c.Body, owed.ReplyMarker(id)) {
 			out = append(out, c.Body)
 		}
@@ -292,17 +85,12 @@ func (tr *tracker) answers(id int64) []string {
 	return out
 }
 
-func (tr *tracker) claimed(id int64) bool {
-	return intake.Claimed(tr.reactions[id], agent)
+func claimed(tr *githubtest.Tracker, id int64) bool {
+	return intake.Claimed(tr.ReactionsOn[id], agent)
 }
 
-func (tr *tracker) labelled() bool {
-	for _, l := range tr.pr.Labels {
-		if l == handOff {
-			return true
-		}
-	}
-	return false
+func labelled(tr *githubtest.Tracker) bool {
+	return github.HasLabel(tr.PullRequests[12].Labels, handOff)
 }
 
 // send is a /revise from the operator.
@@ -318,7 +106,7 @@ func answer(id, answered int64) github.Comment {
 
 type fixture struct {
 	t     *testing.T
-	tr    *tracker
+	tr    *githubtest.Tracker
 	store store.Store
 	deps  *revise.Deps
 	reg   *transition.Registry
@@ -385,7 +173,7 @@ func (f *fixture) drive() store.Job {
 // to the work with the points and the head they were written against.
 func TestASendBackIsClaimedAndMovesOnToTheWork(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise\nRename Foo to Bar.\n\nadvisory 3, but keep the test"))
+	f.tr.Say(12, send(1, "/revise\nRename Foo to Bar.\n\nadvisory 3, but keep the test"))
 
 	made := f.pass()
 	if len(made) != 1 || made[0].Kind != store.KindRevise || made[0].Subject.Number != 12 {
@@ -395,14 +183,14 @@ func TestASendBackIsClaimedAndMovesOnToTheWork(t *testing.T) {
 	if job.State != revise.Revising || job.NextRunAt.IsZero() {
 		t.Errorf("the job is in %q (due %v), want revising and due", job.State, !job.NextRunAt.IsZero())
 	}
-	if !f.tr.claimed(1) {
+	if !claimed(f.tr, 1) {
 		t.Error("the command is not claimed")
 	}
-	if got := strings.Join(f.tr.pr.Labels, ","); got != "bug" {
+	if got := strings.Join(f.tr.PullRequests[12].Labels, ","); got != "bug" {
 		t.Errorf("labels are %q, want only the hand-off label taken off", got)
 	}
-	if f.tr.writes["comment"] != 0 {
-		t.Errorf("%d comments, want none: the reply is the revision's", f.tr.writes["comment"])
+	if f.tr.Writes["Comment"] != 0 {
+		t.Errorf("%d comments, want none: the reply is the revision's", f.tr.Writes["Comment"])
 	}
 	sb, err := f.deps.Load(job.ID)
 	if err != nil {
@@ -423,15 +211,15 @@ func TestASendBackIsClaimedAndMovesOnToTheWork(t *testing.T) {
 // an issue arms nothing.
 func TestOnlyAWritersRevisionOnAPullRequestArmsAJob(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, github.Comment{ID: 1, Login: "mallory", Association: "CONTRIBUTOR", Body: "/revise do it"})
-	f.tr.say(12, github.Comment{ID: 2, Login: "stranger", Association: "NONE", Body: "/revise do it"})
-	f.tr.say(12, github.Comment{ID: 3, Login: agent, Association: "OWNER", Body: "/revise do it"})
-	f.tr.say(7, send(4, "/revise do it"))
+	f.tr.Say(12, github.Comment{ID: 1, Login: "mallory", Association: "CONTRIBUTOR", Body: "/revise do it"})
+	f.tr.Say(12, github.Comment{ID: 2, Login: "stranger", Association: "NONE", Body: "/revise do it"})
+	f.tr.Say(12, github.Comment{ID: 3, Login: agent, Association: "OWNER", Body: "/revise do it"})
+	f.tr.Say(7, send(4, "/revise do it"))
 
 	if made := f.pass(); len(made) != 0 {
 		t.Errorf("intake made %v, want nothing", made)
 	}
-	if n := len(f.tr.reactions); n != 0 {
+	if n := len(f.tr.ReactionsOn); n != 0 {
 		t.Errorf("%d comments reacted to, want none", n)
 	}
 }
@@ -440,16 +228,16 @@ func TestOnlyAWritersRevisionOnAPullRequestArmsAJob(t *testing.T) {
 // in the order they were written, and each is claimed.
 func TestUnansweredSendBacksAreOneSendBackInOrder(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise Rename Foo."))
-	f.tr.say(12, github.Comment{ID: 2, Login: "cory", Association: "OWNER", Body: "Looking again."})
-	f.tr.say(12, send(3, "/revise And drop the flag."))
+	f.tr.Say(12, send(1, "/revise Rename Foo."))
+	f.tr.Say(12, github.Comment{ID: 2, Login: "cory", Association: "OWNER", Body: "Looking again."})
+	f.tr.Say(12, send(3, "/revise And drop the flag."))
 	f.pass()
 
 	job := f.drive()
 	if job.State != revise.Revising {
 		t.Fatalf("the job is in %q, want revising", job.State)
 	}
-	if !f.tr.claimed(1) || !f.tr.claimed(3) {
+	if !claimed(f.tr, 1) || !claimed(f.tr, 3) {
 		t.Error("not every command is claimed")
 	}
 	sb, err := f.deps.Load(job.ID)
@@ -459,8 +247,8 @@ func TestUnansweredSendBacksAreOneSendBackInOrder(t *testing.T) {
 	if fmt.Sprint(sb.Points) != fmt.Sprint([]revise.Point{{Comment: 1, Text: "Rename Foo."}, {Comment: 3, Text: "And drop the flag."}}) {
 		t.Errorf("points = %+v, want both commands' in order", sb.Points)
 	}
-	if f.tr.writes["unlabel"] != 1 {
-		t.Errorf("the label was taken off %d times, want once", f.tr.writes["unlabel"])
+	if f.tr.Writes["Unlabel"] != 1 {
+		t.Errorf("the label was taken off %d times, want once", f.tr.Writes["Unlabel"])
 	}
 }
 
@@ -468,20 +256,20 @@ func TestUnansweredSendBacksAreOneSendBackInOrder(t *testing.T) {
 // nothing else happens: no label off, no work.
 func TestWhatCannotBeRevisedGetsOneReply(t *testing.T) {
 	for name, tc := range map[string]struct {
-		prepare func(*tracker)
+		prepare func(*githubtest.Tracker)
 		body    string
 		says    string
 	}{
 		"no points":         {body: "/revise   ", says: "nothing here to revise"},
 		"no points, a line": {body: "/revise\n\n", says: "nothing here to revise"},
-		"a fork":            {prepare: func(tr *tracker) { tr.pr.HeadRepo = "someone/fork" }, body: "/revise Rename Foo.", says: "not in o/n"},
-		"a deleted fork":    {prepare: func(tr *tracker) { tr.pr.HeadRepo = "" }, body: "/revise Rename Foo.", says: "not in o/n"},
+		"a fork":            {prepare: func(tr *githubtest.Tracker) { tr.PullRequests[12].HeadRepo = "someone/fork" }, body: "/revise Rename Foo.", says: "not in o/n"},
+		"a deleted fork":    {prepare: func(tr *githubtest.Tracker) { tr.PullRequests[12].HeadRepo = "" }, body: "/revise Rename Foo.", says: "not in o/n"},
 		"in flight": {
-			prepare: func(tr *tracker) {
+			prepare: func(tr *githubtest.Tracker) {
 				// An earlier send-back, claimed, answered only after
 				// this one was written.
-				tr.say(12, send(1, "/revise First."))
-				tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+				tr.Say(12, send(1, "/revise First."))
+				tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 			},
 			body: "/revise Second.", says: "in flight",
 		},
@@ -491,9 +279,9 @@ func TestWhatCannotBeRevisedGetsOneReply(t *testing.T) {
 			if tc.prepare != nil {
 				tc.prepare(f.tr)
 			}
-			f.tr.say(12, send(5, tc.body))
+			f.tr.Say(12, send(5, tc.body))
 			if name == "in flight" {
-				f.tr.say(12, answer(6, 1))
+				f.tr.Say(12, answer(6, 1))
 			}
 			f.pass()
 
@@ -501,14 +289,14 @@ func TestWhatCannotBeRevisedGetsOneReply(t *testing.T) {
 			if job.State != revise.Start || !job.NextRunAt.IsZero() {
 				t.Errorf("the job is in %q (due %v), want at rest in start", job.State, !job.NextRunAt.IsZero())
 			}
-			if !f.tr.claimed(5) {
+			if !claimed(f.tr, 5) {
 				t.Error("the command is not claimed")
 			}
-			answers := f.tr.answers(5)
+			answers := answersTo(f.tr, 5)
 			if len(answers) != 1 || !strings.Contains(answers[0], tc.says) {
 				t.Errorf("answers = %q, want one saying %q", answers, tc.says)
 			}
-			if !f.tr.labelled() || f.tr.writes["unlabel"] != 0 {
+			if !labelled(f.tr) || f.tr.Writes["Unlabel"] != 0 {
 				t.Error("the hand-off label came off, with nothing to revise")
 			}
 			if _, err := f.deps.Load(job.ID); err == nil {
@@ -521,7 +309,7 @@ func TestWhatCannotBeRevisedGetsOneReply(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.drive()
-			if n := len(f.tr.answers(5)); n != 1 {
+			if n := len(answersTo(f.tr, 5)); n != 1 {
 				t.Errorf("%d answers after running again, want 1", n)
 			}
 		})
@@ -534,19 +322,19 @@ func TestASendBackAfterTheLastRevisionIsNotInFlight(t *testing.T) {
 	for name, answered := range map[string]bool{"answered": true, "parked": false} {
 		t.Run(name, func(t *testing.T) {
 			f := setup(t)
-			f.tr.say(12, send(1, "/revise First."))
-			f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+			f.tr.Say(12, send(1, "/revise First."))
+			f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
 			if answered {
-				f.tr.say(12, answer(2, 1))
+				f.tr.Say(12, answer(2, 1))
 			}
-			f.tr.say(12, send(3, "/revise Second."))
+			f.tr.Say(12, send(3, "/revise Second."))
 			f.pass()
 
 			job := f.drive()
 			if job.State != revise.Revising {
 				t.Errorf("the job is in %q, want revising", job.State)
 			}
-			if n := len(f.tr.answers(3)); n != 0 {
+			if n := len(answersTo(f.tr, 3)); n != 0 {
 				t.Errorf("%d answers to the send-back, want none yet", n)
 			}
 		})
@@ -557,18 +345,18 @@ func TestASendBackAfterTheLastRevisionIsNotInFlight(t *testing.T) {
 // refused, and the ones after it are the send-back.
 func TestInFlightAndAfterAreToldApart(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise First."))
-	f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-	f.tr.say(12, send(2, "/revise During."))
-	f.tr.say(12, answer(3, 1))
-	f.tr.say(12, send(4, "/revise After."))
+	f.tr.Say(12, send(1, "/revise First."))
+	f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f.tr.Say(12, send(2, "/revise During."))
+	f.tr.Say(12, answer(3, 1))
+	f.tr.Say(12, send(4, "/revise After."))
 	f.pass()
 
 	job := f.drive()
 	if job.State != revise.Revising {
 		t.Fatalf("the job is in %q, want revising", job.State)
 	}
-	if a := f.tr.answers(2); len(a) != 1 || !strings.Contains(a[0], "in flight") {
+	if a := answersTo(f.tr, 2); len(a) != 1 || !strings.Contains(a[0], "in flight") {
 		t.Errorf("answers to the command during the flight = %q, want one refusal", a)
 	}
 	sb, err := f.deps.Load(job.ID)
@@ -585,18 +373,18 @@ func TestInFlightAndAfterAreToldApart(t *testing.T) {
 // head it was written against has moved.
 func TestACommandBetweenTheReplyAndTheHandBackIsInFlight(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise First."))
-	f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-	f.tr.say(12, answer(2, 1)) // the revision's reply, before the command
-	f.tr.say(12, send(3, "/revise Second."))
-	f.tr.say(12, answer(4, 1)) // the revision's hand-back, after it
+	f.tr.Say(12, send(1, "/revise First."))
+	f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f.tr.Say(12, answer(2, 1)) // the revision's reply, before the command
+	f.tr.Say(12, send(3, "/revise Second."))
+	f.tr.Say(12, answer(4, 1)) // the revision's hand-back, after it
 	f.pass()
 
 	job := f.drive()
 	if job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Fatalf("the job is in %q (due %v), want at rest in start", job.State, !job.NextRunAt.IsZero())
 	}
-	if a := f.tr.answers(3); len(a) != 1 || !strings.Contains(a[0], "in flight") {
+	if a := answersTo(f.tr, 3); len(a) != 1 || !strings.Contains(a[0], "in flight") {
 		t.Errorf("answers to the command between the reply and the hand-back = %q, want one refusal", a)
 	}
 }
@@ -606,19 +394,19 @@ func TestACommandBetweenTheReplyAndTheHandBackIsInFlight(t *testing.T) {
 // revision was in flight, only a reply in the post.
 func TestARefusalReplyIsNotARevisionAnswer(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise")) // refused earlier: no points
-	f.tr.reactions[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
-	f.tr.say(12, send(3, "/revise Rename Foo."))
+	f.tr.Say(12, send(1, "/revise")) // refused earlier: no points
+	f.tr.ReactionsOn[1] = []github.Reaction{{Login: agent, Content: intake.Claim}}
+	f.tr.Say(12, send(3, "/revise Rename Foo."))
 	// The earlier command's refusal reply is posted only after the command
 	// below was written, the way a killed claim's read-back replays it.
-	f.tr.say(12, github.Comment{ID: 4, Login: agent, Body: owed.ReplyMarker(1) + "\nThere is nothing here to revise."})
+	f.tr.Say(12, github.Comment{ID: 4, Login: agent, Body: owed.ReplyMarker(1) + "\nThere is nothing here to revise."})
 	f.pass()
 
 	job := f.drive()
 	if job.State != revise.Revising {
 		t.Errorf("the job is in %q, want revising", job.State)
 	}
-	if a := f.tr.answers(3); len(a) != 0 {
+	if a := answersTo(f.tr, 3); len(a) != 0 {
 		t.Errorf("answers to the command after a refusal = %q, want none", a)
 	}
 }
@@ -626,9 +414,9 @@ func TestARefusalReplyIsNotARevisionAnswer(t *testing.T) {
 // A closed pull request's commands are claimed, and nothing else happens.
 func TestAClosedPullRequestsCommandsAreOnlyClaimed(t *testing.T) {
 	f := setup(t)
-	f.tr.say(12, send(1, "/revise Rename Foo."))
-	f.tr.say(12, send(2, "/revise"))
-	f.tr.pr.State = "closed"
+	f.tr.Say(12, send(1, "/revise Rename Foo."))
+	f.tr.Say(12, send(2, "/revise"))
+	f.tr.PullRequests[12].State = "closed"
 
 	// Intake lists open subjects only, so this is the job run by hand.
 	a := transition.Armer{Store: f.store, Holder: "operator", LeaseTTL: time.Minute}
@@ -639,11 +427,11 @@ func TestAClosedPullRequestsCommandsAreOnlyClaimed(t *testing.T) {
 	if job.State != revise.Start || !job.NextRunAt.IsZero() {
 		t.Errorf("the job is in %q, want at rest in start", job.State)
 	}
-	if !f.tr.claimed(1) || !f.tr.claimed(2) {
+	if !claimed(f.tr, 1) || !claimed(f.tr, 2) {
 		t.Error("not every command is claimed")
 	}
-	if f.tr.writes["comment"] != 0 || f.tr.writes["unlabel"] != 0 {
-		t.Errorf("writes = %v, want only the claims", f.tr.writes)
+	if f.tr.Writes["Comment"] != 0 || f.tr.Writes["Unlabel"] != 0 {
+		t.Errorf("writes = %v, want only the claims", f.tr.Writes)
 	}
 }
 
@@ -652,8 +440,8 @@ func TestAClosedPullRequestsCommandsAreOnlyClaimed(t *testing.T) {
 // showed, and the read-back is what catches the label appearing in between.
 func TestALabelAppliedAfterTheClaimIsStillTakenOff(t *testing.T) {
 	f := setup(t)
-	f.tr.pr.Labels = []string{"bug"}
-	f.tr.say(12, send(1, "/revise Rename Foo."))
+	f.tr.PullRequests[12].Labels = []string{"bug"}
+	f.tr.Say(12, send(1, "/revise Rename Foo."))
 	subject := store.Subject{Type: store.SubjectPR, Number: 12}
 	if _, err := f.store.Ensure(context.Background(), store.KindRevise, subject, revise.Start, now); err != nil {
 		t.Fatal(err)
@@ -665,11 +453,11 @@ func TestALabelAppliedAfterTheClaimIsStillTakenOff(t *testing.T) {
 	}
 
 	// The label appears while the claim's effects are in the post.
-	f.tr.pr.Labels = []string{"bug", handOff}
+	f.tr.PullRequests[12].Labels = []string{"bug", handOff}
 	if _, err := f.run.Run(ctx, "revise-claimed", id); err != nil {
 		t.Fatal(err)
 	}
-	if f.tr.labelled() {
+	if labelled(f.tr) {
 		t.Error("the hand-off label is still on, want it taken off")
 	}
 }
@@ -680,14 +468,14 @@ func TestALabelAppliedAfterTheClaimIsStillTakenOff(t *testing.T) {
 // one applied after that read.
 func TestNoHandOffLabelIsTakenOffHarmlessly(t *testing.T) {
 	f := setup(t)
-	f.tr.pr.Labels = []string{"bug"}
-	f.tr.say(12, send(1, "/revise Rename Foo."))
+	f.tr.PullRequests[12].Labels = []string{"bug"}
+	f.tr.Say(12, send(1, "/revise Rename Foo."))
 	f.pass()
 
 	if job := f.drive(); job.State != revise.Revising {
 		t.Errorf("the job is in %q, want revising", job.State)
 	}
-	if got := strings.Join(f.tr.pr.Labels, ","); got != "bug" {
+	if got := strings.Join(f.tr.PullRequests[12].Labels, ","); got != "bug" {
 		t.Errorf("labels are %q, want only bug", got)
 	}
 }
