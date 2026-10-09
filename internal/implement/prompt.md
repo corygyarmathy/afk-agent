@@ -21,9 +21,10 @@ was not fetched is a premise whose source can't be read.
 {{- if not (or .Failed .Cutting .Correcting .Opened)}}
 
 Nobody can answer a question while you work, so a gap the skill finds in the
-issue means committing nothing. Write the skill's report, with its questions,
-to `.git/afk-description.md` and stop: the agent posts them on the issue, and
-the answers come back to the next session as instructions.
+issue means committing nothing. Write the skill's questions, each with its
+recommended answer, to `.git/afk-questions.md` and stop: the agent posts them
+on the issue, and the answers come back to the next session as instructions.
+Write that file only when you stop on a gap.
 {{- end}}
 {{if .Whole}}
 The person who asked wants the work as one pull request, whatever its size. Do

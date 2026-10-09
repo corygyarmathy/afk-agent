@@ -92,32 +92,38 @@ a premise the agent fetched for it.
     the two differ;
   - an issue, a pull request or a comment link, and a `#N`: the thread as it is
     now, its description and every comment, with a linked comment marked.
-    Review comments on a pull request's diff are not in it.
+    Review comments on a pull request's diff are not in it, and a link to one,
+    or to a review, is not fetched.
 
   `index.md` there lists each link and what it was fetched into. The prompt
   points the session at it.
-- **Once for each workspace.** A gate retry, a CI fix or a session that takes
-  over reads what the first run read. A new `/implement` is a new workspace,
-  and fetches again.
+- **Each link once for each workspace.** A gate retry, a CI fix or a session
+  that takes over reads what the first run read of a link it read in full. A
+  link it could not read, or read only part of, is fetched again on each run,
+  since what failed may have been GitHub for a moment. A fetch cut short, by a
+  shutdown or a deadline, fails the run rather than listing the rest as not
+  fetched. A new `/implement` is a new workspace, and fetches again.
 - **A link that can't be fetched fails nothing**: one on another host, one that
-  is neither a file permalink nor a thread, a private repository the App is
-  not installed on, a file gone at the head. The index says why, and the
+  is neither a file permalink nor a thread, a review comment, another
+  repository that is private, a file gone at the head. The index says why, and the
   session lists it under **Not verified**. A fetch with any of these is a log
   line, with the count.
 - **Credentials.** A premise in the agent's own repository is read with its own
-  token. One in another repository is read as the App on its installation
-  there, with a token minted for that repository alone
-  ([ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) §4).
-  Where the App has no installation, it is read with no token, as anyone would:
-  a public repository is read, within GitHub's limit for unauthenticated
-  requests from the host, and a private one is not fetched.
+  token. One in another repository is read with no token, as anyone would: a
+  public repository is read, within GitHub's limit for unauthenticated
+  requests from the host, and a private one is not fetched. The App's token
+  reaches only the repository the agent is working
+  ([ADR 0005](../adr/0005-the-agent-authenticates-as-its-github-app.md) §4);
+  whether it may read another is
+  [#207](https://github.com/corygyarmathy/afk-agent/issues/207).
 
 ### A stop on a gap
 
 The first session is told that, with nobody to ask, a gap in the issue means
-committing nothing, and writing its questions as its report. A session that
-does commits nothing, and opens its report with `Stopped on gaps: nothing
-changed.`
+committing nothing, and writing its questions, each with its recommended
+answer, to `.git/afk-questions.md`. A session that commits nothing and leaves
+that file is a stop on a gap. The file is what the agent reads, not the
+wording of the session's report, which is the vendored skill's to change.
 
 - **It is a hand-back on the issue**, as a session that commits nothing
   already is, and nothing was pushed. Its detail is the session's questions **in
@@ -129,8 +135,8 @@ changed.`
   more recent word than the issue. The agent never edits the issue.
 - **It cannot loop.** Unattended intake does not take a handed-back issue
   again, because its job is still in the store: only a command runs it again.
-- Only work not yet pushed is read for it. A report without the line, or with
-  nothing after it, is a session that committed nothing, and is handed back as
+- Only work not yet pushed is read for it. With no file, or an empty one, the
+  session committed nothing for some other reason, and is handed back as
   one.
 
 ### A criterion the work cannot meet
@@ -139,7 +145,9 @@ An acceptance criterion the pull request can't meet by itself - one that needs
 a deploy or a hand run - is listed under **Not verified**, as the `pr` skill
 says, and in `.git/afk-unmet.md`, as the prompt asks. Work with one says
 `Refs #N` rather than `Closes #N`, so merging it does not close an issue with a
-check still to do. The file is read before the push only, as what is left is,
+check still to do. The criteria are listed under the link line too, in the
+session's words, so they are there whether or not its own part repeats them.
+The file is read before the push only, as what is left is,
 and a file that says only "none" is no criterion. A first piece is `Part of`
 either way. The advisory review reads `Refs` back as the issue the work is
 reviewed against ([`review.md`](review.md)).
@@ -241,7 +249,9 @@ Its sections, in this order, each left out when it has nothing to say:
    ([the size signal](#the-size-signal)), or `Refs #N` on work with
    [a criterion it cannot meet](#a-criterion-the-work-cannot-meet). The
    advisory review reads that line back ([`review.md`](review.md)), so it is
-   the one straight after the marker. The agent's.
+   the one straight after the marker. Under it, a **Not verified** note
+   listing the criteria from `.git/afk-unmet.md`, when there are any. The
+   agent's.
 2. **The sensitive line**, only on a pull request that touches a sensitive
    path: `**Sensitive:** job store schema (…), CI (…)`, each label the
    operator named that matched, in the operator's order, with the files it
@@ -434,7 +444,6 @@ non-test lines the work may have before its size needs a decision. The code is
   | Contents | write | the push, and the clone and every read of the remote's branches (write includes read) | the grant confirmed on the App by the operator, 2026-09-25; a read of a private repository not observed |
   | Pull requests | write | opening the pull request, its labels; editing the advisory review once a correction is done with | confirmed on the App by the operator, 2026-09-25; the edit not verified |
   | Issues | write | the claim, replies, hand-backs and labels on the issue; filing a first piece's rest, and its native dependency | by GitHub's documentation for the claim and the rest; the dependency endpoints' documentation names no permission; not verified |
-  | Contents, Issues | read | on another repository the App is installed on: an issue's [premises](#the-premises) there. Where it is not installed, a public repository is read with no token | not verified |
   | Checks | read | CI's check runs | by GitHub's documentation; not verified |
   | Actions | read | [`afk caught`](#what-ci-caught)'s workflow runs and their jobs | not verified: the endpoints' documentation names no permission |
 

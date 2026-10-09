@@ -155,7 +155,7 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 		if err := work.Reset(ctx, ws, from); err != nil {
 			return transition.Result{}, err
 		}
-		for _, name := range []string{descriptionFile, remainderFile, unmetFile} {
+		for _, name := range []string{descriptionFile, remainderFile, unmetFile, questionsFile} {
 			if err := os.Remove(filepath.Join(ws, ".git", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return transition.Result{}, err
 			}
@@ -314,9 +314,16 @@ func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, e
 	case work.GateEmpty:
 		// A session that checked the issue before its first edit and stopped
 		// on its gaps commits nothing on purpose, and what it asks is the
-		// hand-back (#199). Only work not yet pushed is checked so.
-		if questions, ok := gaps(p.Description); ok && p.Pushed == "" && !p.Correction.Running() {
-			return d.handBackGaps(ctx, in, p, questions)
+		// hand-back (#199). Only work not yet pushed is checked so. A file
+		// that cannot be read is a session that committed nothing.
+		if p.Pushed == "" && !p.Correction.Running() {
+			questions, err := readQuestions(d.work().Dir(in.Job.ID))
+			if err != nil {
+				d.logf("%s: the session's questions could not be read, so the hand-back says it committed nothing: %v", in.Job.ID, err)
+			}
+			if questions != "" {
+				return d.handBackGaps(ctx, in, p, questions)
+			}
 		}
 		nothing := "The session finished without committing anything, so there is nothing to push."
 		switch {

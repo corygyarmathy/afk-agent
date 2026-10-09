@@ -12,11 +12,15 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/premise"
 )
 
-// stopOnGaps is a turn that commits nothing and writes the report of a session
-// that stopped on gaps, as the implement skill shapes it.
-func stopOnGaps(report string) func(dir string) error {
+// stopOnGaps is a turn that commits nothing and writes the questions of a
+// session that stopped on gaps where the prompt says, and its report beside
+// them.
+func stopOnGaps(questions string) func(dir string) error {
 	return func(dir string) error {
-		return os.WriteFile(filepath.Join(dir, ".git", "afk-description.md"), []byte(report), 0o644)
+		if err := os.WriteFile(filepath.Join(dir, ".git", "afk-description.md"), []byte("Stopped on gaps: nothing changed.\n\n"+questions), 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, ".git", "afk-questions.md"), []byte(questions), 0o644)
 	}
 }
 
@@ -27,7 +31,7 @@ func stopOnGaps(report string) func(dir string) error {
 func TestASessionThatStopsOnGapsHandsBackItsQuestions(t *testing.T) {
 	f := setup(t, newTracker())
 	questions := "1. Does `--flag` still exist upstream? Recommended: no, use `--other`, as the head of `flags.go` has it.\n2. Which label? Recommended: `needs-decision`."
-	f.model.then(stopOnGaps("Stopped on gaps: nothing changed.\n\n" + questions + "\n"))
+	f.model.then(stopOnGaps(questions + "\n"))
 
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
@@ -60,16 +64,19 @@ func TestASessionThatStopsOnGapsHandsBackItsQuestions(t *testing.T) {
 	}
 }
 
-// A report that does not open with the stop, or that stops and asks nothing,
-// is a session that committed nothing, and says so.
+// A session that commits nothing and writes no questions, or an empty file of
+// them, committed nothing for some other reason, and is handed back as one,
+// whatever its report says.
 func TestAnEmptySessionThatAsksNothingIsNotAStopOnGaps(t *testing.T) {
-	for name, report := range map[string]string{
-		"no stop line": "## Start here\n\nStopped on gaps: nothing changed.\n\n1. Q? Recommended: A.\n",
-		"no questions": "Stopped on gaps: nothing changed.\n",
+	for name, turn := range map[string]func(dir string) error{
+		"no questions file": func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, ".git", "afk-description.md"), []byte("Stopped on gaps: nothing changed.\n\n1. Q? Recommended: A.\n"), 0o644)
+		},
+		"an empty file": stopOnGaps("\n\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := setup(t, newTracker())
-			f.model.then(stopOnGaps(report))
+			f.model.then(turn)
 			if errs := f.drive(); len(errs) != 0 {
 				t.Fatalf("errors: %v", errs)
 			}
@@ -86,7 +93,7 @@ func TestAnEmptySessionThatAsksNothingIsNotAStopOnGaps(t *testing.T) {
 func TestQuestionsTooLongForAHandBackAreCutAtALine(t *testing.T) {
 	f := setup(t, newTracker())
 	line := "1. " + strings.Repeat("Is it so? ", 50) + "Recommended: yes.\n"
-	f.model.then(stopOnGaps("Stopped on gaps: nothing changed.\n\n" + strings.Repeat(line, 200)))
+	f.model.then(stopOnGaps(strings.Repeat(line, 200)))
 
 	if errs := f.drive(); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)

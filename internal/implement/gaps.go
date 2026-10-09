@@ -3,7 +3,6 @@ package implement
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -12,23 +11,19 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/work"
 )
 
-// stoppedLine is the line the implement skill opens its report with when the
-// session stopped on gaps in the ticket: "Stopped on gaps: nothing changed." A
-// heading's or emphasis's marks before it are forgiven, and so is case.
-var stoppedLine = regexp.MustCompile(`(?i)^[\s#*_>]*stopped on gaps\b`)
+// questionsFile is where, in the workspace's .git, a session that stopped on
+// gaps in the issue writes its questions, each with its recommended answer
+// (#199). The file's being there is the stop: nothing is read from the
+// wording of the session's report, which is the vendored skill's to change.
+const questionsFile = "afk-questions.md"
 
-// gaps is what a session that stopped on gaps asked: the report after its
-// first line, the gaps as questions, each with its recommended answer. ok is
-// false for a report that does not open with the line, or has nothing after
-// it, which is a session that committed nothing for some other reason.
-func gaps(report string) (questions string, ok bool) {
-	text := strings.TrimLeft(strings.TrimPrefix(strings.ReplaceAll(report, "\r\n", "\n"), "\uFEFF"), " \t\n")
-	first, rest, _ := strings.Cut(text, "\n")
-	if !stoppedLine.MatchString(first) {
-		return "", false
+// readQuestions is what a session that stopped on gaps asked, or nothing.
+func readQuestions(ws string) (string, error) {
+	text, err := work.ReadGitFile(ws, questionsFile)
+	if err != nil {
+		return "", err
 	}
-	rest = strings.TrimSpace(rest)
-	return rest, rest != ""
+	return strings.TrimSpace(strings.TrimPrefix(text, "\uFEFF")), nil
 }
 
 // handBackGaps is the hand-back of a session that stopped on gaps: on the
