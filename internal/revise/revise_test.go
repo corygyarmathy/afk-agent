@@ -40,30 +40,13 @@ func newTracker() *githubtest.Tracker {
 		Login: "alice", Labels: []string{handOff, "bug"},
 	}
 	tr.Checks = green
-	tr.Fail = func(c githubtest.Call) error {
-		if c.Method == "ReactToIssue" {
-			return errors.New("the revise kind never claims a pull request's description")
-		}
-		return nil
-	}
+	tr.FailOn("ReactToIssue", errors.New("the revise kind never claims a pull request's description"))
 	return tr
 }
 
 // green is every check passed.
 func green(string, int) []github.CheckRun {
 	return []github.CheckRun{{Name: "build", Status: "completed", Conclusion: "success"}, {Name: "lint", Status: "completed", Conclusion: "skipped"}}
-}
-
-// fail makes every call of method on tr fail with err, without landing, and
-// leaves what else tr fails as it was.
-func fail(tr *githubtest.Tracker, method string, err error) {
-	before := tr.Fail
-	tr.Fail = func(c githubtest.Call) error {
-		if c.Method == method {
-			return err
-		}
-		return before(c)
-	}
 }
 
 // drop makes a comment of tr's carrying marker land and never be seen. An

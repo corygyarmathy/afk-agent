@@ -153,53 +153,36 @@ func TestHelperClaimsASendBack(t *testing.T) {
 // the point this process stops dead at, having told the parent it is there.
 // Nothing the claim does not do is served.
 func fileTracker(dir, killAt string) *githubtest.File {
-	die := func(point string) {
-		if killAt != point {
-			return
-		}
-		os.WriteFile(filepath.Join(dir, "ready"), nil, 0o644)
-		select {}
-	}
-	return &githubtest.File{
-		Path: filepath.Join(dir, "tracker.json"),
+	ft := &githubtest.File{
+		Path:   filepath.Join(dir, "tracker.json"),
+		KillAt: killAt,
+		Ready:  filepath.Join(dir, "ready"),
 		New: func() *githubtest.Tracker {
 			tr := newTracker()
-			tr.Fail = func(c githubtest.Call) error {
-				switch c.Method {
-				case "CheckRuns":
-					return errors.New("the claim reads no check runs")
-				case "RequiredChecks":
-					return errors.New("the claim reads no required checks")
-				case "EditComment":
-					return errors.New("PATCH comment: this test edits no comment")
-				case "EditPullRequest":
-					return errors.New("the claim never edits a pull request's description")
-				case "Comment":
-					return errors.New("a send-back with points is not answered at its claim")
-				case "ReactToIssue":
-					return errors.New("the revise kind never claims a pull request's description")
-				case "Label":
-					return errors.New("the revise kind's claim never applies a label")
-				}
-				return nil
-			}
+			tr.FailOn("CheckRuns", errors.New("the claim reads no check runs"))
+			tr.FailOn("RequiredChecks", errors.New("the claim reads no required checks"))
+			tr.FailOn("EditComment", errors.New("PATCH comment: this test edits no comment"))
+			tr.FailOn("EditPullRequest", errors.New("the claim never edits a pull request's description"))
+			tr.FailOn("Comment", errors.New("a send-back with points is not answered at its claim"))
+			tr.FailOn("Label", errors.New("the revise kind's claim never applies a label"))
 			return tr
 		},
-		Before: func(c githubtest.Call) {
-			switch c.Method {
-			case "React":
-				die("before-claim")
-			case "Unlabel":
-				die("before-unlabel")
-			}
-		},
-		After: func(c githubtest.Call) {
-			switch c.Method {
-			case "React":
-				die("after-claim")
-			case "Unlabel":
-				die("after-unlabel")
-			}
-		},
 	}
+	ft.Before = func(c githubtest.Call) {
+		switch c.Method {
+		case "React":
+			ft.Die("before-claim")
+		case "Unlabel":
+			ft.Die("before-unlabel")
+		}
+	}
+	ft.After = func(c githubtest.Call) {
+		switch c.Method {
+		case "React":
+			ft.Die("after-claim")
+		case "Unlabel":
+			ft.Die("after-unlabel")
+		}
+	}
+	return ft
 }

@@ -110,7 +110,8 @@ type Tracker struct {
 	Live string
 
 	// Fail is asked before every call, read or write. An error is what the
-	// call fails with, without landing. Nil fails nothing.
+	// call fails with, without landing. Nil fails nothing. FailOn adds to it
+	// rather than replacing it.
 	Fail func(Call) error
 
 	// Drop is asked of every write that would land. True is a write GitHub
@@ -166,6 +167,23 @@ func (tr *Tracker) Say(n int, c github.Comment) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.CommentsOn[n] = append(tr.CommentsOn[n], c)
+}
+
+// FailOn makes every call of method fail with err, without landing, and
+// leaves what else Fail fails as it was.
+func (tr *Tracker) FailOn(method string, err error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	before := tr.Fail
+	tr.Fail = func(c Call) error {
+		if c.Method == method {
+			return err
+		}
+		if before != nil {
+			return before(c)
+		}
+		return nil
+	}
 }
 
 // notFound is GitHub's answer for a subject or comment that is not there.

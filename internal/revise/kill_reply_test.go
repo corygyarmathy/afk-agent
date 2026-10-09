@@ -5,7 +5,6 @@ package revise_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -243,39 +242,22 @@ func TestHelperAnswers(t *testing.T) {
 // point this process dies at, having told the parent it is there: once the
 // write it names has landed.
 func diskTracker(dir, remote, killAt, ready string) *githubtest.File {
-	dt := &githubtest.File{Path: filepath.Join(dir, "tracker.json")}
+	dt := &githubtest.File{Path: filepath.Join(dir, "tracker.json"), KillAt: killAt, Ready: ready}
 	dt.New = func() *githubtest.Tracker {
 		tr := newTracker()
 		tr.Live = remote
 		// A review is never a send-back here, and nothing edits.
-		tr.Fail = func(c githubtest.Call) error {
-			switch c.Method {
-			case "ReactToPullRequestReview":
-				return errors.New("nothing here claims a review")
-			case "ReactToIssue":
-				return errors.New("nothing here claims a pull request's description")
-			case "EditComment":
-				return errors.New("PATCH comment: this test edits no comment")
-			case "EditPullRequest":
-				return fmt.Errorf("the description has no sensitive line to edit here")
-			}
-			return nil
-		}
+		tr.FailOn("ReactToPullRequestReview", errors.New("nothing here claims a review"))
+		tr.FailOn("EditComment", errors.New("PATCH comment: this test edits no comment"))
+		tr.FailOn("EditPullRequest", errors.New("the description has no sensitive line to edit here"))
 		return tr
-	}
-	landed := func(point string) {
-		if killAt != point {
-			return
-		}
-		os.WriteFile(ready, nil, 0o644)
-		select {}
 	}
 	dt.After = func(c githubtest.Call) {
 		switch {
 		case c.Method == "Comment" && strings.Contains(c.Text, "<!-- afk:revision-reply "):
-			landed("after-reply")
+			dt.Die("after-reply")
 		case c.Method == "Comment" && strings.Contains(c.Text, "<!-- afk:review head="):
-			landed("after-review")
+			dt.Die("after-review")
 		case c.Method == "React":
 			tr, err := dt.Load()
 			if err != nil {
@@ -283,11 +265,11 @@ func diskTracker(dir, remote, killAt, ready string) *githubtest.File {
 			}
 			for _, cm := range tr.CommentsOn[12] {
 				if cm.ID == c.ID && strings.Contains(cm.Body, "<!-- afk:revision-reply ") {
-					landed("after-reply-claim")
+					dt.Die("after-reply-claim")
 				}
 			}
 		case c.Method == "Label" && c.Text == handOff:
-			landed("after-label")
+			dt.Die("after-label")
 		}
 	}
 	return dt

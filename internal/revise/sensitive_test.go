@@ -229,7 +229,7 @@ func TestARebasedPullRequestIsMeasuredAgainstItsBasesTip(t *testing.T) {
 func TestAnEditThatNeverLandsIsLoggedAndTheRevisionGoesOn(t *testing.T) {
 	f, log := sensitiveFixture(t)
 	f.tr.PullRequests[12].Body = description("")
-	fail(f.tr, "EditPullRequest", errors.New("502 Bad Gateway"))
+	f.tr.FailOn("EditPullRequest", errors.New("502 Bad Gateway"))
 	f.sendBack(f.head)
 	f.model.then(writeOn("infra/main.tf"))
 
