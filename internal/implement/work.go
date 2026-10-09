@@ -22,6 +22,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/premise"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
 	"github.com/corygyarmathy/afk-agent/internal/statefile"
+	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
 )
@@ -263,82 +264,51 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	return transition.Result{State: Gating, RunAt: in.Now}, nil
 }
 
-// gate is `implement-gate`: the agent's own reading of the work, which the
-// session's word does not replace. The gate and its retries are shared
-// (package work); the words a hand-back uses are this kind's.
-func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, error) {
-	p, err := d.load(in.Job.ID)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && !d.work().Exists(in.Job.ID)) {
-		// Nothing has been pushed, so nothing is lost but a model run:
-		// the work starts over.
-		return transition.Result{State: Implementing, RunAt: in.Now}, d.clear(in.Job.ID)
+// machine is the delivery's transitions as this kind supplies them. Built from
+// method values, so a registry built from nil Deps only to name its
+// transitions reaches nothing.
+func (d *Deps) machine() delivery.Machine[progress, *progress] {
+	return delivery.Machine[progress, *progress]{
+		Params: func() *delivery.Params { return &d.Params },
+		Kind: delivery.Kind[progress, *progress]{
+			Job:      store.KindImplement,
+			Session:  Implementing,
+			HandBack: d.handBack,
+			// Nothing has been pushed, so nothing is lost at the gate but a
+			// model run: the work starts over.
+			Gone: func(_ context.Context, in transition.In) (transition.Result, error) {
+				return transition.Result{State: Implementing, RunAt: in.Now}, d.clear(in.Job.ID)
+			},
+			Lost:    d.lost,
+			Nothing: nothing,
+			Gaps:    d.gaps,
+		},
 	}
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if r, ok := over(in, p); ok {
-		// Failed here, and the move that followed lost.
-		return r, nil
-	}
+}
 
-	// Before the gate runs, as revise's check of the head it read is: a
-	// correction that rewrote the head the review read has nothing left for
-	// the review's citations to point at, and a retry is not what puts that
-	// right.
-	if c := p.Correction; c.Running() {
-		if branch, err := work.BranchOf(ctx, d.work().Dir(in.Job.ID)); err == nil && branch == p.Branch {
-			if kept, err := work.Ancestor(ctx, d.work().Dir(in.Job.ID), c.Reviewed, "HEAD"); err != nil {
-				return transition.Result{}, err
-			} else if !kept {
-				return d.stop(ctx, in, p, rewrote(c), "")
-			}
-		}
+// nothing is the hand-back's words for a session that committed nothing: on
+// the work before its first push, or on a fix since it.
+func nothing(p progress, fix bool) string {
+	if fix {
+		return fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", git.Short(p.Pushed))
 	}
+	return "The session finished without committing anything, so there is nothing to push."
+}
 
-	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress.Progress, d.Gate, d.Attempts)
+// gaps is a session that checked the issue before its first edit and stopped
+// on its gaps: it commits nothing on purpose, and what it asks is the
+// hand-back (#199). A file that cannot be read is a session that committed
+// nothing.
+func (d *Deps) gaps(ctx context.Context, in transition.In, p progress) (transition.Result, bool, error) {
+	questions, err := readQuestions(d.work().Dir(in.Job.ID))
 	if err != nil {
-		return transition.Result{}, err
+		d.logf("%s: the session's questions could not be read, so the hand-back says it committed nothing: %v", in.Job.ID, err)
 	}
-	switch r.State {
-	case work.GatePassed:
-		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
-		}
-		return transition.Result{State: Pushing, RunAt: in.Now}, nil
-	case work.GateSwitched:
-		return d.stop(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
-	case work.GateEmpty:
-		// A session that checked the issue before its first edit and stopped
-		// on its gaps commits nothing on purpose, and what it asks is the
-		// hand-back (#199). Only work not yet pushed is checked so. A file
-		// that cannot be read is a session that committed nothing.
-		if p.Pushed == "" && !p.Correction.Running() {
-			questions, err := readQuestions(d.work().Dir(in.Job.ID))
-			if err != nil {
-				d.logf("%s: the session's questions could not be read, so the hand-back says it committed nothing: %v", in.Job.ID, err)
-			}
-			if questions != "" {
-				return d.handBackGaps(ctx, in, p, questions)
-			}
-		}
-		nothing := "The session finished without committing anything, so there is nothing to push."
-		switch {
-		case p.Correction.Running():
-			nothing = fmt.Sprintf("The session committed nothing on top of `%s`, the head the review read, so nothing was corrected.", git.Short(p.Pushed))
-		case p.Pushed != "":
-			nothing = fmt.Sprintf("The session committed nothing since `%s`, the agent's last push, so there is no fix to push.", git.Short(p.Pushed))
-		}
-		return d.stop(ctx, in, p, nothing, "")
-	case work.GateExhausted:
-		return d.stop(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
-	case work.GateDirty:
-		return d.stop(ctx, in, p, p.Why, r.Output)
-	default: // GateFailed
-		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
-		}
-		return transition.Result{State: Implementing, RunAt: in.Now}, nil
+	if questions == "" {
+		return transition.Result{}, false, nil
 	}
+	r, err := d.handBackGaps(ctx, in, p, questions)
+	return r, true, err
 }
 
 // resume is `implement-resume`: the wait is over, and the tier is tried again
@@ -644,16 +614,5 @@ func (d *Deps) save(jobID string, p progress) error {
 }
 
 func (d *Deps) load(jobID string) (progress, error) {
-	var p progress
-	err := statefile.Load(d.work().ProgressPath(jobID), &p)
-	if errors.Is(err, os.ErrNotExist) {
-		return progress{}, err
-	}
-	if err != nil {
-		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
-	}
-	if !p.Complete() {
-		return progress{}, fmt.Errorf("progress of %s is incomplete", jobID)
-	}
-	return p, nil
+	return delivery.Load[progress](d.work(), jobID)
 }

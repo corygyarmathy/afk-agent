@@ -81,20 +81,26 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
-// The implement kind's states.
+// The implement kind's states. Those a delivery shares are delivery's.
 const (
-	Start        = "start"
+	Start        = delivery.Start
 	Claiming     = "claiming"
 	Implementing = "implementing"
-	Gating       = "gating"
-	Deferred     = "deferred"
-	Pushing      = "pushing"
+	Gating       = delivery.Gating
+	Deferred     = delivery.Deferred
+	Pushing      = delivery.Pushing
 	Opening      = "opening"
-	Watching     = "watching"
-	Reviewing    = "reviewing"
-	HandingOff   = "handing-off"
-	HandingBack  = "handing-back"
+	Watching     = delivery.Watching
+	Reviewing    = delivery.Reviewing
+	HandingOff   = delivery.HandingOff
+	HandingBack  = delivery.HandingBack
 )
+
+// States is every state an implement job can be in, each of which a
+// transition runs from.
+func States() []string {
+	return []string{Start, Claiming, Implementing, Gating, Deferred, Pushing, Opening, Watching, Reviewing, HandingOff, HandingBack}
+}
 
 // Word is the command that asks for an issue to be implemented.
 const Word = "/implement"
@@ -160,7 +166,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "implement", Kind: store.KindImplement, From: Start, Run: d.claim},
 		{Name: "implement-claimed", Kind: store.KindImplement, From: Claiming, Run: d.claimed},
 		{Name: "implement-run", Kind: store.KindImplement, From: Implementing, Tokens: []string{transition.HeavyBuild}, Run: d.run},
-		{Name: "implement-gate", Kind: store.KindImplement, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
+		delivery.Must(d.machine().Gate("implement-gate")),
 		{Name: "implement-push", Kind: store.KindImplement, From: Pushing, Run: d.pushTransition},
 		{Name: "implement-open", Kind: store.KindImplement, From: Opening, Run: d.openPR},
 		{Name: "implement-watch", Kind: store.KindImplement, From: Watching, Run: d.watch},
