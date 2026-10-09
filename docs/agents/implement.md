@@ -30,7 +30,7 @@ label, when `afk` is given `--eligibility-label`
 
 | transition | from | does |
 | --- | --- | --- |
-| `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it. Otherwise the work starts. |
+| `implement` | `start` | Reacts 👀 to every unanswered `/implement` (the claim). A closed issue stops there. Otherwise it reacts 👀 to the issue itself too. An issue that already has the agent's open pull request gets one reply per command linking it, and saying how to [start over](#starting-over). Otherwise the work starts. |
 | `implement-claimed` | `claiming` | Reads the claims and replies back, and makes any that are missing again. Once all of them are there, the job moves on to the work, or rests. |
 | `implement-run` | `implementing` | Clones the repository into a workspace on a new branch `<prefix><n>-<k>`, fetches the issue's [premises](#premises-and-gaps) into it, and runs one enrolled model on the `implement` skill. After a failure it continues the session that wrote the commits, with the failure, unless that session has [grown too long](#a-session-too-long-to-continue). |
 | `implement-gate` | `gating` | The agent runs the local gate itself. No commits: hand-back, with the session's questions if it [stopped on gaps](#a-stop-on-a-gap). Uncommitted changes, or a failing gate: back to the session, until `--gate-attempts` runs out, then hand-back. In a [correction](#the-correction), each of those fails the correction instead, and so does one that rewrote the head the review read. |
@@ -483,6 +483,39 @@ is one rule for every continuation, and for `/revise` too. Each time it applies
 is a log line naming the session, its size and the threshold. `0` continues
 every session, and so does one whose size is unknown: a progress written before
 the size was kept.
+
+## Starting over
+
+Rejecting the approach of the agent's pull request is the operator's call, made
+in review, and never the agent's
+([#200](https://github.com/corygyarmathy/afk-agent/issues/200)). A finding
+count or a failed [correction](#the-correction) is not a sign of a wrong
+approach, and the agent never starts over on its own.
+
+- **To reject an approach**, wait for the job to come to rest, with the
+  hand-off label or the hand-back label on the pull request. Then close the
+  agent's pull request, delete its branch and any `<branch>-whole`, and comment
+  `/implement` on the issue. With no open pull request of the agent's for the
+  issue, the work starts again. While one is open, `/implement` only replies
+  with a link to it. A pull request closed while its job is still running a
+  fix or a [correction](#the-correction) is opened again from the same branch
+  at the next push, and the `/implement` after it links to that one.
+- **Say why in the issue.** Amend the issue to say the approach to take, or
+  the one to avoid, in words rather than by pointing at the closed pull
+  request. The issue is the spec: it outlasts the pull request, and it is what
+  the session reads for [gaps](#a-stop-on-a-gap). Anything that applies only to
+  this run goes in the `/implement` instructions, which reach the session as
+  the more recent word than the issue.
+- **The work starts clean**: a new branch `<prefix><n>-<k>` from the default
+  branch, without the closed pull request's commits, and nothing kept from the
+  earlier run. A deleted branch's number is free again, so the new branch can
+  take the closed pull request's name; one left on the remote is
+  [skipped](#the-size-signal). The closed pull request is deliberately not
+  given to the session - it reads the issue's title and body, its
+  [premises](#premises-and-gaps) and the instructions - so the new work is not
+  anchored to the code that was rejected. A branch left on the remote is in the
+  session's clone, and linking the closed pull request under the issue's
+  Premises would give it back too.
 
 ## Parameters
 
