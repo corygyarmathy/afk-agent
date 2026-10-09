@@ -6,11 +6,12 @@ The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repositor
 [#131](https://github.com/corygyarmathy/afk-agent/issues/131) and its
 sub-issues #145, #146, #134, #147, #148 and #149, and the submitted-review form
 is [#133](https://github.com/corygyarmathy/afk-agent/issues/133). The transitions are
-[`internal/revise`](../../internal/revise). The workspace, the relay, the local
-gate and its retries, the denylist, the leased push, the replay, the CI watch
-and its fixes, and the hand-back on a pull request are
+[`internal/revise`](../../internal/revise), but for `revise-gate`, which is
+[`internal/delivery`](../../internal/delivery)'s. The workspace, the relay, the
+local gate and its retries, the denylist, the leased push, the replay, the CI
+watch and its fixes, and the hand-back on a pull request are
 [`internal/work`](../../internal/work); the wait for the review and the
-hand-off label are [`internal/handoff`](../../internal/handoff). Both are
+hand-off label are [`internal/handoff`](../../internal/handoff). All three are
 shared with [`implement.md`](implement.md).
 
 ## What it does

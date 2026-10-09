@@ -62,7 +62,8 @@ type GateResult struct {
 
 // Check runs the local gate over the workspace's commits and counts a failure
 // against the progress's attempt bound. It is the loop both kinds run: the
-// kind decides what to say about the result, and saves its own progress.
+// caller - delivery's gate - decides what to say about the result, and saves
+// the progress.
 //
 // A revision's gate and an implement's differ only in where an empty workspace
 // leaves the job and in the words a hand-back uses; the counting, the branch

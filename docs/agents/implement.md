@@ -6,12 +6,13 @@ The decisions are [ADR 0001](../adr/0001-a-go-state-machine-in-its-own-repositor
 ADR 0004 §6 and ADR 0007, as ADR 0001 carries them. The spec is
 [#40](https://github.com/corygyarmathy/afk-agent/issues/40) and its sub-issues
 #49-#53. The transitions are
-[`internal/implement`](../../internal/implement); the workspace, the relay, the
-local gate and its retries, the denylist, the leased push, the CI watch and its
-fixes, and the hand-back on a pull request are
+[`internal/implement`](../../internal/implement), but for `implement-gate`,
+which is [`internal/delivery`](../../internal/delivery)'s; the workspace, the
+relay, the local gate and its retries, the denylist, the leased push, the CI
+watch and its fixes, and the hand-back on a pull request are
 [`internal/work`](../../internal/work); the wait for the review and the
 hand-off label are [`internal/handoff`](../../internal/handoff). `/revise` uses
-both too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
+all three too ([#131](https://github.com/corygyarmathy/afk-agent/issues/131)).
 
 ## What it does
 
@@ -160,7 +161,8 @@ advisory review are the agent's to make right before the hand-off, not advice
 right is a **correction**: one pass, checked by the local gate and CI, and
 never by a second advisory review. The code is
 [`internal/correction`](../../internal/correction), and where it leaves the job
-is [`internal/implement/correct.go`](../../internal/implement/correct.go).
+is [`internal/implement/correct.go`](../../internal/implement/correct.go), and
+at the gate [`internal/delivery`](../../internal/delivery).
 
 - **Which findings.** Every finding under the review's `## Correctness` or
   `## Standards` heading, of any severity. A merged duplicate sits under the

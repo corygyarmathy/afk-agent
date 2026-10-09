@@ -591,6 +591,21 @@ func TestTheStandaloneCheckCatchesATransitionThatCannotRunAlone(t *testing.T) {
 	}
 }
 
+// A job of a kind that delivers moves on from every state it can be in: a state
+// with no transition is a job that reached it and never moves again. The check
+// failing is delivery's test of it (TestAStateNoTransitionRunsFromIsCaught).
+func TestEveryStateADeliveringKindReachesHasATransition(t *testing.T) {
+	reg := catalogue(nil)
+	for kind, states := range map[store.Kind][]string{
+		store.KindImplement: implement.States(),
+		store.KindRevise:    revise.States(),
+	} {
+		if none := reg.Unmovable(kind, states); len(none) > 0 {
+			t.Errorf("no %s transition runs from %q", kind, none)
+		}
+	}
+}
+
 // runsStandalone puts a job in the transition's own starting state and runs it
 // through the runner, with nothing else present.
 func runsStandalone(t *testing.T, tr transition.Transition) error {

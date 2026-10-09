@@ -20,7 +20,7 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/opencode"
 	"github.com/corygyarmathy/afk-agent/internal/owed"
 	"github.com/corygyarmathy/afk-agent/internal/sensitive"
-	"github.com/corygyarmathy/afk-agent/internal/statefile"
+	"github.com/corygyarmathy/afk-agent/internal/store"
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 	"github.com/corygyarmathy/afk-agent/internal/work"
 )
@@ -213,58 +213,25 @@ func (d *Deps) run(ctx context.Context, in transition.In) (transition.Result, er
 	return transition.Result{State: Gating, RunAt: in.Now}, nil
 }
 
-// gate is `revise-gate`: the agent's own reading of the revision's commits.
-// The gate and its retries are shared (package work); the words a hand-back
-// uses are this kind's.
-func (d *Deps) gate(ctx context.Context, in transition.In) (transition.Result, error) {
-	p, err := d.load(in.Job.ID)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && !d.work().Exists(in.Job.ID)) {
-		return d.handBackLost(ctx, in)
-	}
-	if err != nil {
-		return transition.Result{}, err
-	}
-	if r, ok := over(in, p); ok {
-		// Failed here, and the move that followed lost.
-		return r, nil
-	}
-	// Before the gate runs, and before an attempt is counted: a session that
-	// rewrote the head the send-back was written against has broken the one
-	// history rule there is, and a retry to make the gate pass is not what
-	// would put that right. A workspace on another branch is Check's to say.
-	// A correction keeps the head its review read as well, which is on top of
-	// the one the send-back was written against.
-	ws := d.work().Dir(in.Job.ID)
-	if branch, err := work.BranchOf(ctx, ws); err == nil && branch == p.Branch {
-		if kept, err := work.Ancestor(ctx, ws, p.kept(), "HEAD"); err != nil {
-			return transition.Result{}, err
-		} else if !kept {
-			return d.stop(ctx, in, p, p.rewrote(), "")
-		}
-	}
-	r, err := d.work().Check(ctx, in.Job.ID, &p.Progress.Progress, d.Gate, d.Attempts)
-	if err != nil {
-		return transition.Result{}, err
-	}
-	switch r.State {
-	case work.GatePassed:
-		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
-		}
-		return transition.Result{State: Pushing, RunAt: in.Now}, nil
-	case work.GateSwitched:
-		return d.stop(ctx, in, p, fmt.Sprintf("The session left `%s` for `%s`, and the prompt said not to change branches.", p.Branch, r.Branch), "")
-	case work.GateEmpty:
-		return d.stop(ctx, in, p, p.empty(), "")
-	case work.GateExhausted:
-		return d.stop(ctx, in, p, fmt.Sprintf("The local gate still failed after %d attempts. %s", p.Attempts, p.Why), r.Output)
-	case work.GateDirty:
-		return d.stop(ctx, in, p, p.Why, r.Output)
-	default: // GateFailed
-		if err := d.save(in.Job.ID, p); err != nil {
-			return transition.Result{}, err
-		}
-		return transition.Result{State: Revising, RunAt: in.Now}, nil
+// machine is the delivery's transitions as this kind supplies them. Built from
+// method values, so a registry built from nil Deps only to name its
+// transitions reaches nothing.
+//
+// The anchor is the head the send-back was written against: what the operator
+// read, which a revision adds to and never rewrites.
+func (d *Deps) machine() delivery.Machine[progress, *progress] {
+	return delivery.Machine[progress, *progress]{
+		Params: func() *delivery.Params { return &d.Params },
+		Kind: delivery.Kind[progress, *progress]{
+			Job:      store.KindRevise,
+			Session:  Revising,
+			HandBack: d.handBack,
+			Gone:     d.handBackLost,
+			Lost:     d.handBackLost,
+			Nothing:  nothing,
+			Anchor:   func(p progress) string { return p.Read },
+			Rewrote:  progress.rewrote,
+		},
 	}
 }
 
@@ -469,17 +436,14 @@ func (d *Deps) workspace(ctx context.Context, jobID string, n int, sb SendBack) 
 	return p, "", w.Save(jobID, p)
 }
 
-// empty is the hand-back's words for a session that committed nothing on top
+// nothing is the hand-back's words for a session that committed nothing on top
 // of the lease: the head the send-back was written against, or after a red CI
 // run the revision's own last push.
-func (p progress) empty() string {
-	if p.Correction.Running() {
-		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the review read, so nothing was corrected.", git.Short(p.Pushed))
+func nothing(p progress, fix bool) string {
+	if fix {
+		return fmt.Sprintf("The session committed nothing on top of `%s`, the revision's last push, to fix what CI said, so there is nothing to push.", git.Short(p.Pushed))
 	}
-	if p.Pushed == p.Read {
-		return fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed))
-	}
-	return fmt.Sprintf("The session committed nothing on top of `%s`, the revision's last push, to fix what CI said, so there is nothing to push.", git.Short(p.Pushed))
+	return fmt.Sprintf("The session committed nothing on top of `%s`, the head the send-back was written against, so there is nothing to push.", git.Short(p.Pushed))
 }
 
 // rewrote is the hand-back's words for a session that rewrote the head the
@@ -635,16 +599,5 @@ func (d *Deps) save(jobID string, p progress) error {
 }
 
 func (d *Deps) load(jobID string) (progress, error) {
-	var p progress
-	err := statefile.Load(d.work().ProgressPath(jobID), &p)
-	if errors.Is(err, os.ErrNotExist) {
-		return progress{}, err
-	}
-	if err != nil {
-		return progress{}, fmt.Errorf("progress of %s: %w", jobID, err)
-	}
-	if !p.Complete() {
-		return progress{}, fmt.Errorf("progress of %s is incomplete", jobID)
-	}
-	return p, nil
+	return delivery.Load[progress](d.work(), jobID)
 }

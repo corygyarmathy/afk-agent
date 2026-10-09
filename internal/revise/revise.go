@@ -131,22 +131,28 @@ import (
 	"github.com/corygyarmathy/afk-agent/internal/transition"
 )
 
-// The revise kind's states.
+// The revise kind's states. Those a delivery shares are delivery's.
 const (
-	Start       = "start"
+	Start       = delivery.Start
 	Claiming    = "claiming"
 	Revising    = "revising"
-	Gating      = "gating"
-	Pushing     = "pushing"
+	Gating      = delivery.Gating
+	Pushing     = delivery.Pushing
 	Pushed      = "pushed"
 	Replaying   = "replaying"
-	Watching    = "watching"
+	Watching    = delivery.Watching
 	Replying    = "replying"
-	Reviewing   = "reviewing"
-	HandingOff  = "handing-off"
-	Deferred    = "deferred"
-	HandingBack = "handing-back"
+	Reviewing   = delivery.Reviewing
+	HandingOff  = delivery.HandingOff
+	Deferred    = delivery.Deferred
+	HandingBack = delivery.HandingBack
 )
+
+// States is every state a revise job can be in, each of which a transition
+// runs from.
+func States() []string {
+	return []string{Start, Claiming, Revising, Gating, Pushing, Pushed, Replaying, Watching, Replying, Reviewing, HandingOff, Deferred, HandingBack}
+}
 
 // Word is the command that sends a pull request back to be revised.
 const Word = "/revise"
@@ -202,7 +208,7 @@ func Transitions(d *Deps) []transition.Transition {
 		{Name: "revise", Kind: store.KindRevise, From: Start, Run: d.claim},
 		{Name: "revise-claimed", Kind: store.KindRevise, From: Claiming, Run: d.claimed},
 		{Name: "revise-run", Kind: store.KindRevise, From: Revising, Tokens: []string{transition.HeavyBuild}, Run: d.run},
-		{Name: "revise-gate", Kind: store.KindRevise, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: d.gate},
+		delivery.Must(d.machine().Gate("revise-gate")),
 		{Name: "revise-push", Kind: store.KindRevise, From: Pushing, Run: d.push},
 		{Name: "revise-pushed", Kind: store.KindRevise, From: Pushed, Run: d.pushed},
 		{Name: "revise-watch", Kind: store.KindRevise, From: Watching, Run: d.watch},
