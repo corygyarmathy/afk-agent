@@ -237,6 +237,20 @@ func (r *Registry) Next(kind store.Kind, state string) (Transition, bool) {
 	return t, ok
 }
 
+// Unmovable is those of states a job of kind can be in that no transition runs
+// from, in the order given: a job that reached one would never move again. The
+// kind names its states, since a transition's Result is what decides where it
+// goes, and only once it runs.
+func (r *Registry) Unmovable(kind store.Kind, states []string) []string {
+	var none []string
+	for _, s := range states {
+		if _, ok := r.Next(kind, s); !ok {
+			none = append(none, s)
+		}
+	}
+	return none
+}
+
 // All returns every registered transition, ordered by name.
 func (r *Registry) All() []Transition {
 	ts := make([]Transition, 0, len(r.byName))

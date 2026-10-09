@@ -10,6 +10,22 @@
 //
 // It holds the progress and the parameters both kinds take. Each kind embeds
 // them, and keeps what is its own beside them.
+//
+// It owns the transitions both kinds share (Machine), and each kind registers
+// them under its own transition names. The machine owns the transitions,
+// rather than each kind calling deeper shared steps, because the steps were
+// already shared: what was written twice was the glue between them - load the
+// progress, meet lost progress and a failed correction again, call the step,
+// map its outcome to the kind's states, save - and deeper steps would leave
+// that glue in each kind. A kind supplies what it really does differently
+// (Kind), and the machine decides the rest: in particular whether a stop
+// fails a correction or hands back, while where a hand-back goes and what it
+// says stay the kind's.
+//
+// Left out on purpose: a table of routes a kind could redirect, interceptors
+// around a transition, and any extension point a third kind that writes to a
+// branch would need. With two kinds they would be seams nothing varies across;
+// a third kind is when to add them.
 package delivery
 
 import (
