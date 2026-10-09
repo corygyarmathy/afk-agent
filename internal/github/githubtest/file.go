@@ -25,6 +25,21 @@ type File struct {
 	// in one of them. Nil does nothing.
 	Before func(Call)
 	After  func(Call)
+
+	// KillAt is the point Die stops this process dead at, and Ready the file
+	// it writes first, to tell the parent it is there. Empty KillAt is none.
+	KillAt string
+	Ready  string
+}
+
+// Die stops this process dead at point, if it is KillAt, having told the
+// parent it is there.
+func (f *File) Die(point string) {
+	if f.KillAt != point {
+		return
+	}
+	os.WriteFile(f.Ready, nil, 0o644)
+	select {}
 }
 
 // Load is the tracker as the file has it.
