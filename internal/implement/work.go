@@ -56,8 +56,8 @@ var (
 // together: a progress file without its workspace describes nothing, and a
 // workspace without its progress cannot be trusted (ADR 0001 §5, §6).
 //
-// The checkout, the push and the gate are work.Progress, which both kinds
-// share; what is here is what only implement needs.
+// The checkout, the push, the gate and the correction are delivery.Progress,
+// which both kinds share; what is here is what only implement needs.
 type progress struct {
 	delivery.Progress
 
