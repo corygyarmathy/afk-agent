@@ -962,9 +962,9 @@ func (p *params) effects() (effectParams, error) {
 	return ep, nil
 }
 
-// implementParams is implementing an issue, resolved, beyond model choice.
-type implementParams struct {
-	branchPrefix string
+// deliveryParams is what both kinds that deliver take, resolved, beyond model
+// choice and what a job says on the tracker.
+type deliveryParams struct {
 	gate         string
 	attempts     int
 	handOffLabel string
@@ -977,12 +977,87 @@ type implementParams struct {
 	// freshSessionAt is required, and zero continues every session.
 	freshSessionAt int
 
+	// sensitive is optional, and empty is the feature off.
+	sensitive []sensitive.Path
+}
+
+// implementParams is what only implementing an issue takes, resolved.
+type implementParams struct {
+	branchPrefix string
+
 	// reviewProcedure is optional. It is a URL: the description links it
 	// as written.
 	reviewProcedure string
+}
 
-	// sensitive is optional, and empty is the feature off.
-	sensitive []sensitive.Path
+// delivery resolves what both kinds that deliver take.
+func (p *params) delivery() (deliveryParams, error) {
+	var (
+		dp  deliveryParams
+		err error
+	)
+	if dp.gate, err = required(p.gate, "gate", "AFK_GATE"); err != nil {
+		return deliveryParams{}, err
+	}
+	attempts, err := required(p.gateAttempts, "gate-attempts", "AFK_GATE_ATTEMPTS")
+	if err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.attempts, err = count(attempts, "gate-attempts"); err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.handOffLabel, err = required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL"); err != nil {
+		return deliveryParams{}, err
+	}
+	list, err := required(p.denylist, "denylist", "AFK_DENYLIST")
+	if err != nil {
+		return deliveryParams{}, err
+	}
+	for _, pattern := range strings.Split(list, ",") {
+		if pattern = strings.TrimSpace(pattern); pattern != "" {
+			dp.denylist = append(dp.denylist, pattern)
+		}
+	}
+	if err := work.ValidDenylist(dp.denylist); err != nil {
+		return deliveryParams{}, usagef("--denylist: %v", err)
+	}
+	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
+	if err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.ciWait, err = duration(v, "ci-wait"); err != nil {
+		return deliveryParams{}, err
+	}
+	if v, err = required(p.ciCeiling, "ci-ceiling", "AFK_CI_CEILING"); err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.ciCeiling, err = duration(v, "ci-ceiling"); err != nil {
+		return deliveryParams{}, err
+	}
+	if v, err = required(p.ciFixes, "ci-fixes", "AFK_CI_FIXES"); err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.ciFixes, err = count(v, "ci-fixes"); err != nil {
+		return deliveryParams{}, err
+	}
+	if v, err = required(p.sizeSignal, "size-signal", "AFK_SIZE_SIGNAL"); err != nil {
+		return deliveryParams{}, err
+	}
+	if dp.sizeSignal, err = count(v, "size-signal"); err != nil {
+		return deliveryParams{}, err
+	}
+	if v, err = required(p.freshSessionAt, "fresh-session-at", "AFK_FRESH_SESSION_AT"); err != nil {
+		return deliveryParams{}, err
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return deliveryParams{}, usagef("--fresh-session-at: %q is not a whole number", v)
+	}
+	dp.freshSessionAt = n
+	if dp.sensitive, err = sensitivePaths(optional(p.sensitive, "AFK_SENSITIVE")); err != nil {
+		return deliveryParams{}, err
+	}
+	return dp, nil
 }
 
 func (p *params) implement() (implementParams, error) {
@@ -993,72 +1068,11 @@ func (p *params) implement() (implementParams, error) {
 	if ip.branchPrefix, err = required(p.branchPrefix, "branch-prefix", "AFK_BRANCH_PREFIX"); err != nil {
 		return implementParams{}, err
 	}
-	if ip.gate, err = required(p.gate, "gate", "AFK_GATE"); err != nil {
-		return implementParams{}, err
-	}
-	attempts, err := required(p.gateAttempts, "gate-attempts", "AFK_GATE_ATTEMPTS")
-	if err != nil {
-		return implementParams{}, err
-	}
-	if ip.attempts, err = count(attempts, "gate-attempts"); err != nil {
-		return implementParams{}, err
-	}
-	if ip.handOffLabel, err = required(p.handOffLabel, "hand-off-label", "AFK_HAND_OFF_LABEL"); err != nil {
-		return implementParams{}, err
-	}
-	list, err := required(p.denylist, "denylist", "AFK_DENYLIST")
-	if err != nil {
-		return implementParams{}, err
-	}
-	for _, pattern := range strings.Split(list, ",") {
-		if pattern = strings.TrimSpace(pattern); pattern != "" {
-			ip.denylist = append(ip.denylist, pattern)
-		}
-	}
-	if err := work.ValidDenylist(ip.denylist); err != nil {
-		return implementParams{}, usagef("--denylist: %v", err)
-	}
-	v, err := required(p.ciWait, "ci-wait", "AFK_CI_WAIT")
-	if err != nil {
-		return implementParams{}, err
-	}
-	if ip.ciWait, err = duration(v, "ci-wait"); err != nil {
-		return implementParams{}, err
-	}
-	if v, err = required(p.ciCeiling, "ci-ceiling", "AFK_CI_CEILING"); err != nil {
-		return implementParams{}, err
-	}
-	if ip.ciCeiling, err = duration(v, "ci-ceiling"); err != nil {
-		return implementParams{}, err
-	}
-	if v, err = required(p.ciFixes, "ci-fixes", "AFK_CI_FIXES"); err != nil {
-		return implementParams{}, err
-	}
-	if ip.ciFixes, err = count(v, "ci-fixes"); err != nil {
-		return implementParams{}, err
-	}
-	if v, err = required(p.sizeSignal, "size-signal", "AFK_SIZE_SIGNAL"); err != nil {
-		return implementParams{}, err
-	}
-	if ip.sizeSignal, err = count(v, "size-signal"); err != nil {
-		return implementParams{}, err
-	}
-	if v, err = required(p.freshSessionAt, "fresh-session-at", "AFK_FRESH_SESSION_AT"); err != nil {
-		return implementParams{}, err
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return implementParams{}, usagef("--fresh-session-at: %q is not a whole number", v)
-	}
-	ip.freshSessionAt = n
-	if v = optional(p.reviewProcedure, "AFK_REVIEW_PROCEDURE"); v != "" {
+	if v := optional(p.reviewProcedure, "AFK_REVIEW_PROCEDURE"); v != "" {
 		if u, err := url.Parse(v); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return implementParams{}, usagef("--review-procedure: %q is not an http or https URL", v)
 		}
 		ip.reviewProcedure = v
-	}
-	if ip.sensitive, err = sensitivePaths(optional(p.sensitive, "AFK_SENSITIVE")); err != nil {
-		return implementParams{}, err
 	}
 	return ip, nil
 }

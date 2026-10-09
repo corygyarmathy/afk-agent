@@ -1173,6 +1173,21 @@ func TestImplementIsReadFromTheParametersAndSharesTheCommandsTracker(t *testing.
 			t.Errorf("replays %q: err = %v, want it to contain %q", tc.replays, err, tc.want)
 		}
 	}
+	// What only implementing takes, a revision requires as implementing
+	// does, though it uses none of it.
+	for _, tc := range []struct {
+		spoil func(*params)
+		want  string
+	}{
+		{func(p *params) { p.branchPrefix = "" }, "--branch-prefix is required"},
+		{func(p *params) { p.reviewProcedure = "javascript:alert(1)" }, "--review-procedure"},
+	} {
+		p := full
+		tc.spoil(&p)
+		if _, err := reviseDeps(context.Background(), p, nil, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("err = %v, want it to contain %q", err, tc.want)
+		}
+	}
 	// No replay at all is a bound an operator may set: the first push made
 	// during a revision hands it back.
 	full.replays = "0"
