@@ -149,9 +149,9 @@ const (
 )
 
 // States is every state a revise job can be in, each of which a transition
-// runs from.
+// runs from: the machine's, and the revise kind's own.
 func States() []string {
-	return []string{Start, Claiming, Revising, Gating, Pushing, Pushed, Replaying, Watching, Replying, Reviewing, HandingOff, Deferred, HandingBack}
+	return append((&Deps{}).machine().States(), Claiming, Pushed, Replaying, Replying)
 }
 
 // Word is the command that sends a pull request back to be revised.
