@@ -529,6 +529,21 @@ func TestAKindMissingWhatTheGateNeedsIsRefusedNamingIt(t *testing.T) {
 	delivery.Must(delivery.Machine[stubProgress, *stubProgress]{Kind: k, Params: params}.Gate(stubGateName))
 }
 
+// The gate is registered as the kind's: under the name it was given, for the
+// kind's job kind, from gating, holding the heavy-build token. The stub's job
+// kind is a real one, since the store knows no other, so each is tried: a
+// machine that wrote one in would fail for the rest.
+func TestTheGateIsTheKindsUnderItsName(t *testing.T) {
+	for _, job := range []store.Kind{store.KindImplement, store.KindReview, store.KindRevise} {
+		k := (&stub{}).kind(false)
+		k.Job = job
+		tr := delivery.Must(delivery.Machine[stubProgress, *stubProgress]{Kind: k, Params: func() *delivery.Params { return nil }}.Gate(stubGateName))
+		if tr.Name != stubGateName || tr.Kind != job || tr.From != delivery.Gating || len(tr.Tokens) != 1 || tr.Tokens[0] != transition.HeavyBuild {
+			t.Errorf("for %s the gate is %s for %s from %s holding %q", job, tr.Name, tr.Kind, tr.From, tr.Tokens)
+		}
+	}
+}
+
 // The registry check (transition.Registry.Unmovable), failing: the stub kind
 // can reach a state nothing runs from.
 func TestAStateNoTransitionRunsFromIsCaught(t *testing.T) {

@@ -97,9 +97,9 @@ const (
 )
 
 // States is every state an implement job can be in, each of which a
-// transition runs from.
+// transition runs from: the machine's, and the implement kind's own.
 func States() []string {
-	return []string{Start, Claiming, Implementing, Gating, Deferred, Pushing, Opening, Watching, Reviewing, HandingOff, HandingBack}
+	return append((&Deps{}).machine().States(), Claiming, Opening)
 }
 
 // Word is the command that asks for an issue to be implemented.
