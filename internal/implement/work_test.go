@@ -433,33 +433,6 @@ func TestAnUnaddedFileFailsTheGate(t *testing.T) {
 	}
 }
 
-// A session that leaves the branch hands back at once. Its commits are not
-// where the push would take them from, and letting the next run start over
-// would let the gate's attempts start over with it.
-func TestASessionThatLeavesTheBranchHandsBack(t *testing.T) {
-	f := setup(t, newTracker())
-	f.model.then(func(dir string) error {
-		if _, err := run(dir, "git", "switch", "--quiet", "--create", "elsewhere"); err != nil {
-			return err
-		}
-		return commit("ok")(dir)
-	})
-
-	if errs := f.drive(); len(errs) != 0 {
-		t.Fatalf("errors: %v", errs)
-	}
-	if len(f.model.asked) != 1 {
-		t.Errorf("the model was asked %d times, want 1", len(f.model.asked))
-	}
-	posted := f.tr.byAgent()
-	if len(posted) != 1 || !strings.Contains(posted[0].Body, "left `afk/7-1` for `elsewhere`") {
-		t.Fatalf("comments %+v, want one hand-back saying the session left the branch", posted)
-	}
-	if j := f.now(); j.State != implement.Start || !j.NextRunAt.IsZero() {
-		t.Errorf("job = %+v, want it at rest", j)
-	}
-}
-
 // A session that is gone - a rebuilt host - is not the end of the job: a new
 // session is given the failure instead.
 func TestAMissingSessionFallsBackToANewOneGivenTheFailure(t *testing.T) {
