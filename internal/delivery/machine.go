@@ -83,6 +83,14 @@ type Machine[T any, P Shared[T]] struct {
 	Params func() *Params
 }
 
+// States is every state a job of the kind can be in that the machine names:
+// the shared states, and the state the kind's session runs in. A kind's own
+// list adds only the states it names itself, so a state the machine comes to
+// move a job to is one the registry check reads with no kind listing it.
+func (m Machine[T, P]) States() []string {
+	return []string{Start, m.Kind.Session, Gating, Deferred, Pushing, Watching, Reviewing, HandingOff, HandingBack}
+}
+
 // Must is a transition the machine built, for a kind whose members are a
 // literal: one missing is a programming error, and stops the agent at start-up
 // as a malformed registry does (transition.MustRegistry).
@@ -93,33 +101,36 @@ func Must(t transition.Transition, err error) transition.Transition {
 	return t
 }
 
-// needs is the members of the kind a transition named name reaches, by name,
-// which are missing: an error naming them, or nil.
-func (m Machine[T, P]) needs(name string, members map[string]bool) error {
-	var missing []string
-	for _, member := range []string{"Job", "Session", "Params", "HandBack", "Gone", "Lost", "Nothing", "Rewrote"} {
-		if have, needed := members[member]; needed && !have {
-			missing = append(missing, member)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("delivery: %s needs the kind's %v", name, missing)
-	}
-	return nil
-}
-
 // Gate is the local gate as the kind's transition name: the agent's own
 // reading of the work, which the session's word does not replace. It holds
 // the heavy-build token: the gate builds.
 func (m Machine[T, P]) Gate(name string) (transition.Transition, error) {
 	k := m.Kind
-	err := m.needs(name, map[string]bool{
-		"Job": k.Job != "", "Session": k.Session != "", "Params": m.Params != nil,
-		"HandBack": k.HandBack != nil, "Gone": k.Gone != nil, "Lost": k.Lost != nil, "Nothing": k.Nothing != nil,
-		// Only an anchor has words for its rewriting.
-		"Rewrote": k.Anchor == nil || k.Rewrote != nil,
-	})
-	return transition.Transition{Name: name, Kind: k.Job, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: m.gate}, err
+	var missing []string
+	need := func(member string, have bool) {
+		if !have {
+			missing = append(missing, member)
+		}
+	}
+	need("Job", k.Job != "")
+	need("Session", k.Session != "")
+	need("Params", m.Params != nil)
+	need("HandBack", k.HandBack != nil)
+	need("Gone", k.Gone != nil)
+	need("Lost", k.Lost != nil)
+	need("Nothing", k.Nothing != nil)
+	// Only an anchor has words for its rewriting.
+	need("Rewrote", k.Anchor == nil || k.Rewrote != nil)
+	return transition.Transition{Name: name, Kind: k.Job, From: Gating, Tokens: []string{transition.HeavyBuild}, Run: m.gate}, missed(name, missing)
+}
+
+// missed is the error for a transition named name built for a kind missing
+// the members named, or nil when it misses none.
+func missed(name string, missing []string) error {
+	if len(missing) > 0 {
+		return fmt.Errorf("delivery: %s needs the kind's %v", name, missing)
+	}
+	return nil
 }
 
 func (m Machine[T, P]) gate(ctx context.Context, in transition.In) (transition.Result, error) {
